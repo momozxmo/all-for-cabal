@@ -887,7 +887,9 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
             {
                 'name': name,
                 'count': len(rows),
-                'product_count': product_plan.count_products(rows),
+                **({
+                    'product_count': product_plan.count_products(rows),
+                } if mode == 'shop' else {}),
             }
             for name, rows in sheets
         ],
