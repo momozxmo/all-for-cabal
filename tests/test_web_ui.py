@@ -26,6 +26,14 @@ def test_product_page_is_in_the_pipeline_and_shop_handoff():
         assert 'href="/products"' in page or 'id="btnToProduct"' in page
 
 
+def test_created_bundle_ids_can_be_handed_to_products_by_source_key():
+    assert 'workspace_id:state.workspaceId' in HTML
+    assert 'afc.productBundleHandoff' in BUNDLES
+    assert "source_group_key:row.group_key" in BUNDLES
+    assert "sendMade('/products')" in BUNDLES
+    assert 'function applyBundleHandoff(payload)' in PRODUCTS
+
+
 def test_create_bundle_stands_on_its_own_page():
     """It is a tool, not a view of a search: a bundle can be started from
     nothing and its items typed in, with no workspace anywhere in sight."""

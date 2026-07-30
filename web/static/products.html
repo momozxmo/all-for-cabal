@@ -6,28 +6,71 @@
   <title>All for Cabal — สร้าง Product</title>
   <link rel="stylesheet" href="/static/console.css">
   <style>
+    .product-page [hidden]{display:none!important}
     .topline{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
     .topline label{display:grid;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
     .topline label:first-child{min-width:190px}
     .topline label:nth-child(2){flex:1;min-width:300px}
     .topline select{width:100%}
-    .product-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-    .product-summary label{display:grid;gap:5px;color:var(--muted);font-size:12px}
-    .product-summary input,.product-summary select{width:100%}
     .option-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
     .option-state{font:11px/1.4 var(--mono);color:var(--muted)}
     .option-state.warning{color:var(--yellow)}
+    .product-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(360px,.88fr);
+      gap:22px;align-items:start}
+    .product-column{display:grid;gap:16px}
+    .product-panel{background:var(--raise);border:1px solid var(--edge);border-radius:11px;
+      padding:15px;min-width:0}
+    .product-panel h3{margin:0 0 13px;font-size:15px}
+    .field-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .field-grid .wide{grid-column:1/-1}
+    .field{display:grid;gap:5px;color:var(--muted);font-size:12px;font-weight:600}
+    .field input,.field select,.field textarea{width:100%}
+    .field textarea{min-height:116px;resize:vertical}
+    .switch-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+    .switch-row{display:flex;align-items:center;gap:8px;color:var(--ink);font-size:13px}
+    .tabs{display:flex;gap:7px;margin-bottom:11px}
+    .tabs button{padding:6px 12px;border-radius:999px}
+    .tabs button.active{background:linear-gradient(150deg,var(--arc),#5563e6);color:#fff;
+      border-color:transparent}
+    .image-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .image-slot{display:grid;gap:7px;border:1px dashed var(--edge);border-radius:9px;padding:11px}
+    .image-slot input{max-width:100%}
+    .image-name{font:11px/1.4 var(--mono);color:var(--muted);overflow-wrap:anywhere}
     .source-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;
       border:1px solid var(--edge);border-radius:999px;background:var(--onyx);
       color:var(--muted);font-size:12px}
     .source-chip.ok{border-color:rgba(63,201,138,.45);color:var(--green)}
-    .price-match-list{grid-column:1/-1;display:grid;gap:8px}
-    .price-match-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(180px,2fr);
+    .price-match-list{display:grid;gap:9px}
+    .price-head,.price-match-row{display:grid;
+      grid-template-columns:minmax(120px,1fr) minmax(170px,1.4fr) minmax(95px,.65fr) minmax(95px,.65fr);
       gap:8px;align-items:center}
-    @media(max-width:720px){.product-summary{grid-template-columns:1fr}}
+    .price-head{font-size:11px;color:var(--faint);font-weight:700}
+    .price-match-row input,.price-match-row select{width:100%}
+    .empty-note{color:var(--muted);font-size:12px}
+    .bundle-summary{display:grid;gap:10px}
+    .bundle-conflict{padding:10px;border:1px solid rgba(242,182,75,.5);border-radius:9px;
+      background:#302711;color:var(--yellow)}
+    .bundle-conflict .actions{margin-top:8px}
+    .tag-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+    .warning-list{margin:0 0 14px;padding:10px 12px 10px 29px;border:1px solid rgba(242,182,75,.45);
+      border-radius:9px;background:#302711;color:var(--yellow);font-size:12px}
+    .sticky-actions{position:sticky;z-index:20;bottom:0;border:1px solid var(--edge);
+      border-radius:12px;background:rgba(13,17,26,.96);box-shadow:0 -12px 32px rgba(0,0,0,.35);
+      padding:13px 15px;backdrop-filter:blur(10px)}
+    .run-row{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    .run-modes,.run-buttons{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .sheet-row{display:flex;align-items:center;gap:9px}
+    @media(max-width:1100px){
+      .product-layout{grid-template-columns:1fr}
+    }
+    @media(max-width:720px){
+      .field-grid,.image-grid,.switch-grid,.tag-grid{grid-template-columns:1fr}
+      .price-head{display:none}
+      .price-match-row{grid-template-columns:1fr}
+    }
   </style>
 </head>
-<body>
+<body class="product-page">
 <main class="shell">
   <header class="topbar">
     <div class="brand"><span class="gem"></span><div><h1>All for Cabal</h1><p>Create Product · Operator Console</p></div></div>
@@ -54,11 +97,14 @@
           <label>เกม / เซิร์ฟ<select id="game"></select></label>
           <label>Product ในคิว <span id="queueCount" class="count">0</span>
             <select id="productQueue"></select></label>
+          <button id="btnImportPlan" class="primary" type="button">📁 Import ไฟล์แผน</button>
+          <input id="productPlanFile" type="file" accept=".xlsx,.xlsm" hidden>
           <button id="btnQueueNew" class="success" type="button">+ Product ใหม่</button>
           <button id="btnQueueDel" type="button">✕ เอาออก</button>
           <button id="btnQueueClear" class="danger" type="button">ล้างคิว</button>
+          <button id="btnDeleteWorkspace" class="danger" type="button" disabled>ล้างแผนที่นำเข้า</button>
         </div>
-        <p class="hint" id="queueHint">ยังไม่มี Product ในคิว — ส่ง Shop plan จาก Item Finder หรือเพิ่มเอง</p>
+        <p class="hint" id="queueHint">ยังไม่มี Product ในคิว — ส่ง Shop plan จาก Item Finder, Import ที่นี่ หรือเพิ่มเอง</p>
         <div class="option-tools">
           <button id="btnRefreshCategories" type="button">↻ Fetch Category</button>
           <span id="categoryOptionState" class="option-state">ยังไม่ได้ Fetch</span>
@@ -70,13 +116,149 @@
 
     <section class="card" id="editor" hidden>
       <div class="card-head"><h2>แก้ Product</h2><span id="editorWhich" class="hint"></span></div>
-      <div class="card-body product-summary">
-        <label>ชื่อ Product (ไทย)<input id="nameTh" type="text"></label>
-        <label>ชื่อ Product (อังกฤษ)<input id="nameEn" type="text"></label>
-        <label>Category จากไฟล์<input id="categorySource" type="text" readonly></label>
-        <label>Category บน Aztek<select id="categorySelect"></select></label>
-        <div id="priceMatches" class="price-match-list"></div>
+      <div class="card-body">
+        <ul id="planWarnings" class="warning-list" hidden></ul>
+        <div class="product-layout">
+          <div class="product-column">
+            <section class="product-panel" data-product-section="general">
+              <h3>ข้อมูลทั่วไป</h3>
+              <div id="generalFields" class="field-grid">
+                <label class="field">หมวดหมู่จากไฟล์<input id="categorySource" type="text" readonly></label>
+                <label class="field">หมวดหมู่บน Aztek *<select id="categorySelect"></select></label>
+                <label class="field">ชื่อ Product (ไทย) *<input id="nameTh" type="text"></label>
+                <label class="field">ชื่อ Product (อังกฤษ) *<input id="nameEn" type="text"></label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="details">
+              <h3>รายละเอียด</h3>
+              <div id="detailTabs" class="tabs" role="tablist">
+                <button type="button" class="active" data-tab-group="details" data-tab="th">ไทย</button>
+                <button type="button" data-tab-group="details" data-tab="en">English</button>
+              </div>
+              <div data-tab-panel="details-th">
+                <label class="field">รายละเอียด (ไทย)<textarea id="detailsTh"></textarea></label>
+              </div>
+              <div data-tab-panel="details-en" hidden>
+                <label class="field">รายละเอียด (อังกฤษ)<textarea id="detailsEn"></textarea></label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="images">
+              <h3>รูป Product</h3>
+              <div id="imageTabs" class="tabs" role="tablist">
+                <button type="button" class="active" data-tab-group="images" data-tab="th">ไทย</button>
+                <button type="button" data-tab-group="images" data-tab="en">English</button>
+              </div>
+              <div class="image-grid" data-tab-panel="images-th">
+                <label class="image-slot">Thumbnail (ไทย)
+                  <input id="thumbnailTh" type="file" accept="image/*">
+                  <span id="thumbnailThName" class="image-name">ยังไม่ได้เลือกไฟล์</span>
+                </label>
+                <label class="image-slot">Banner (ไทย)
+                  <input id="bannerTh" type="file" accept="image/*">
+                  <span id="bannerThName" class="image-name">ยังไม่ได้เลือกไฟล์</span>
+                </label>
+              </div>
+              <div class="image-grid" data-tab-panel="images-en" hidden>
+                <label class="image-slot">Thumbnail (อังกฤษ)
+                  <input id="thumbnailEn" type="file" accept="image/*">
+                  <span id="thumbnailEnName" class="image-name">ยังไม่ได้เลือกไฟล์</span>
+                </label>
+                <label class="image-slot">Banner (อังกฤษ)
+                  <input id="bannerEn" type="file" accept="image/*">
+                  <span id="bannerEnName" class="image-name">ยังไม่ได้เลือกไฟล์</span>
+                </label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="currency">
+              <h3>สกุลเงินและราคา</h3>
+              <div class="price-head"><span>ค่าจากไฟล์</span><span>Currency บน Aztek</span><span>ราคาปกติ</span><span>ราคาขาย</span></div>
+              <div id="priceMatches" class="price-match-list"></div>
+            </section>
+
+            <section class="product-panel" data-product-section="bundle">
+              <h3>Bundle</h3>
+              <div id="bundlePicker" class="bundle-summary">
+                <label class="field">Bundle ID *<input id="bundleId" type="number" min="1" step="1" inputmode="numeric" placeholder="กรอกเลข Bundle"></label>
+                <span id="bundleSource" class="hint"></span>
+                <div id="bundleConflict" class="bundle-conflict" hidden>
+                  <b>เลข Bundle จากไฟล์ไม่ตรงกับเลขที่เพิ่งสร้าง</b>
+                  <div id="bundleConflictText"></div>
+                  <div class="actions">
+                    <button id="btnUseWorkbookBundle" type="button">ใช้เลขจากไฟล์</button>
+                    <button id="btnUseCreatedBundle" type="button">ใช้เลขที่สร้าง</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="product-column">
+            <section class="product-panel" data-product-section="display">
+              <h3>การแสดงผล</h3>
+              <div id="displayFields" class="switch-grid">
+                <label class="switch-row"><input id="isEnabled" type="checkbox"> เปิดใช้งาน</label>
+                <label class="switch-row"><input id="isTestMode" type="checkbox"> โหมดทดสอบ</label>
+                <label class="switch-row"><input id="isHidden" type="checkbox"> ซ่อน Product</label>
+                <label class="field">ตำแหน่ง<input id="position" type="number" step="1"></label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="selling-period">
+              <h3>ช่วงเวลาขาย</h3>
+              <div id="sellingPeriod" class="field-grid">
+                <label class="field">วันเริ่มขาย *<input id="startAt" class="dtpick" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
+                <label class="field">วันสิ้นสุด *<input id="endAt" class="dtpick" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="purchase-limit">
+              <h3>จำกัดการซื้อ</h3>
+              <div id="purchaseLimit" class="field-grid">
+                <label class="field wide">ประเภท<select id="limitType">
+                  <option value="">ต้องตรวจเอง</option>
+                  <option value="UNLIMITED">ไม่จำกัด</option>
+                  <option value="PLAYER">ต่อไอดีผู้เล่น</option>
+                  <option value="CHARACTER">ต่อตัวละคร</option>
+                </select></label>
+                <label class="field">จำนวน<input id="limitQuantity" type="number" min="1" step="1"></label>
+                <label class="field">รีเซ็ตทุกกี่วัน<input id="limitResetInterval" type="number" min="1" step="1"></label>
+                <label class="field wide">เวลารีเซ็ตล่าสุด<input id="limitResetAt" class="dtpick" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
+              </div>
+            </section>
+
+            <section class="product-panel" data-product-section="tags">
+              <h3>Tags</h3>
+              <div id="tagFields" class="tag-grid">
+                <label class="switch-row"><input type="checkbox" data-product-tag="EVENT"> EVENT</label>
+                <label class="switch-row"><input type="checkbox" data-product-tag="HOT"> HOT</label>
+                <label class="switch-row"><input type="checkbox" data-product-tag="LIMITED"> LIMITED</label>
+                <label class="switch-row"><input type="checkbox" data-product-tag="NEW"> NEW</label>
+                <label class="switch-row"><input type="checkbox" data-product-tag="SALE"> SALE</label>
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
+    </section>
+
+    <section class="sticky-actions" aria-label="ส่ง Product">
+      <div class="run-row">
+        <div class="run-modes">
+          <b>โหมด</b>
+          <label><input id="runModePreview" name="runMode" type="radio" value="preview" checked> กรอกเพื่อตรวจสอบ</label>
+          <label><input id="runModeCreate" name="runMode" type="radio" value="create"> สร้างจริง</label>
+          <label><input id="selectForRun" type="checkbox"> เลือก Product นี้สำหรับสร้างจริง</label>
+        </div>
+        <div class="run-buttons">
+          <button id="btnPreview" class="primary" type="button">👁 กรอก Product นี้เพื่อตรวจสอบ</button>
+          <button id="btnCreateSelected" class="warn" type="button" hidden>🚀 สร้าง Product ที่เลือก</button>
+        </div>
+      </div>
+      <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
+      <div id="productResults"></div>
     </section>
 
     <section class="card">
@@ -86,11 +268,24 @@
   </div>
 </main>
 
+<dialog id="sheetDialog">
+  <h3>เลือก Sheet ที่จะ Import</h3>
+  <p class="hint">เลือกได้หลาย Sheet และจะแสดงเฉพาะจำนวน Product ที่ตรวจพบ</p>
+  <div id="sheetList" class="sheet-list"></div>
+  <div class="actions">
+    <button id="btnApplySheets" class="success" type="button">Import ที่เลือก</button>
+    <button data-close="sheetDialog" type="button">ยกเลิก</button>
+  </div>
+</dialog>
+
 <script src="/static/console.js"></script>
 <script>
 const PRODUCT_QUEUE_KEY = 'afc.productQueue.v1';
 const PRODUCT_WORKSPACE_KEY = 'afc.productWorkspace';
 const productQueue = new Queue(PRODUCT_QUEUE_KEY);
+const productFiles = new Map();
+let activeWorkspaceId = '';
+let pendingProductImport = null;
 productQueue.load();
 productQueue.active = productQueue.items[0]?.key || '';
 const optionState = {
@@ -199,7 +394,7 @@ function setPriceCurrency(entry, candidate, optionId) {
     });
   }
   productQueue.save();
-  renderQueue();
+  renderProductOptions(entry);
 }
 
 async function ensureOptions(kind, refresh = false) {
@@ -266,6 +461,100 @@ function identityOf(entry) {
   return `${entry.workspace_id || ''}:${entry.source_group_key || ''}`;
 }
 
+function withDefaults(source) {
+  const entry = Object.assign({
+    key: nextKey('p'), workspace_id: '', source_group_key: '',
+    source_sheet: '', name_th: '', name_en: '',
+    category_source: '', category_id: '', category_label: '',
+    category_slug: '', details_th: '', details_en: '',
+    start_at: '', end_at: '', bundle_id: '', bundle_source: '',
+    price_candidates: [], prices: [], limit_type: 'UNLIMITED',
+    limit_quantity: '', limit_reset_interval_days: '',
+    limit_reset_at: '', tags: [], is_enabled: false,
+    is_test_mode: true, is_hidden: false, position: '0',
+    warnings: [], selected: false, image_names: {},
+  }, structuredClone(source || {}));
+  entry.price_candidates = Array.isArray(entry.price_candidates)
+    ? entry.price_candidates : [];
+  entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
+  entry.tags = Array.isArray(entry.tags) ? entry.tags : [];
+  entry.warnings = Array.isArray(entry.warnings) ? entry.warnings : [];
+  entry.image_names = entry.image_names && typeof entry.image_names === 'object'
+    ? entry.image_names : {};
+  return entry;
+}
+
+function updateQueueOption(entry) {
+  const option = [...$('productQueue').options].find(
+    node => node.value === entry.key);
+  if (option) option.textContent =
+    entry.name_th || entry.name_en || 'Product ใหม่';
+}
+
+function setField(id, value) {
+  const node = $(id);
+  if (node.type === 'checkbox') node.checked = !!value;
+  else node.value = value === undefined || value === null ? '' : String(value);
+}
+
+function renderWarnings(entry) {
+  const list = $('planWarnings');
+  list.replaceChildren();
+  for (const warning of entry?.warnings || []) {
+    const item = document.createElement('li');
+    item.textContent = warning;
+    list.appendChild(item);
+  }
+  list.hidden = !list.children.length;
+}
+
+function renderBundle(entry) {
+  setField('bundleId', entry?.bundle_id || '');
+  const source = entry?.bundle_source || '';
+  $('bundleSource').textContent = source
+    ? `ที่มา: ${source === 'workbook' ? 'ไฟล์แผน' : source === 'created' ? 'Bundle ที่เพิ่งสร้าง' : source}`
+    : 'ยังไม่ได้จับคู่ Bundle — กรอกเลขเองได้';
+  const conflict = entry?.bundle_conflict || null;
+  $('bundleConflict').hidden = !conflict;
+  $('bundleConflictText').textContent = conflict
+    ? `จากไฟล์ #${conflict.workbook_id} · ที่สร้าง #${conflict.created_id}`
+    : '';
+}
+
+function imageState(entry, slot) {
+  const live = productFiles.get(entry?.key || '')?.[slot];
+  if (live) return live.name;
+  const saved = entry?.image_names?.[slot];
+  return saved ? `${saved} · เลือกไฟล์ใหม่ก่อนส่ง` : 'ยังไม่ได้เลือกไฟล์';
+}
+
+function renderImageNames() {
+  const entry = productQueue.current();
+  const slots = {
+    thumbnail_th: 'thumbnailThName',
+    banner_th: 'bannerThName',
+    thumbnail_en: 'thumbnailEnName',
+    banner_en: 'bannerEnName',
+  };
+  Object.entries(slots).forEach(([slot, id]) => {
+    $(id).textContent = imageState(entry, slot);
+  });
+}
+
+function rememberImage(entryKey, slot, file) {
+  const row = productFiles.get(entryKey) || {};
+  row[slot] = file || null;
+  productFiles.set(entryKey, row);
+  const entry = productQueue.items.find(item => item.key === entryKey);
+  if (entry) {
+    entry.image_names = entry.image_names || {};
+    if (file) entry.image_names[slot] = file.name;
+    else delete entry.image_names[slot];
+    productQueue.save();
+  }
+  renderImageNames();
+}
+
 function renderQueue() {
   const pick = $('productQueue');
   pick.replaceChildren();
@@ -275,18 +564,48 @@ function renderQueue() {
     option.textContent = entry.name_th || entry.name_en || 'Product ใหม่';
     pick.appendChild(option);
   });
+  if (!productQueue.current() && productQueue.items.length) {
+    productQueue.active = productQueue.items[0].key;
+  }
   if (productQueue.active) pick.value = productQueue.active;
   $('queueCount').textContent = String(productQueue.items.length);
   $('queueHint').hidden = productQueue.items.length > 0;
-  $('editor').hidden = !productQueue.current();
   const entry = productQueue.current();
+  $('editor').hidden = !entry;
+  $('btnQueueDel').disabled = !entry;
+  $('btnQueueClear').disabled = !productQueue.items.length;
+  $('selectForRun').disabled = !entry;
+  $('selectForRun').checked = !!entry?.selected;
+  activeWorkspaceId = entry?.workspace_id || activeWorkspaceId || '';
+  $('btnDeleteWorkspace').disabled = !activeWorkspaceId;
   if (entry) {
     applyOptionMatches(entry);
-    $('nameTh').value = entry.name_th || '';
-    $('nameEn').value = entry.name_en || '';
-    $('categorySource').value = entry.category_source || '';
-    $('editorWhich').textContent = entry.source_sheet || '';
+    setField('nameTh', entry.name_th);
+    setField('nameEn', entry.name_en);
+    setField('categorySource', entry.category_source);
+    setField('detailsTh', entry.details_th);
+    setField('detailsEn', entry.details_en);
+    setField('isEnabled', entry.is_enabled);
+    setField('isTestMode', entry.is_test_mode);
+    setField('isHidden', entry.is_hidden);
+    setField('position', entry.position);
+    setField('startAt', entry.start_at);
+    setField('endAt', entry.end_at);
+    setField('limitType', entry.limit_type);
+    setField('limitQuantity', entry.limit_quantity);
+    setField('limitResetInterval', entry.limit_reset_interval_days);
+    setField('limitResetAt', entry.limit_reset_at);
+    $('editorWhich').textContent = [
+      entry.source_sheet,
+      entry.workspace_id ? `workspace ${entry.workspace_id}` : '',
+    ].filter(Boolean).join(' · ');
+    document.querySelectorAll('[data-product-tag]').forEach(box => {
+      box.checked = entry.tags.includes(box.dataset.productTag);
+    });
   }
+  renderWarnings(entry);
+  renderBundle(entry);
+  renderImageNames();
   renderProductOptions(entry);
   renderOptionStatus();
 }
@@ -313,7 +632,15 @@ function renderProductOptions(entry) {
     entry?.category_id || '', 'เลือก Category');
   const list = $('priceMatches');
   list.replaceChildren();
-  for (const candidate of entry?.price_candidates || []) {
+  const candidates = entry?.price_candidates || [];
+  if (!candidates.length) {
+    const empty = document.createElement('span');
+    empty.className = 'empty-note';
+    empty.textContent = 'ยังไม่มีข้อมูลราคาในไฟล์';
+    list.appendChild(empty);
+    return;
+  }
+  for (const candidate of candidates) {
     const row = document.createElement('div');
     row.className = 'price-match-row';
     const chip = document.createElement('span');
@@ -326,7 +653,29 @@ function renderProductOptions(entry) {
       resolved?.currency_id || '', 'เลือก Currency');
     select.onchange = () =>
       setPriceCurrency(entry, candidate, select.value);
-    row.append(chip, select);
+    const original = document.createElement('input');
+    original.type = 'number';
+    original.min = '0';
+    original.step = 'any';
+    original.value = candidate.original_price ?? '';
+    original.oninput = () => {
+      candidate.original_price = original.value;
+      const price = resolvedPrice(entry, candidate.source_label);
+      if (price) price.original_price = original.value;
+      productQueue.save();
+    };
+    const sale = document.createElement('input');
+    sale.type = 'number';
+    sale.min = '0';
+    sale.step = 'any';
+    sale.value = candidate.sale_price ?? '';
+    sale.oninput = () => {
+      candidate.sale_price = sale.value;
+      const price = resolvedPrice(entry, candidate.source_label);
+      if (price) price.price = sale.value;
+      productQueue.save();
+    };
+    row.append(chip, select, original, sale);
     list.appendChild(row);
   }
 }
@@ -335,14 +684,17 @@ function addDrafts(drafts, workspaceId) {
   const existing = new Map(productQueue.items.map(
     row => [identityOf(row), row]));
   for (const source of drafts || []) {
-    const draft = structuredClone(source);
-    draft.key = draft.key || nextKey('p');
+    const draft = withDefaults(source);
     draft.workspace_id = workspaceId || draft.workspace_id || '';
     const old = existing.get(identityOf(draft));
     if (!old) {
       productQueue.add(draft);
       existing.set(identityOf(draft), draft);
     }
+  }
+  if (workspaceId) {
+    activeWorkspaceId = workspaceId;
+    localStorage.setItem(PRODUCT_WORKSPACE_KEY, workspaceId);
   }
   productQueue.save();
   renderQueue();
@@ -353,16 +705,206 @@ async function loadWorkspaceProducts(workspaceId) {
     `/api/workspaces/${encodeURIComponent(workspaceId)}/products`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || 'โหลด Product ไม่สำเร็จ');
-  addDrafts(data.products || [], data.workspace_id || workspaceId);
-  localStorage.setItem(PRODUCT_WORKSPACE_KEY, workspaceId);
+  activeWorkspaceId = data.workspace_id || workspaceId;
+  addDrafts(data.products || [], activeWorkspaceId);
+  localStorage.setItem(PRODUCT_WORKSPACE_KEY, activeWorkspaceId);
   if (data.game) $('game').value = data.game;
+  return data;
 }
 
 function blankProduct() {
+  return withDefaults({});
+}
+
+function showTab(group, language) {
+  document.querySelectorAll(`[data-tab-group="${group}"]`).forEach(button => {
+    button.classList.toggle('active', button.dataset.tab === language);
+  });
+  document.querySelectorAll(`[data-tab-panel^="${group}-"]`).forEach(panel => {
+    panel.hidden = panel.dataset.tabPanel !== `${group}-${language}`;
+  });
+}
+
+function openProductSheetPicker(pending) {
+  pendingProductImport = pending;
+  activeWorkspaceId = pending.workspace_id || activeWorkspaceId;
+  const list = $('sheetList');
+  list.replaceChildren();
+  for (const sheet of pending.sheets || []) {
+    const label = document.createElement('label');
+    label.className = 'sheet-row';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = sheet.name;
+    input.checked = Number(sheet.product_count || 0) > 0;
+    const text = document.createElement('span');
+    text.textContent =
+      `${sheet.name} · ${sheet.product_count || 0} Product · ${sheet.count || 0} แถว`;
+    label.append(input, text);
+    list.appendChild(label);
+  }
+  $('sheetDialog').showModal();
+}
+
+async function importPlanFile(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('mode', 'shop');
+  form.append('workspace_id', activeWorkspaceId || '');
+  $('runMsg').textContent = 'กำลังอ่านไฟล์แผน…';
+  const response = await apiFetch('/api/import-plan', {
+    method: 'POST', body: form,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Import ไฟล์แผนไม่สำเร็จ');
+  openProductSheetPicker(data);
+  $('runMsg').textContent = `พบ ${(data.sheets || []).length} Sheet — เลือก Sheet ที่ต้องการ`;
+}
+
+async function applySelectedSheets() {
+  if (!pendingProductImport) return;
+  const selected = [...$('sheetList').querySelectorAll('input:checked')]
+    .map(box => box.value);
+  if (!selected.length) {
+    $('runMsg').textContent = 'กรุณาเลือกอย่างน้อย 1 Sheet';
+    return;
+  }
+  const response = await apiFetch('/api/import-plan/apply', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      pending_id: pendingProductImport.pending_id,
+      selected_sheets: selected,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'นำ Sheet เข้าคิวไม่สำเร็จ');
+  const workspaceId = data.workspace_id
+    || pendingProductImport.workspace_id;
+  if ($('sheetDialog').open) $('sheetDialog').close();
+  await loadWorkspaceProducts(workspaceId);
+  $('runMsg').textContent =
+    `นำเข้า ${selected.length} Sheet แล้ว — ตรวจ Product ก่อนส่ง`;
+}
+
+function applyBundleHandoff(payload) {
+  if (!payload || !Array.isArray(payload.rows)) return;
+  const workspaceId = String(payload.workspace_id || '');
+  for (const row of payload.rows) {
+    const sourceKey = String(row.source_group_key || '').trim();
+    const createdId = String(row.bundle_id || '').trim();
+    if (!sourceKey || !createdId) continue;
+    const entry = productQueue.items.find(item =>
+      String(item.source_group_key || '') === sourceKey
+      && (!workspaceId || String(item.workspace_id || '') === workspaceId));
+    if (!entry) continue;
+    const workbookId = String(entry.bundle_id || '').trim();
+    if (!workbookId) {
+      entry.bundle_id = createdId;
+      entry.bundle_source = 'created';
+      delete entry.bundle_conflict;
+    } else if (workbookId === createdId) {
+      delete entry.bundle_conflict;
+    } else {
+      entry.bundle_conflict = {
+        workbook_id: workbookId,
+        created_id: createdId,
+      };
+    }
+  }
+  productQueue.save();
+  renderQueue();
+}
+
+function drainBundleHandoff() {
+  try {
+    const raw = sessionStorage.getItem('afc.productBundleHandoff');
+    if (!raw) return;
+    sessionStorage.removeItem('afc.productBundleHandoff');
+    const payload = JSON.parse(raw);
+    if (payload.game) $('game').value = payload.game;
+    applyBundleHandoff(payload);
+  } catch (error) {
+    log('อ่านเลข Bundle ที่ส่งมาไม่สำเร็จ', 'WARNING');
+  }
+}
+
+async function deleteActiveWorkspace(workspaceId = activeWorkspaceId) {
+  if (!workspaceId) return;
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+    {method: 'DELETE'});
+  if (!response.ok) {
+    let data = {};
+    try { data = await response.json(); } catch (error) {}
+    throw new Error(data.detail || 'ล้างแผนที่นำเข้าไม่สำเร็จ');
+  }
+  const removed = productQueue.items.filter(
+    entry => entry.workspace_id === workspaceId);
+  removed.forEach(entry => productFiles.delete(entry.key));
+  productQueue.items = productQueue.items.filter(
+    entry => entry.workspace_id !== workspaceId);
+  if (!productQueue.current()) {
+    productQueue.active = productQueue.items[0]?.key || '';
+  }
+  if (activeWorkspaceId === workspaceId) {
+    activeWorkspaceId = '';
+    localStorage.removeItem(PRODUCT_WORKSPACE_KEY);
+  }
+  productQueue.save();
+  renderQueue();
+}
+
+function jobFrom(entry) {
+  if (!entry) return null;
+  const files = productFiles.get(entry.key) || {};
   return {
-    key: nextKey('p'), workspace_id: '', source_group_key: '',
-    source_sheet: '', name_th: '', name_en: '',
+    client_key: entry.key,
+    workspace_id: entry.workspace_id || '',
+    source_group_key: entry.source_group_key || '',
+    name_th: String(entry.name_th || '').trim(),
+    name_en: String(entry.name_en || '').trim(),
+    category_id: String(entry.category_id || ''),
+    category_slug: entry.category_slug || '',
+    details_th: entry.details_th || '',
+    details_en: entry.details_en || '',
+    prices: structuredClone(entry.prices || []),
+    bundle_id: String(entry.bundle_id || '').trim(),
+    start_at: entry.start_at || '',
+    end_at: entry.end_at || '',
+    is_enabled: !!entry.is_enabled,
+    is_test_mode: !!entry.is_test_mode,
+    is_hidden: !!entry.is_hidden,
+    position: String(entry.position ?? '0'),
+    limit_type: entry.limit_type || '',
+    limit_quantity: String(entry.limit_quantity || ''),
+    limit_reset_interval_days:
+      String(entry.limit_reset_interval_days || ''),
+    limit_reset_at: entry.limit_reset_at || '',
+    tags: [...(entry.tags || [])],
+    image_names: structuredClone(entry.image_names || {}),
+    image_files: files,
+    bundle_conflict: entry.bundle_conflict
+      ? structuredClone(entry.bundle_conflict) : null,
   };
+}
+
+function paintRunMode() {
+  const create = $('runModeCreate').checked;
+  $('btnPreview').hidden = create;
+  $('btnCreateSelected').hidden = !create;
+}
+
+function bindValue(id, field, checkbox = false) {
+  const event = checkbox ? 'change' : 'input';
+  $(id).addEventListener(event, () => {
+    const entry = productQueue.current();
+    if (!entry) return;
+    entry[field] = checkbox ? $(id).checked : $(id).value;
+    productQueue.save();
+    if (field === 'name_th' || field === 'name_en') updateQueueOption(entry);
+  });
 }
 
 $('productQueue').onchange = () => {
@@ -375,23 +917,38 @@ $('btnQueueNew').onclick = () => {
   renderQueue();
 };
 $('btnQueueDel').onclick = () => {
+  const entry = productQueue.current();
+  if (entry) productFiles.delete(entry.key);
   productQueue.removeActive();
   productQueue.save();
   renderQueue();
 };
 $('btnQueueClear').onclick = () => {
   productQueue.clear();
+  productFiles.clear();
   productQueue.save();
   renderQueue();
 };
-$('nameTh').oninput = () => {
-  const entry = productQueue.current();
-  if (entry) { entry.name_th = $('nameTh').value; productQueue.save(); renderQueue(); }
+$('btnDeleteWorkspace').onclick = async () => {
+  if (!activeWorkspaceId) return;
+  if (!confirm('ล้างเฉพาะแผนที่นำเข้าชุดนี้และ Product ของแผนนี้ออกจากคิว?')) return;
+  try { await deleteActiveWorkspace(activeWorkspaceId); }
+  catch (error) { log(error.message, 'ERROR'); }
 };
-$('nameEn').oninput = () => {
-  const entry = productQueue.current();
-  if (entry) { entry.name_en = $('nameEn').value; productQueue.save(); renderQueue(); }
-};
+
+[
+  ['nameTh', 'name_th'], ['nameEn', 'name_en'],
+  ['detailsTh', 'details_th'], ['detailsEn', 'details_en'],
+  ['position', 'position'], ['startAt', 'start_at'], ['endAt', 'end_at'],
+  ['limitType', 'limit_type'], ['limitQuantity', 'limit_quantity'],
+  ['limitResetInterval', 'limit_reset_interval_days'],
+  ['limitResetAt', 'limit_reset_at'],
+].forEach(([id, field]) => bindValue(id, field));
+[
+  ['isEnabled', 'is_enabled'], ['isTestMode', 'is_test_mode'],
+  ['isHidden', 'is_hidden'],
+].forEach(([id, field]) => bindValue(id, field, true));
+
 $('categorySelect').onchange = () => {
   const entry = productQueue.current();
   if (!entry) return;
@@ -401,7 +958,93 @@ $('categorySelect').onchange = () => {
   entry.category_slug = selected?.slug || '';
   entry.category_label = selected?.label || '';
   productQueue.save();
-  renderQueue();
+};
+$('bundleId').oninput = () => {
+  const entry = productQueue.current();
+  if (!entry) return;
+  entry.bundle_id = $('bundleId').value;
+  entry.bundle_source = entry.bundle_id ? 'manual' : '';
+  delete entry.bundle_conflict;
+  productQueue.save();
+  renderBundle(entry);
+};
+$('btnUseWorkbookBundle').onclick = () => {
+  const entry = productQueue.current();
+  if (!entry?.bundle_conflict) return;
+  entry.bundle_id = entry.bundle_conflict.workbook_id;
+  entry.bundle_source = 'workbook';
+  delete entry.bundle_conflict;
+  productQueue.save();
+  renderBundle(entry);
+};
+$('btnUseCreatedBundle').onclick = () => {
+  const entry = productQueue.current();
+  if (!entry?.bundle_conflict) return;
+  entry.bundle_id = entry.bundle_conflict.created_id;
+  entry.bundle_source = 'created';
+  delete entry.bundle_conflict;
+  productQueue.save();
+  renderBundle(entry);
+};
+$('selectForRun').onchange = () => {
+  const entry = productQueue.current();
+  if (entry) {
+    entry.selected = $('selectForRun').checked;
+    productQueue.save();
+  }
+};
+
+document.querySelectorAll('[data-product-tag]').forEach(box => {
+  box.onchange = () => {
+    const entry = productQueue.current();
+    if (!entry) return;
+    entry.tags = [...document.querySelectorAll('[data-product-tag]:checked')]
+      .map(node => node.dataset.productTag);
+    productQueue.save();
+  };
+});
+document.querySelectorAll('[data-tab-group]').forEach(button => {
+  button.onclick = () => showTab(
+    button.dataset.tabGroup, button.dataset.tab);
+});
+[
+  ['thumbnailTh', 'thumbnail_th'], ['bannerTh', 'banner_th'],
+  ['thumbnailEn', 'thumbnail_en'], ['bannerEn', 'banner_en'],
+].forEach(([id, slot]) => {
+  $(id).onchange = () => {
+    const entry = productQueue.current();
+    if (entry) rememberImage(entry.key, slot, $(id).files[0] || null);
+  };
+});
+
+$('btnImportPlan').onclick = () => $('productPlanFile').click();
+$('productPlanFile').onchange = async () => {
+  const file = $('productPlanFile').files[0];
+  $('productPlanFile').value = '';
+  if (!file) return;
+  try { await importPlanFile(file); }
+  catch (error) {
+    $('runMsg').textContent = error.message;
+    log(error.message, 'ERROR');
+  }
+};
+$('btnApplySheets').onclick = () =>
+  applySelectedSheets().catch(error => {
+    $('runMsg').textContent = error.message;
+    log(error.message, 'ERROR');
+  });
+document.querySelectorAll('[data-close]').forEach(
+  button => button.onclick = () => $(button.dataset.close).close());
+
+$('runModePreview').onchange = paintRunMode;
+$('runModeCreate').onchange = paintRunMode;
+$('btnPreview').onclick = () => {
+  $('runMsg').textContent =
+    'ตัวกรอกหน้า Aztek จะเชื่อมในขั้นถัดไป — ยังไม่ได้สร้าง Product จริง';
+};
+$('btnCreateSelected').onclick = () => {
+  $('runMsg').textContent =
+    'ตัวสร้างจริงจะเชื่อมในขั้นถัดไป — ตอนนี้ยังไม่ได้ส่งข้อมูลไป Aztek';
 };
 $('btnRefreshCategories').onclick = () =>
   ensureOptions('categories', true).catch(
@@ -415,7 +1058,21 @@ $('btnLogout').onclick = async () => {
   finally { window.location.replace('/login'); }
 };
 
+$('game').addEventListener('change', async () => {
+  try { localStorage.setItem(GAME_KEY, $('game').value); } catch (error) {}
+  optionState.categories = {
+    options: [], fetched_at: '', loading: false, warning: ''};
+  optionState.currencies = {
+    options: [], fetched_at: '', loading: false, warning: ''};
+  await Promise.all([
+    ensureOptions('categories').catch(error => log(error.message, 'WARNING')),
+    ensureOptions('currencies').catch(error => log(error.message, 'WARNING')),
+  ]);
+});
+
 async function bootProductPage() {
+  attachPickers();
+  paintRunMode();
   renderQueue();
   try {
     const [meResponse, gamesResponse, statusResponse] = await Promise.all([
@@ -446,6 +1103,7 @@ async function bootProductPage() {
     try { await loadWorkspaceProducts(workspaceId); }
     catch (error) { log(error.message, 'ERROR'); }
   }
+  drainBundleHandoff();
   if ($('game').value) {
     await Promise.all([
       ensureOptions('categories').catch(

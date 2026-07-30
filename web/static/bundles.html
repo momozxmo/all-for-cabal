@@ -101,6 +101,7 @@
             <span class="hint">ส่งเลข Bundle ที่เพิ่งสร้างไปทำต่อ:</span>
             <button id="btnToItemCode" type="button">➡ สร้าง Item Code</button>
             <button id="btnToEvent" type="button">➡ สร้าง Event</button>
+            <button id="btnToProduct" type="button">➡ สร้าง Product</button>
           </div>
           <div id="bundleResults"></div>
           <div id="shot" style="margin-top:10px"></div>
@@ -134,7 +135,7 @@ const EVENT_DRAFT_KEY='afc.bundleEventDrafts';
 // misses follow the operator between the two pages.
 const GAME_KEY='afc.game', MODE_KEY='afc.mode', MISS_KEY='afc.notFound';
 const state={queue:[],active:'',rewardOptions:{},rewardOptionsGame:'',
-  eventDrafts:[]};
+  eventDrafts:[],workspaceId:''};
 
 async function apiFetch(url, options){
   const response = await fetch(url, Object.assign({credentials:'same-origin'}, options||{}));
@@ -223,6 +224,7 @@ function drainHandoff(){
     if(raw){payload=JSON.parse(raw);sessionStorage.removeItem('afc.bundleHandoff');}}
   catch(e){return;}
   if(!payload||!Array.isArray(payload.bundles))return;
+  state.workspaceId=String(payload.workspace_id||'');
   if(Array.isArray(payload.event_drafts)){
     state.eventDrafts=payload.event_drafts;
   }
@@ -238,6 +240,7 @@ function drainHandoff(){
     // RANDOM with the odds already filled in, not left for the operator to spot.
     const random=!!b.is_random||items.some(it=>it.rate);
     state.queue.push({key:nextKey(),name:uniqueName(b.name||'Bundle'),
+      workspace_id:state.workspaceId,
       group:b.group||'',group_key:b.group_key||'',
       type:random?'RANDOM':'FIXED',deliver:true,items,rewards:[]});
     if(random)log(`"${b.name}" มีเรทสุ่มในเอกสาร — ตั้งเป็น RANDOM และกรอกเรทให้แล้ว`,'SUCCESS');
@@ -543,17 +546,37 @@ $('btnCreateAll').onclick=()=>state.queue.length?createThese(state.queue.slice()
 function offerHandoff(results){
   state.made=(results||[]).filter(r=>r.saved&&r.bundle_id)
     .map(r=>{const source=state.queue.find(bundle=>bundle.name===r.name)||{};
-      return {group:source.group||r.group||'',group_key:source.group_key||'',
+      return {workspace_id:source.workspace_id||state.workspaceId||'',
+        group:source.group||r.group||'',group_key:source.group_key||'',
         name:r.name||'',bundle_id:String(r.bundle_id)};});
   $('handoff').hidden=!state.made.length;}
 function sendMade(where){
   if(!state.made||!state.made.length)return;
-  try{sessionStorage.setItem('afc.codeHandoff',
-    JSON.stringify({game:$('game').value,event_drafts:state.eventDrafts,
-      rows:state.made}));}catch(e){}
+  try{
+    if(where==='/products'){
+      const workspaceId=state.made.find(row=>row.workspace_id)?.workspace_id
+        ||state.workspaceId||'';
+      sessionStorage.setItem('afc.productBundleHandoff',JSON.stringify({
+        game:$('game').value,workspace_id:workspaceId,
+        rows:state.made.map(row=>({
+          source_group_key:row.group_key,bundle_id:row.bundle_id,
+          name:row.name
+        }))
+      }));
+      const query=new URLSearchParams();
+      if(workspaceId)query.set('workspace',workspaceId);
+      if($('game').value)query.set('game',$('game').value);
+      window.location.href='/products'+(query.toString()?'?'+query.toString():'');
+      return;
+    }
+    sessionStorage.setItem('afc.codeHandoff',
+      JSON.stringify({game:$('game').value,event_drafts:state.eventDrafts,
+        rows:state.made}));
+  }catch(e){}
   window.location.href=where;}
 $('btnToItemCode').onclick=()=>sendMade('/itemcodes');
 $('btnToEvent').onclick=()=>sendMade('/events');
+$('btnToProduct').onclick=()=>sendMade('/products');
 
 // ---- เริ่มต้น ----
 function paintAztek(status){const badge=$('aztekStatus');

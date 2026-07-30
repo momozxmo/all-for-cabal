@@ -232,3 +232,178 @@ def test_manual_selection_uses_only_fetched_option_ids():
         assert entry['prices'][0]['currency_id'] == '12'
         assert entry['prices'][0]['currency_slug'] == 'coin-b'
         browser.close()
+
+
+def test_product_editor_matches_aztek_columns_and_collapses():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""addDrafts([{
+          source_group_key:'g1', name_th:'Pack', name_en:'Pack',
+          price_candidates:[], prices:[]
+        }], 'workspace-1')""")
+        page.set_viewport_size({'width': 1500, 'height': 1000})
+        desktop = page.evaluate("""() => {
+          const box = key => document.querySelector(
+            `[data-product-section="${key}"]`).getBoundingClientRect();
+          const general = box('general'), display = box('display');
+          return {generalRight: general.right, displayLeft: display.left};
+        }""")
+        page.set_viewport_size({'width': 800, 'height': 1000})
+        mobile = page.evaluate("""() => {
+          const box = key => document.querySelector(
+            `[data-product-section="${key}"]`).getBoundingClientRect();
+          const general = box('general'), currency = box('currency');
+          const display = box('display');
+          return {generalLeft: general.left, generalTop: general.top,
+                  currencyTop: currency.top, displayLeft: display.left,
+                  displayTop: display.top};
+        }""")
+        assert desktop['displayLeft'] > desktop['generalRight']
+        assert abs(mobile['generalLeft'] - mobile['displayLeft']) < 1
+        assert mobile['generalTop'] < mobile['currencyTop'] < mobile['displayTop']
+        browser.close()
+
+
+def test_only_the_selected_execution_mode_button_is_visible():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.locator('#runModePreview').check()
+        assert page.locator('#btnPreview').is_visible()
+        assert not page.locator('#btnCreateSelected').is_visible()
+        page.locator('#runModeCreate').check()
+        assert not page.locator('#btnPreview').is_visible()
+        assert page.locator('#btnCreateSelected').is_visible()
+        browser.close()
+
+
+def test_candidate_sheets_show_product_counts_and_apply_existing_endpoints():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""openProductSheetPicker({
+          pending_id:'pending-1', workspace_id:'workspace-1',
+          sheets:[
+            {name:'Promotion 15.7',count:6,product_count:2},
+            {name:'Cash Shop 15.7',count:3,product_count:1}]
+        })""")
+        labels = page.locator('#sheetList .sheet-row').all_text_contents()
+        assert any('Promotion 15.7' in label and '2 Product' in label
+                   for label in labels)
+        assert any('Cash Shop 15.7' in label and '1 Product' in label
+                   for label in labels)
+
+        calls = []
+
+        def route_api(route):
+            calls.append((route.request.method, route.request.url))
+            if route.request.url.endswith('/api/import-plan/apply'):
+                route.fulfill(
+                    status=200, content_type='application/json',
+                    body='{"workspace_id":"workspace-1","mode":"shop"}')
+            else:
+                route.fulfill(
+                    status=200, content_type='application/json',
+                    body='{"workspace_id":"workspace-1","game":"CabalPC TH",'
+                         '"products":[]}')
+
+        page.route('**/api/import-plan/apply', route_api)
+        page.route('**/api/workspaces/workspace-1/products', route_api)
+        page.evaluate("() => applySelectedSheets()")
+        assert calls == [
+            ('POST', 'http://tool.test/api/import-plan/apply'),
+            ('GET', 'http://tool.test/api/workspaces/workspace-1/products'),
+        ]
+        browser.close()
+
+
+def test_bundle_handoff_matches_exact_keys_and_exposes_conflicts():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          addDrafts([
+            {source_group_key:'same',name_th:'A',bundle_id:'',
+             price_candidates:[],prices:[]},
+            {source_group_key:'conflict',name_th:'B',bundle_id:'100',
+             price_candidates:[],prices:[]},
+            {source_group_key:'other',name_th:'C',bundle_id:'',
+             price_candidates:[],prices:[]}
+          ], 'workspace-1');
+          applyBundleHandoff({workspace_id:'workspace-1',rows:[
+            {source_group_key:'same',bundle_id:'200',name:'A'},
+            {source_group_key:'conflict',bundle_id:'300',name:'B'},
+            {source_group_key:'missing',bundle_id:'400',name:'X'}
+          ]});
+          return productQueue.items;
+        }""")
+        by_key = {entry['source_group_key']: entry for entry in result}
+        assert by_key['same']['bundle_id'] == '200'
+        assert by_key['conflict']['bundle_id'] == '100'
+        assert by_key['conflict']['bundle_conflict'] == {
+            'workbook_id': '100',
+            'created_id': '300',
+        }
+        assert by_key['other']['bundle_id'] == ''
+        browser.close()
+
+
+def test_images_stay_in_memory_and_workspace_delete_is_scoped():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          addDrafts([
+            {source_group_key:'g1',name_th:'A',
+             price_candidates:[],prices:[]},
+            {source_group_key:'g2',name_th:'B',
+             price_candidates:[],prices:[]}
+          ], 'workspace-1');
+          addDrafts([
+            {source_group_key:'g3',name_th:'C',
+             price_candidates:[],prices:[]}
+          ], 'workspace-2');
+          const first = productQueue.items[0];
+          rememberImage(first.key, 'thumbnail_th',
+            new File(['secret bytes'], 'thumb.png', {type:'image/png'}));
+        }""")
+        assert 'secret bytes' not in page.evaluate(
+            "localStorage.getItem('afc.productQueue.v1')")
+
+        calls = []
+
+        def delete_workspace(route):
+            calls.append((route.request.method, route.request.url))
+            route.fulfill(status=204, body='')
+
+        page.route('**/api/workspaces/workspace-1', delete_workspace)
+        page.evaluate("() => deleteActiveWorkspace('workspace-1')")
+        assert calls == [
+            ('DELETE', 'http://tool.test/api/workspaces/workspace-1')]
+        assert page.evaluate("""productQueue.items.map(
+          entry => entry.workspace_id)""") == ['workspace-2']
+        browser.close()
+
+
+def test_language_tabs_keep_both_descriptions_and_manual_bundle_is_numeric():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""addDrafts([{
+          source_group_key:'g1',name_th:'A',details_th:'รายละเอียดเดิม',
+          details_en:'Existing details',bundle_id:'',
+          price_candidates:[],prices:[]
+        }], 'workspace-1')""")
+
+        page.locator('[data-tab-group="details"][data-tab="en"]').click()
+        page.locator('#detailsEn').fill('English edited')
+        page.locator('[data-tab-group="details"][data-tab="th"]').click()
+        page.locator('#detailsTh').fill('ไทยแก้แล้ว')
+
+        entry = page.evaluate("productQueue.current()")
+        assert entry['details_th'] == 'ไทยแก้แล้ว'
+        assert entry['details_en'] == 'English edited'
+        assert page.locator('#bundleId').get_attribute('type') == 'number'
+        assert page.locator('#bundleId').is_visible()
+        browser.close()

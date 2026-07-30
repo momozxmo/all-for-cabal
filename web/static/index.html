@@ -586,7 +586,8 @@ async function sendToBundlePage(){
     // depends on the mode, and a document row that found no item has to stay
     // visible after leaving this page.
     sessionStorage.setItem('afc.bundleHandoff',JSON.stringify({
-      game:$('game').value,mode:d.mode||state.mode,bundles:d.bundles,
+      game:$('game').value,mode:d.mode||state.mode,
+      workspace_id:state.workspaceId,bundles:d.bundles,
       event_drafts:d.event_drafts||[],not_found:d.not_found||[]}));
     window.location.href='/bundles';
   }catch(e){alert('ส่งไปหน้าสร้างบันเดิลไม่สำเร็จ');}
