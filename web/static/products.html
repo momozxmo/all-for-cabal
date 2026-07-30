@@ -13,7 +13,17 @@
     .topline select{width:100%}
     .product-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .product-summary label{display:grid;gap:5px;color:var(--muted);font-size:12px}
-    .product-summary input{width:100%}
+    .product-summary input,.product-summary select{width:100%}
+    .option-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+    .option-state{font:11px/1.4 var(--mono);color:var(--muted)}
+    .option-state.warning{color:var(--yellow)}
+    .source-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;
+      border:1px solid var(--edge);border-radius:999px;background:var(--onyx);
+      color:var(--muted);font-size:12px}
+    .source-chip.ok{border-color:rgba(63,201,138,.45);color:var(--green)}
+    .price-match-list{grid-column:1/-1;display:grid;gap:8px}
+    .price-match-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(180px,2fr);
+      gap:8px;align-items:center}
     @media(max-width:720px){.product-summary{grid-template-columns:1fr}}
   </style>
 </head>
@@ -49,6 +59,12 @@
           <button id="btnQueueClear" class="danger" type="button">ล้างคิว</button>
         </div>
         <p class="hint" id="queueHint">ยังไม่มี Product ในคิว — ส่ง Shop plan จาก Item Finder หรือเพิ่มเอง</p>
+        <div class="option-tools">
+          <button id="btnRefreshCategories" type="button">↻ Fetch Category</button>
+          <span id="categoryOptionState" class="option-state">ยังไม่ได้ Fetch</span>
+          <button id="btnRefreshCurrencies" type="button">↻ Fetch Currency</button>
+          <span id="currencyOptionState" class="option-state">ยังไม่ได้ Fetch</span>
+        </div>
       </div>
     </section>
 
@@ -57,6 +73,9 @@
       <div class="card-body product-summary">
         <label>ชื่อ Product (ไทย)<input id="nameTh" type="text"></label>
         <label>ชื่อ Product (อังกฤษ)<input id="nameEn" type="text"></label>
+        <label>Category จากไฟล์<input id="categorySource" type="text" readonly></label>
+        <label>Category บน Aztek<select id="categorySelect"></select></label>
+        <div id="priceMatches" class="price-match-list"></div>
       </div>
     </section>
 
@@ -74,6 +93,174 @@ const PRODUCT_WORKSPACE_KEY = 'afc.productWorkspace';
 const productQueue = new Queue(PRODUCT_QUEUE_KEY);
 productQueue.load();
 productQueue.active = productQueue.items[0]?.key || '';
+const optionState = {
+  currencies: {options: [], fetched_at: '', loading: false, warning: ''},
+  categories: {options: [], fetched_at: '', loading: false, warning: ''},
+};
+
+function normalizeOptionText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\s_\-–—:/()[\].]+/g, '');
+}
+
+function matchFetchedOption(source, options) {
+  const wanted = normalizeOptionText(source);
+  if (!wanted) return null;
+  const hits = (options || []).filter(option =>
+    [option.id, option.slug, option.label].some(
+      value => normalizeOptionText(value) === wanted));
+  return hits.length === 1 ? structuredClone(hits[0]) : null;
+}
+
+function optionCacheKey(game, kind) {
+  return `afc.productOptions.v1:${game}:${kind}`;
+}
+
+function readOptionCache(game, kind) {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(optionCacheKey(game, kind)) || 'null');
+    if (parsed && Array.isArray(parsed.options)) return parsed;
+  } catch (error) {}
+  return null;
+}
+
+function optionStatus(kind) {
+  const state = optionState[kind];
+  if (state.loading) return 'กำลัง Fetch…';
+  if (state.warning) return state.warning;
+  if (!state.fetched_at) return 'ยังไม่ได้ Fetch';
+  const time = new Date(state.fetched_at).toLocaleString();
+  return `${state.options.length} รายการ · ${time}`;
+}
+
+function renderOptionStatus() {
+  const category = $('categoryOptionState');
+  const currency = $('currencyOptionState');
+  category.textContent = optionStatus('categories');
+  currency.textContent = optionStatus('currencies');
+  category.classList.toggle(
+    'warning', !!optionState.categories.warning);
+  currency.classList.toggle(
+    'warning', !!optionState.currencies.warning);
+  $('btnRefreshCategories').disabled = optionState.categories.loading;
+  $('btnRefreshCurrencies').disabled = optionState.currencies.loading;
+}
+
+function resolvedPrice(entry, sourceLabel) {
+  return (entry.prices || []).find(price =>
+    normalizeOptionText(price.source_label)
+      === normalizeOptionText(sourceLabel)) || null;
+}
+
+function applyOptionMatches(entry) {
+  if (!entry) return entry;
+  const category = matchFetchedOption(
+    entry.category_source, optionState.categories.options);
+  if (!entry.category_id && category) {
+    entry.category_id = category.id;
+    entry.category_label = category.label;
+    entry.category_slug = category.slug || '';
+  }
+  entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
+  for (const candidate of entry.price_candidates || []) {
+    if (resolvedPrice(entry, candidate.source_label)) continue;
+    const currency = matchFetchedOption(
+      candidate.source_label, optionState.currencies.options);
+    if (!currency) continue;
+    entry.prices.push({
+      source_label: candidate.source_label,
+      currency_id: currency.id,
+      currency_slug: currency.slug || '',
+      currency_label: currency.label,
+      original_price: candidate.original_price,
+      price: candidate.sale_price,
+    });
+  }
+  return entry;
+}
+
+function setPriceCurrency(entry, candidate, optionId) {
+  entry.prices = (entry.prices || []).filter(price =>
+    normalizeOptionText(price.source_label)
+      !== normalizeOptionText(candidate.source_label));
+  const currency = optionState.currencies.options.find(
+    option => String(option.id) === String(optionId));
+  if (currency) {
+    entry.prices.push({
+      source_label: candidate.source_label,
+      currency_id: currency.id,
+      currency_slug: currency.slug || '',
+      currency_label: currency.label,
+      original_price: candidate.original_price,
+      price: candidate.sale_price,
+    });
+  }
+  productQueue.save();
+  renderQueue();
+}
+
+async function ensureOptions(kind, refresh = false) {
+  if (!Object.hasOwn(optionState, kind)) return [];
+  const game = $('game').value;
+  if (!game) return [];
+  const state = optionState[kind];
+  const cached = readOptionCache(game, kind);
+  if (!refresh && cached) {
+    state.options = cached.options;
+    state.fetched_at = cached.fetched_at || '';
+    state.warning = '';
+    productQueue.items.forEach(applyOptionMatches);
+    productQueue.save();
+    renderQueue();
+    renderOptionStatus();
+    return state.options;
+  }
+
+  const lastGood = state.options.length ? {
+    options: state.options,
+    fetched_at: state.fetched_at,
+  } : cached;
+  state.loading = true;
+  state.warning = '';
+  renderOptionStatus();
+  try {
+    const response = await apiFetch('/api/products/options', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({game, kinds: [kind]}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(
+      data.detail || 'Fetch ตัวเลือก Product ไม่สำเร็จ');
+    const record = {
+      fetched_at: new Date().toISOString(),
+      options: data.options?.[kind] || [],
+    };
+    localStorage.setItem(
+      optionCacheKey(game, kind), JSON.stringify(record));
+    state.options = record.options;
+    state.fetched_at = record.fetched_at;
+    productQueue.items.forEach(applyOptionMatches);
+    productQueue.save();
+    renderQueue();
+    return state.options;
+  } catch (error) {
+    if (lastGood) {
+      state.options = lastGood.options || [];
+      state.fetched_at = lastGood.fetched_at || '';
+      state.warning = `ใช้ข้อมูลเดิม · ${error.message}`;
+      return state.options;
+    }
+    state.warning = error.message;
+    throw error;
+  } finally {
+    state.loading = false;
+    renderOptionStatus();
+  }
+}
 
 function identityOf(entry) {
   return `${entry.workspace_id || ''}:${entry.source_group_key || ''}`;
@@ -94,9 +281,53 @@ function renderQueue() {
   $('editor').hidden = !productQueue.current();
   const entry = productQueue.current();
   if (entry) {
+    applyOptionMatches(entry);
     $('nameTh').value = entry.name_th || '';
     $('nameEn').value = entry.name_en || '';
+    $('categorySource').value = entry.category_source || '';
     $('editorWhich').textContent = entry.source_sheet || '';
+  }
+  renderProductOptions(entry);
+  renderOptionStatus();
+}
+
+function addLiveOptions(select, options, selectedId, placeholder) {
+  select.replaceChildren();
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = placeholder;
+  select.appendChild(empty);
+  for (const option of options || []) {
+    const node = document.createElement('option');
+    node.value = option.id;
+    node.textContent = option.slug
+      ? `${option.slug} - ${option.label}` : option.label;
+    select.appendChild(node);
+  }
+  select.value = selectedId || '';
+}
+
+function renderProductOptions(entry) {
+  addLiveOptions(
+    $('categorySelect'), optionState.categories.options,
+    entry?.category_id || '', 'เลือก Category');
+  const list = $('priceMatches');
+  list.replaceChildren();
+  for (const candidate of entry?.price_candidates || []) {
+    const row = document.createElement('div');
+    row.className = 'price-match-row';
+    const chip = document.createElement('span');
+    const resolved = resolvedPrice(entry, candidate.source_label);
+    chip.className = 'source-chip' + (resolved ? ' ok' : '');
+    chip.textContent = `${candidate.source_label} · ${candidate.sale_price}`;
+    const select = document.createElement('select');
+    addLiveOptions(
+      select, optionState.currencies.options,
+      resolved?.currency_id || '', 'เลือก Currency');
+    select.onchange = () =>
+      setPriceCurrency(entry, candidate, select.value);
+    row.append(chip, select);
+    list.appendChild(row);
   }
 }
 
@@ -161,6 +392,23 @@ $('nameEn').oninput = () => {
   const entry = productQueue.current();
   if (entry) { entry.name_en = $('nameEn').value; productQueue.save(); renderQueue(); }
 };
+$('categorySelect').onchange = () => {
+  const entry = productQueue.current();
+  if (!entry) return;
+  const selected = optionState.categories.options.find(
+    option => String(option.id) === $('categorySelect').value);
+  entry.category_id = selected?.id || '';
+  entry.category_slug = selected?.slug || '';
+  entry.category_label = selected?.label || '';
+  productQueue.save();
+  renderQueue();
+};
+$('btnRefreshCategories').onclick = () =>
+  ensureOptions('categories', true).catch(
+    error => log(error.message, 'ERROR'));
+$('btnRefreshCurrencies').onclick = () =>
+  ensureOptions('currencies', true).catch(
+    error => log(error.message, 'ERROR'));
 $('btnClearLog').onclick = () => $('log').replaceChildren();
 $('btnLogout').onclick = async () => {
   try { await fetch('/api/auth/logout', {method: 'POST'}); }
@@ -197,6 +445,14 @@ async function bootProductPage() {
   if (workspaceId) {
     try { await loadWorkspaceProducts(workspaceId); }
     catch (error) { log(error.message, 'ERROR'); }
+  }
+  if ($('game').value) {
+    await Promise.all([
+      ensureOptions('categories').catch(
+        error => log(error.message, 'WARNING')),
+      ensureOptions('currencies').catch(
+        error => log(error.message, 'WARNING')),
+    ]);
   }
 }
 
