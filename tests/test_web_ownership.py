@@ -24,6 +24,9 @@ def test_anonymous_item_finder_routes_return_json_401_and_health_is_public(
         anonymous_client.post('/api/import-plan/apply', json={
             'pending_id': 'missing', 'selected_sheets': ['One'],
         }),
+        anonymous_client.post('/api/products/options', json={
+            'game': 'CabalM TH', 'kinds': ['currencies'],
+        }),
         anonymous_client.get('/api/workspaces/missing'),
         anonymous_client.delete('/api/workspaces/missing'),
         anonymous_client.get('/api/workspaces/missing/export.csv'),

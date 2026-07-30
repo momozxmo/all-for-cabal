@@ -141,6 +141,12 @@ class RewardOptionsRequest(BaseModel):
     game: str = Field(min_length=1, max_length=64)
 
 
+class ProductOptionsRequest(BaseModel):
+    game: str = Field(min_length=1, max_length=64)
+    kinds: list[Literal['currencies', 'categories']] = Field(
+        default_factory=lambda: ['currencies', 'categories'])
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -1090,6 +1096,53 @@ async def reward_options(payload: RewardOptionsRequest, request: Request,
         tool='create_bundle', resource_type='aztek_session',
         resource_id=user.id, request=request)
     return {'reward_options': options, 'logs': logs}
+
+
+@router.post('/api/products/options')
+async def product_options(
+    payload: ProductOptionsRequest,
+    request: Request,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Read selected Product option kinds from the live Aztek form."""
+    from web import product_runner
+
+    if payload.game not in item_finder.GAMES:
+        raise HTTPException(status_code=400, detail='ไม่รู้จักเกม')
+    kinds = list(dict.fromkeys(payload.kinds))
+    storage_state = (
+        request.app.state.aztek_session_service
+        .load_storage_state(db, user)
+    )
+    if storage_state is None:
+        raise HTTPException(
+            status_code=409, detail='ยังไม่ได้เชื่อมเซสชัน Aztek')
+    try:
+        options = await product_runner.fetch_options(
+            payload.game, storage_state, kinds)
+    except Exception as exc:
+        write_audit(
+            db, user_id=user.id, action='product.options',
+            status='failed',
+            summary={'game': payload.game, 'error': str(exc)[:200]},
+            tool='create_product', resource_type='aztek_session',
+            resource_id=user.id, request=request)
+        raise HTTPException(
+            status_code=502,
+            detail='ดึงตัวเลือก Product ไม่สำเร็จ: %s' % exc)
+    counts = {
+        kind: len(options.get(kind) or ())
+        for kind in kinds
+    }
+    write_audit(
+        db, user_id=user.id, action='product.options',
+        status='success',
+        summary={'game': payload.game, 'counts': counts},
+        tool='create_product', resource_type='aztek_session',
+        resource_id=user.id, request=request)
+    return {'options': options}
+
 
 MAX_BUNDLE_ITEMS = 200
 
