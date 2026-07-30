@@ -381,8 +381,9 @@ Expected endpoints:
 
 - `GET /api/workspaces/{workspace_id}/products`
   - build drafts from the shared persisted plan;
-- `POST /api/products/import`
-  - direct-import fallback returning drafts grouped by candidate sheet;
+- existing `POST /api/import-plan` and `POST /api/import-plan/apply`
+  - direct-import fallback using the same persisted Shop workspace and sheet
+    selection flow as Item Finder;
 - `POST /api/products/options`
   - fetch requested option kinds for a game, read-only;
 - `POST /api/products/run`
