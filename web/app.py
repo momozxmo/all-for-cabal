@@ -787,6 +787,8 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
                       workspace_id: str = Form(''),
                       user: User = Depends(require_user),
                       db: Session = Depends(get_db)):
+    from web import product_plan
+
     parser = item_service.parser_for_mode(mode)
     repository = WorkspaceRepository(db)
     workspace = (_get_workspace(repository, user.id, workspace_id) if workspace_id
@@ -827,7 +829,14 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
         'workspace_id': workspace.id,
         'pending_id': pending.id,
         'needs_sheet_selection': True,
-        'sheets': [{'name': name, 'count': len(rows)} for name, rows in sheets],
+        'sheets': [
+            {
+                'name': name,
+                'count': len(rows),
+                'product_count': product_plan.count_products(rows),
+            }
+            for name, rows in sheets
+        ],
         'skipped': list(skipped or []),
     }
 
@@ -948,6 +957,25 @@ def workspace_itemcodes(workspace_id: str, request: Request,
         request=request,
     )
     return {'itemcodes': drafts, 'game': workspace.game or ''}
+
+
+@router.get('/api/workspaces/{workspace_id}/products')
+def workspace_products(
+    workspace_id: str,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Return editable Product drafts from the persisted Shop plan."""
+    from web import product_plan
+
+    workspace = _get_workspace(
+        WorkspaceRepository(db), user.id, workspace_id)
+    return {
+        'products': product_plan.build_products(
+            workspace.group_meta, workspace.game or ''),
+        'game': workspace.game or '',
+        'workspace_id': workspace.id,
+    }
 
 
 @router.get('/api/workspaces/{workspace_id}/events')

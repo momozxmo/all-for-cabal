@@ -28,6 +28,7 @@ def test_anonymous_item_finder_routes_return_json_401_and_health_is_public(
         anonymous_client.delete('/api/workspaces/missing'),
         anonymous_client.get('/api/workspaces/missing/export.csv'),
         anonymous_client.get('/api/workspaces/missing/export.xlsx'),
+        anonymous_client.get('/api/workspaces/missing/products'),
         anonymous_client.post('/api/workspaces/missing/bundles', json={
             'selected_indexes': [],
         }),
@@ -60,6 +61,7 @@ def test_other_user_cannot_read_export_delete_or_bundle(
     assert outsider.get(f'/api/workspaces/{wid}').status_code == 404
     assert outsider.get(f'/api/workspaces/{wid}/export.csv').status_code == 404
     assert outsider.get(f'/api/workspaces/{wid}/export.xlsx').status_code == 404
+    assert outsider.get(f'/api/workspaces/{wid}/products').status_code == 404
     assert outsider.delete(f'/api/workspaces/{wid}').status_code == 404
     assert outsider.post(
         f'/api/workspaces/{wid}/bundles', json={'selected_indexes': []}

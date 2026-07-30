@@ -2,7 +2,9 @@
 """Pure Product-draft mapping from persisted Shop workspace metadata."""
 import datetime as dt
 
+from web import item_service
 from web import product_plan
+from web.models import WorkspaceRecord
 
 
 NOW = dt.datetime(2026, 7, 30, 19, 0, 0)
@@ -130,3 +132,60 @@ def test_build_products_keeps_source_order_and_count_products_deduplicates():
         {'sources': ['ignored'], 'group_meta': {}},
     ]
     assert product_plan.count_products(rows) == 2
+
+
+def test_workspace_products_are_owned_and_keep_the_selected_game(
+        client, test_database, workspace_for_member):
+    with test_database.session() as db:
+        record = db.get(WorkspaceRecord, workspace_for_member.id)
+        record.mode = 'shop'
+        record.game = 'CabalPC TH'
+        record.group_meta = {'g1': _meta(
+            name='Orb Pack',
+            start_at='2026-07-30 00:00:00',
+            end_at='2026-08-30 07:59:00',
+        )}
+
+    response = client.get(
+        f'/api/workspaces/{workspace_for_member.id}/products')
+
+    assert response.status_code == 200
+    assert response.json()['game'] == 'CabalPC TH'
+    assert response.json()['workspace_id'] == workspace_for_member.id
+    assert response.json()['products'][0]['source_group_key'] == 'g1'
+
+
+def test_workspace_without_product_metadata_returns_an_empty_list(
+        client, workspace_for_member):
+    response = client.get(
+        f'/api/workspaces/{workspace_for_member.id}/products')
+    assert response.status_code == 200
+    assert response.json()['products'] == []
+
+
+def test_import_plan_reports_product_count_per_candidate_sheet(
+        client, monkeypatch):
+    monkeypatch.setattr(item_service, 'parser_for_mode', lambda mode: (
+        lambda path: ([
+            ('Promotion 15.7', [
+                {'kind': '1', 'sources': ['g1'],
+                 'group_meta': _meta(name='Orb Pack')},
+                {'kind': '2', 'sources': ['g1'],
+                 'group_meta': _meta(name='Orb Pack')},
+            ]),
+        ], [])
+    ))
+
+    response = client.post(
+        '/api/import-plan',
+        data={'mode': 'shop'},
+        files={'file': (
+            'plan.xlsx', b'fake workbook', 'application/octet-stream')},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()['sheets'] == [{
+        'name': 'Promotion 15.7',
+        'count': 2,
+        'product_count': 1,
+    }]
