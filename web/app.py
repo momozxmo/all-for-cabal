@@ -147,6 +147,45 @@ class ProductOptionsRequest(BaseModel):
         default_factory=lambda: ['currencies', 'categories'])
 
 
+class ProductPriceSpec(BaseModel):
+    currency_id: str = Field(min_length=1, max_length=120)
+    currency_slug: str = Field(default='', max_length=160)
+    currency_label: str = Field(default='', max_length=200)
+    original_price: float = Field(ge=0)
+    price: float = Field(ge=0)
+
+
+class ProductSpec(BaseModel):
+    client_key: str = Field(min_length=1, max_length=80)
+    source_group_key: str = Field(default='', max_length=240)
+    name_th: str = Field(min_length=1, max_length=200)
+    name_en: str = Field(min_length=1, max_length=200)
+    category_id: str = Field(min_length=1, max_length=120)
+    category_label: str = Field(default='', max_length=200)
+    details_th: str = Field(default='', max_length=20000)
+    details_en: str = Field(default='', max_length=20000)
+    start_at: str = Field(min_length=1, max_length=32)
+    end_at: str = Field(min_length=1, max_length=32)
+    bundle_id: str = Field(min_length=1, max_length=32)
+    prices: list[ProductPriceSpec] = Field(min_length=1, max_length=20)
+    limit_type: Literal['UNLIMITED', 'PLAYER', 'CHARACTER'] = 'UNLIMITED'
+    limit_quantity: str = Field(default='', max_length=12)
+    limit_reset_interval_days: str = Field(default='', max_length=12)
+    limit_reset_at: str = Field(default='', max_length=32)
+    tags: list[Literal['EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE']] = Field(
+        default_factory=list, max_length=5)
+    is_enabled: bool = False
+    is_test_mode: bool = True
+    is_hidden: bool = False
+    position: str = Field(default='0', max_length=12)
+
+
+class ProductRunRequest(BaseModel):
+    game: str = Field(min_length=1, max_length=64)
+    products: list[ProductSpec] = Field(default_factory=list, max_length=30)
+    do_save: bool = False
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -1142,6 +1181,196 @@ async def product_options(
         tool='create_product', resource_type='aztek_session',
         resource_id=user.id, request=request)
     return {'options': options}
+
+
+IMAGE_KEY = re.compile(
+    r'^image__(?P<client>[A-Za-z0-9_-]{1,80})__'
+    r'(?P<slot>thumb_th|banner_th|thumb_en|banner_en)$')
+ALLOWED_IMAGE_TYPES = {
+    'image/png', 'image/jpeg', 'image/webp', 'image/gif'}
+MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024
+_PRODUCT_IMAGE_SLOT = {
+    'thumb_th': 'thumbnail_th',
+    'banner_th': 'banner_th',
+    'thumb_en': 'thumbnail_en',
+    'banner_en': 'banner_en',
+}
+
+
+def _positive_digits(value: str, label: str, where: str,
+                     *, optional=False) -> str:
+    text = str(value or '').strip()
+    if optional and not text:
+        return ''
+    if not text.isdigit() or int(text) <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail='%s ของ%s ต้องเป็นจำนวนเต็มมากกว่า 0' % (label, where))
+    return text
+
+
+def _clean_product(spec: ProductSpec) -> dict:
+    name_th = spec.name_th.strip()
+    name_en = spec.name_en.strip()
+    where = name_th or name_en or 'Product'
+    if not name_th:
+        raise HTTPException(
+            status_code=400, detail='ชื่อ Product (ไทย) ของ%s ห้ามว่าง' % where)
+    if not name_en:
+        raise HTTPException(
+            status_code=400, detail='ชื่อ Product (อังกฤษ) ของ%s ห้ามว่าง' % where)
+    category_id = spec.category_id.strip()
+    if not category_id:
+        raise HTTPException(
+            status_code=400, detail='หมวดหมู่ของ%s ห้ามว่าง' % where)
+    start_at = _require_datetime(spec.start_at, 'วันเริ่มขาย', where)
+    end_at = _require_datetime(spec.end_at, 'วันสิ้นสุด', where)
+    _require_order(
+        start_at, end_at, ('วันเริ่มขาย', 'วันสิ้นสุด'), where)
+    bundle_id = _positive_digits(spec.bundle_id, 'Bundle ID', where)
+    try:
+        position = str(int(spec.position.strip() or '0'))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail='ตำแหน่งของ%s ต้องเป็นตัวเลขจำนวนเต็ม' % where)
+
+    prices = []
+    currency_ids = set()
+    for number, price in enumerate(spec.prices, 1):
+        currency_id = price.currency_id.strip()
+        if currency_id in currency_ids:
+            raise HTTPException(
+                status_code=400,
+                detail='Currency ของ%s ซ้ำกัน: %s' % (where, currency_id))
+        currency_ids.add(currency_id)
+        prices.append({
+            'currency_id': currency_id,
+            'currency_slug': price.currency_slug.strip(),
+            'currency_label': price.currency_label.strip(),
+            'original_price': price.original_price,
+            'price': price.price,
+        })
+    if not prices:
+        raise HTTPException(
+            status_code=400, detail='สกุลเงินของ%s ห้ามว่าง' % where)
+
+    limit_quantity = spec.limit_quantity.strip()
+    reset_interval = spec.limit_reset_interval_days.strip()
+    reset_at = spec.limit_reset_at.strip()
+    if spec.limit_type != 'UNLIMITED':
+        limit_quantity = _positive_digits(
+            limit_quantity, 'จำนวนที่ซื้อได้', where)
+    if reset_interval:
+        reset_interval = _positive_digits(
+            reset_interval, 'รอบรีเซ็ต', where)
+    if reset_at:
+        reset_at = _require_datetime(reset_at, 'เวลารีเซ็ต', where)
+
+    return {
+        'client_key': spec.client_key,
+        'source_group_key': spec.source_group_key,
+        'group': spec.source_group_key,
+        'name_th': name_th,
+        'name_en': name_en,
+        'category_id': category_id,
+        'category_label': spec.category_label.strip(),
+        'details_th': spec.details_th,
+        'details_en': spec.details_en,
+        'start_at': start_at,
+        'end_at': end_at,
+        'bundle_id': bundle_id,
+        'prices': prices,
+        'limit_type': spec.limit_type,
+        'limit_quantity': limit_quantity,
+        'limit_reset_interval_days': reset_interval,
+        'limit_reset_at': reset_at,
+        'tags': list(spec.tags),
+        'is_enabled': spec.is_enabled,
+        'is_test_mode': spec.is_test_mode,
+        'is_hidden': spec.is_hidden,
+        'position': position,
+        'images': {},
+    }
+
+
+async def _product_images(request: Request, jobs: list[dict]) -> None:
+    """Attach validated image bytes to their Product job, never a file path."""
+    by_client = {job['client_key']: job for job in jobs}
+    form = await request.form()
+    for field, upload in form.multi_items():
+        if field == 'payload':
+            continue
+        if not field.startswith('image__'):
+            continue
+        match = IMAGE_KEY.match(field)
+        if not match:
+            raise HTTPException(
+                status_code=400, detail='ชื่อช่องรูป Product ไม่ถูกต้อง')
+        job = by_client.get(match.group('client'))
+        if job is None:
+            raise HTTPException(
+                status_code=400,
+                detail='รูป Product อ้างถึงรายการที่ไม่มีในคำขอ')
+        content_type = str(getattr(upload, 'content_type', '') or '').lower()
+        if content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail='ชนิดไฟล์รูป Product ไม่รองรับ: %s' % content_type)
+        data = await upload.read(MAX_PRODUCT_IMAGE_BYTES + 1)
+        if len(data) > MAX_PRODUCT_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail='รูป Product ต้องไม่เกิน 10 MiB ต่อไฟล์')
+        slot = _PRODUCT_IMAGE_SLOT[match.group('slot')]
+        if slot in job['images']:
+            raise HTTPException(
+                status_code=400, detail='ส่งรูป Product ช่องเดิมซ้ำ')
+        job['images'][slot] = {
+            'name': os.path.basename(str(
+                getattr(upload, 'filename', '') or 'image')),
+            'content_type': content_type,
+            'bytes': data,
+        }
+
+
+@router.post('/api/products/run')
+async def products_run(
+    request: Request,
+    payload: str = Form(...),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Preview one Product or explicitly create the checked Product queue."""
+    from pydantic import ValidationError
+    from web import product_runner
+
+    try:
+        parsed = ProductRunRequest.model_validate_json(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail='ข้อมูล Product ไม่ถูกต้อง: %s' % exc)
+    jobs = [_clean_product(spec) for spec in parsed.products]
+    keys = [job['client_key'] for job in jobs]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(
+            status_code=400, detail='client_key ของ Product ห้ามซ้ำ')
+    _prepare(parsed.game, jobs, parsed.do_save)
+    await _product_images(request, jobs)
+
+    settings: Settings = request.app.state.settings
+    logs: list[dict] = []
+    builder = product_runner.ProductBuilder(_collect(logs))
+    result = await _run_activity(
+        builder, jobs, game=parsed.game, do_save=parsed.do_save,
+        request=request, db=db, user=user, tool='create_product',
+        action='product.create' if parsed.do_save else 'product.preview_open',
+        headed=settings.app_env != 'production')
+    for row, job in zip(result['results'], jobs):
+        row['client_key'] = job['client_key']
+        row['source_group_key'] = job['source_group_key']
+    return dict(result, logs=logs)
 
 
 MAX_BUNDLE_ITEMS = 200

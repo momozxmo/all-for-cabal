@@ -561,7 +561,11 @@ function renderQueue() {
   productQueue.items.forEach(entry => {
     const option = document.createElement('option');
     option.value = entry.key;
-    option.textContent = entry.name_th || entry.name_en || 'Product ใหม่';
+    const state = entry.product_id
+      ? ` · Product #${entry.product_id}`
+      : entry.status ? ` · ${entry.status}` : '';
+    option.textContent =
+      (entry.name_th || entry.name_en || 'Product ใหม่') + state;
     pick.appendChild(option);
   });
   if (!productQueue.current() && productQueue.items.length) {
@@ -858,7 +862,6 @@ async function deleteActiveWorkspace(workspaceId = activeWorkspaceId) {
 
 function jobFrom(entry) {
   if (!entry) return null;
-  const files = productFiles.get(entry.key) || {};
   return {
     client_key: entry.key,
     workspace_id: entry.workspace_id || '',
@@ -866,6 +869,7 @@ function jobFrom(entry) {
     name_th: String(entry.name_th || '').trim(),
     name_en: String(entry.name_en || '').trim(),
     category_id: String(entry.category_id || ''),
+    category_label: entry.category_label || '',
     category_slug: entry.category_slug || '',
     details_th: entry.details_th || '',
     details_en: entry.details_en || '',
@@ -883,11 +887,210 @@ function jobFrom(entry) {
       String(entry.limit_reset_interval_days || ''),
     limit_reset_at: entry.limit_reset_at || '',
     tags: [...(entry.tags || [])],
-    image_names: structuredClone(entry.image_names || {}),
-    image_files: files,
     bundle_conflict: entry.bundle_conflict
       ? structuredClone(entry.bundle_conflict) : null,
   };
+}
+
+const PRODUCT_IMAGE_FORM_SLOTS = {
+  thumbnail_th: 'thumb_th',
+  banner_th: 'banner_th',
+  thumbnail_en: 'thumb_en',
+  banner_en: 'banner_en',
+};
+
+async function submitProducts(entries, doSave) {
+  const payload = {
+    game: $('game').value,
+    products: entries.map(jobFrom),
+    do_save: !!doSave,
+  };
+  const form = new FormData();
+  form.append('payload', JSON.stringify(payload));
+  for (const entry of entries) {
+    const files = productFiles.get(entry.key) || {};
+    for (const [slot, file] of Object.entries(files)) {
+      if (!file || !PRODUCT_IMAGE_FORM_SLOTS[slot]) continue;
+      form.append(
+        `image__${entry.key}__${PRODUCT_IMAGE_FORM_SLOTS[slot]}`,
+        file, file.name);
+    }
+  }
+  return apiFetch('/api/products/run', {method: 'POST', body: form});
+}
+
+function renderProductResults(data) {
+  const host = $('productResults');
+  host.replaceChildren();
+  const results = data?.results || [];
+  if (!results.length) return;
+  const table = document.createElement('table');
+  table.className = 'idtable';
+  const head = document.createElement('thead');
+  const hr = document.createElement('tr');
+  ['Product', 'สถานะ', 'Product ID', 'รายละเอียด'].forEach(text => {
+    const th = document.createElement('th');
+    th.textContent = text;
+    hr.appendChild(th);
+  });
+  head.appendChild(hr);
+  const body = document.createElement('tbody');
+  for (const result of results) {
+    const row = document.createElement('tr');
+    row.className = result.saved ? 'r-ok' : result.error ? 'r-fail' : 'r-noid';
+    const values = [
+      result.name || result.client_key || '',
+      result.saved ? 'สร้างสำเร็จ' : result.error ? 'ไม่สำเร็จ' : 'Preview',
+      result.made_id || '—',
+      result.error || (result.missing || []).join(', ') || 'เรียบร้อย',
+    ];
+    values.forEach(value => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  }
+  table.append(head, body);
+  host.appendChild(table);
+  if (retryableProducts().length) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'warn';
+    retry.style.marginTop = '10px';
+    retry.textContent = `↻ ลองใหม่เฉพาะที่ไม่สำเร็จ (${retryableProducts().length})`;
+    retry.onclick = runRetryProducts;
+    host.appendChild(retry);
+  }
+}
+
+function applyProductResults(data, doSave) {
+  for (const result of data?.results || []) {
+    const entry = productQueue.items.find(
+      item => item.key === result.client_key);
+    if (!entry) continue;
+    entry.last_result = {
+      saved: !!result.saved,
+      made_id: result.made_id || '',
+      missing: [...(result.missing || [])],
+      error: result.error || '',
+    };
+    if (result.saved && result.made_id) {
+      entry.status = 'created';
+      entry.product_id = String(result.made_id);
+      entry.selected = false;
+    } else if (doSave) {
+      entry.status = 'failed';
+    } else {
+      entry.status = (result.missing || []).length
+        ? 'incomplete' : 'previewed';
+    }
+  }
+  productQueue.save();
+  renderQueue();
+  renderProductResults(data);
+}
+
+function retryableProducts() {
+  return productQueue.items.filter(entry =>
+    !entry.product_id
+    && (entry.status === 'failed' || !!entry.last_result));
+}
+
+function runnableError(entries) {
+  if (!entries.length) return 'ยังไม่ได้เลือก Product';
+  const conflict = entries.find(entry => entry.bundle_conflict);
+  if (conflict) {
+    return `${conflict.name_th || conflict.name_en || 'Product'}: `
+      + 'กรุณาเลือกเลข Bundle ฝั่งใดฝั่งหนึ่งก่อน';
+  }
+  return '';
+}
+
+async function responseData(response) {
+  const data = await response.json();
+  if (!response.ok) {
+    const detail = typeof data.detail === 'string'
+      ? data.detail : JSON.stringify(data.detail || data);
+    throw new Error(detail || 'ทำรายการ Product ไม่สำเร็จ');
+  }
+  return data;
+}
+
+function appendRunLogs(data) {
+  for (const line of data.logs || []) {
+    log(`[product] ${line.msg}`, line.level || 'INFO');
+  }
+}
+
+async function runPreviewProduct() {
+  const entry = productQueue.current();
+  const problem = runnableError(entry ? [entry] : []);
+  if (problem) {
+    $('runMsg').textContent = problem;
+    return;
+  }
+  $('btnPreview').disabled = true;
+  $('runMsg').textContent = 'กำลังเปิดหน้า Product และกรอกข้อมูลเพื่อตรวจสอบ…';
+  try {
+    const data = await responseData(
+      await submitProducts([entry], false));
+    appendRunLogs(data);
+    applyProductResults(data, false);
+    $('runMsg').textContent = data.results?.[0]?.missing?.length
+      ? 'กรอกแล้ว แต่ยังมีช่องที่ต้องตรวจ'
+      : 'กรอก Product แล้ว — ยังไม่ได้กดสร้าง';
+  } catch (error) {
+    entry.status = 'failed';
+    entry.last_result = {saved: false, made_id: '', missing: [], error: error.message};
+    productQueue.save();
+    renderQueue();
+    $('runMsg').textContent = error.message;
+    log(error.message, 'ERROR');
+  } finally {
+    $('btnPreview').disabled = false;
+  }
+}
+
+async function runCreatedProducts(entries, message) {
+  const problem = runnableError(entries);
+  if (problem) {
+    $('runMsg').textContent = problem;
+    return;
+  }
+  if (!confirm(message)) return;
+  $('btnCreateSelected').disabled = true;
+  $('runMsg').textContent = `กำลังสร้าง ${entries.length} Product…`;
+  try {
+    const data = await responseData(await submitProducts(entries, true));
+    appendRunLogs(data);
+    applyProductResults(data, true);
+    $('runMsg').textContent =
+      `สร้างสำเร็จ ${data.created || 0}/${data.planned || entries.length} Product`;
+  } catch (error) {
+    $('runMsg').textContent = error.message;
+    log(error.message, 'ERROR');
+  } finally {
+    $('btnCreateSelected').disabled = false;
+  }
+}
+
+async function runSelectedProducts() {
+  const entries = productQueue.items.filter(
+    entry => entry.selected && !entry.product_id);
+  const names = entries.map(
+    entry => entry.name_th || entry.name_en || 'Product').join('\n- ');
+  return runCreatedProducts(
+    entries,
+    `สร้างจริงบน Aztek ${entries.length} Product ใช่ไหม?`
+      + (names ? `\n\n- ${names}` : ''));
+}
+
+async function runRetryProducts() {
+  const entries = retryableProducts();
+  return runCreatedProducts(
+    entries,
+    `ลองสร้างใหม่เฉพาะ ${entries.length} Product ที่ยังไม่มี Product ID ใช่ไหม?`);
 }
 
 function paintRunMode() {
@@ -1038,14 +1241,8 @@ document.querySelectorAll('[data-close]').forEach(
 
 $('runModePreview').onchange = paintRunMode;
 $('runModeCreate').onchange = paintRunMode;
-$('btnPreview').onclick = () => {
-  $('runMsg').textContent =
-    'ตัวกรอกหน้า Aztek จะเชื่อมในขั้นถัดไป — ยังไม่ได้สร้าง Product จริง';
-};
-$('btnCreateSelected').onclick = () => {
-  $('runMsg').textContent =
-    'ตัวสร้างจริงจะเชื่อมในขั้นถัดไป — ตอนนี้ยังไม่ได้ส่งข้อมูลไป Aztek';
-};
+$('btnPreview').onclick = runPreviewProduct;
+$('btnCreateSelected').onclick = runSelectedProducts;
 $('btnRefreshCategories').onclick = () =>
   ensureOptions('categories', true).catch(
     error => log(error.message, 'ERROR'));

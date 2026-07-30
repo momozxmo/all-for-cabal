@@ -14,6 +14,10 @@ from web.models import AuditLog
 _SUMMARY_KEYS = {
     'count', 'mode', 'game', 'filename', 'format', 'reason',
     'target_username', 'role',
+    # Creation audits need enough identity to reconcile a partially successful
+    # batch without retaining request payloads, option catalogs, or file bytes.
+    'name', 'slug', 'made_id', 'bundle_id', 'error', 'planned', 'created',
+    'added', 'total', 'rewards',
 }
 _SECRET_KEY_PARTS = {
     'password', 'token', 'cookie', 'authorization', 'storage', 'secret',

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """Product live-form URL, option cleaning, and read-only API gates."""
 import asyncio
+import json
 
 import pytest
+from sqlalchemy import select
 
+from web import app as web_app
 from web import aztek_form, itemcode_runner
 from web import product_runner
+from web.app import ProductRunRequest
+from web.models import AuditLog
 
 
 GAME = 'CabalM TH'
@@ -27,6 +32,43 @@ def _connect_aztek(client):
         },
     })
     assert response.status_code == 200
+
+
+def _product(**extra):
+    spec = {
+        'client_key': 'p1',
+        'source_group_key': 'g1',
+        'name_th': 'Orb Pack',
+        'name_en': 'Orb Pack',
+        'category_id': '12',
+        'category_label': 'Highlight',
+        'start_at': '2026-07-30 00:00:00',
+        'end_at': '2026-08-30 07:59:00',
+        'bundle_id': '223553',
+        'prices': [{
+            'currency_id': '91',
+            'currency_slug': 'future-token',
+            'currency_label': 'Future Token',
+            'original_price': 6600,
+            'price': 6600,
+        }],
+        'limit_type': 'PLAYER',
+        'limit_quantity': '10',
+        'limit_reset_interval_days': '',
+        'limit_reset_at': '',
+        'tags': ['SALE'],
+    }
+    spec.update(extra)
+    return spec
+
+
+def _run_products(client, products, *, do_save=False, files=None, game=GAME):
+    payload = {'game': game, 'products': products, 'do_save': do_save}
+    return client.post(
+        '/api/products/run',
+        data={'payload': json.dumps(payload, ensure_ascii=False)},
+        files=files or [],
+    )
 
 
 def test_product_create_url_is_under_shop():
@@ -97,6 +139,163 @@ def test_product_options_fetches_only_requested_live_kind(
         }],
     }}
     assert 'categories' not in response.text
+
+
+def test_product_run_defaults_to_preview():
+    assert ProductRunRequest(game=GAME).do_save is False
+
+
+def test_product_run_requires_authentication(anonymous_client):
+    response = _run_products(anonymous_client, [_product()])
+    assert response.status_code == 401
+
+
+def test_product_preview_is_one_at_a_time_and_queue_cannot_be_empty(client):
+    assert _run_products(client, []).status_code == 400
+    response = _run_products(client, [_product(), _product(client_key='p2')])
+    assert response.status_code == 400
+    assert 'ทีละรายการ' in response.text
+
+
+def test_product_unknown_game_and_invalid_fields_stop_before_pairing(client):
+    assert _run_products(
+        client, [_product()], game='Unknown Cabal').status_code == 400
+    for changed in (
+        {'name_th': ''}, {'name_en': ''}, {'category_id': ''},
+        {'prices': []}, {'bundle_id': ''}, {'start_at': ''}, {'end_at': ''},
+    ):
+        response = _run_products(client, [_product(**changed)])
+        assert response.status_code in (400, 422), (changed, response.text)
+
+
+def test_valid_product_still_requires_paired_aztek_session(client):
+    response = _run_products(client, [_product()])
+    assert response.status_code == 409
+    assert 'Aztek' in response.text
+
+
+@pytest.mark.parametrize('changed', [
+    {'end_at': '2026-07-29 23:59:59'},
+    {'bundle_id': 'bundle-223553'},
+    {'prices': [{
+        'currency_id': '91', 'original_price': -1, 'price': 1,
+    }]},
+    {'prices': [{
+        'currency_id': '91', 'original_price': 'not-a-number', 'price': 1,
+    }]},
+    {'limit_type': 'PLAYER', 'limit_quantity': '0'},
+    {'position': 'left'},
+])
+def test_product_values_are_validated_before_browser(client, changed):
+    response = _run_products(client, [_product(**changed)])
+    assert response.status_code in (400, 422), response.text
+
+
+def test_product_rejects_duplicate_currency_ids(client):
+    price = {
+        'currency_id': '91', 'original_price': 100, 'price': 80,
+    }
+    response = _run_products(client, [_product(prices=[price, price])])
+    assert response.status_code == 400
+    assert 'Currency' in response.text
+
+
+def test_product_images_reject_unknown_type_size_and_client(
+        client, monkeypatch):
+    bad_type = _run_products(client, [_product()], files=[(
+        'image__p1__thumb_th',
+        ('thumb.txt', b'not image', 'text/plain'),
+    )])
+    assert bad_type.status_code == 400
+
+    monkeypatch.setattr(web_app, 'MAX_PRODUCT_IMAGE_BYTES', 4)
+    too_large = _run_products(client, [_product()], files=[(
+        'image__p1__thumb_th',
+        ('thumb.png', b'12345', 'image/png'),
+    )])
+    assert too_large.status_code == 400
+
+    unknown = _run_products(client, [_product()], files=[(
+        'image__other__thumb_th',
+        ('thumb.png', b'1234', 'image/png'),
+    )])
+    assert unknown.status_code == 400
+
+
+def test_product_preview_calls_fill_only_and_returns_client_key(
+        client, monkeypatch):
+    _connect_aztek(client)
+    calls = []
+
+    class Builder:
+        def __init__(self, on_log):
+            self.on_log = on_log
+
+        async def run(self, **kwargs):
+            calls.append(('run', kwargs))
+            return {
+                'missing': [], 'kept_open': False, 'screenshot': None,
+            }
+
+        async def run_many(self, **kwargs):
+            raise AssertionError('preview must not create')
+
+    monkeypatch.setattr(product_runner, 'ProductBuilder', Builder)
+    response = _run_products(client, [_product()])
+
+    assert response.status_code == 200, response.text
+    assert [kind for kind, _kwargs in calls] == ['run']
+    body = response.json()
+    assert body['created'] == 0
+    assert body['results'][0]['client_key'] == 'p1'
+    assert body['results'][0]['made_id'] is None
+
+
+def test_product_create_keeps_per_entry_results_and_audit_has_no_payload_bytes(
+        client, monkeypatch, test_database):
+    _connect_aztek(client)
+    calls = []
+
+    class Builder:
+        def __init__(self, on_log):
+            self.on_log = on_log
+
+        async def run_many(self, **kwargs):
+            calls.append(kwargs)
+            return [
+                {'name': 'Orb Pack', 'slug': '', 'group': 'g1',
+                 'saved': True, 'made_id': '501', 'missing': [],
+                 'error': None},
+                {'name': 'Second', 'slug': '', 'group': 'g2',
+                 'saved': False, 'made_id': None, 'missing': [],
+                 'error': 'live form changed'},
+            ]
+
+    monkeypatch.setattr(product_runner, 'ProductBuilder', Builder)
+    products = [_product(), _product(
+        client_key='p2', source_group_key='g2',
+        name_th='Second', name_en='Second')]
+    response = _run_products(
+        client, products, do_save=True, files=[(
+            'image__p1__thumb_th',
+            ('thumb.png', b'pixels', 'image/png'),
+        )])
+
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    assert calls[0]['specs'][0]['images']['thumbnail_th']['bytes'] == b'pixels'
+    body = response.json()
+    assert (body['created'], body['planned']) == (1, 2)
+    assert [row['client_key'] for row in body['results']] == ['p1', 'p2']
+    assert body['results'][0]['made_id'] == '501'
+    with test_database.session() as db:
+        summaries = [row.summary or '' for row in db.scalars(
+            select(AuditLog).where(AuditLog.action == 'product.create'))]
+    assert summaries
+    joined = '\n'.join(summaries)
+    assert 'Orb Pack' in joined and '501' in joined
+    assert 'pixels' not in joined
+    assert 'future-token' not in joined
 
 
 class _Locator:

@@ -407,3 +407,103 @@ def test_language_tabs_keep_both_descriptions_and_manual_bundle_is_numeric():
         assert page.locator('#bundleId').get_attribute('type') == 'number'
         assert page.locator('#bundleId').is_visible()
         browser.close()
+
+
+def test_submit_products_sends_json_and_memory_images_as_multipart():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          const game = document.querySelector('#game');
+          game.add(new Option('CabalM TH', 'CabalM TH'));
+          game.value = 'CabalM TH';
+          addDrafts([{
+            source_group_key:'g1',name_th:'Pack',name_en:'Pack',
+            category_id:'12',bundle_id:'223553',
+            start_at:'2026-07-30 00:00:00',
+            end_at:'2026-08-30 07:59:00',
+            limit_type:'UNLIMITED',
+            price_candidates:[],
+            prices:[{currency_id:'91',original_price:100,price:66}]
+          }], 'workspace-1');
+          const entry = productQueue.current();
+          rememberImage(entry.key, 'thumbnail_th',
+            new File(['secret pixels'], 'thumb.png', {type:'image/png'}));
+        }""")
+        bodies = []
+
+        def capture(route):
+            bodies.append(route.request.post_data_buffer)
+            route.fulfill(
+                status=200, content_type='application/json',
+                body='{"results":[],"logs":[],"created":0,"planned":1}')
+
+        page.route('**/api/products/run', capture)
+        page.evaluate("""() => submitProducts(
+          [productQueue.current()], false).then(response => response.json())""")
+
+        body = bodies[0]
+        assert b'image__' in body and b'__thumb_th' in body
+        assert b'secret pixels' in body
+        assert b'"do_save":false' in body
+        assert b'"category_id":"12"' in body
+        browser.close()
+
+
+def test_create_uses_checked_entries_confirms_and_updates_product_ids():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""async () => {
+          addDrafts([
+            {source_group_key:'g1',name_th:'A',name_en:'A',
+             category_id:'12',bundle_id:'100',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:10,price:10}],
+             selected:true},
+            {source_group_key:'g2',name_th:'B',name_en:'B',
+             category_id:'12',bundle_id:'200',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:20,price:20}],
+             selected:false}
+          ], 'workspace-1');
+          window.confirmText = '';
+          window.confirm = text => { window.confirmText = text; return true; };
+          window.sent = null;
+          submitProducts = async (entries, doSave) => {
+            window.sent = {keys: entries.map(entry => entry.key), doSave};
+            return {
+              ok: true,
+              json: async () => ({
+                results:[{
+                  client_key:entries[0].key,name:'A',saved:true,
+                  made_id:'501',missing:[],error:null
+                }],
+                logs:[],created:1,planned:1
+              })
+            };
+          };
+          await runSelectedProducts();
+          const first = productQueue.items.find(
+            entry => entry.source_group_key === 'g1');
+          const second = productQueue.items.find(
+            entry => entry.source_group_key === 'g2');
+          second.status = 'failed';
+          return {
+            confirmText: window.confirmText,
+            sent: window.sent,
+            first: {status:first.status,product_id:first.product_id},
+            retry: retryableProducts().map(entry => entry.source_group_key)
+          };
+        }""")
+
+        assert '1 Product' in result['confirmText']
+        assert result['sent']['doSave'] is True
+        assert len(result['sent']['keys']) == 1
+        assert result['first'] == {'status': 'created', 'product_id': '501'}
+        assert result['retry'] == ['g2']
+        browser.close()
