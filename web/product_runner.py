@@ -11,7 +11,8 @@ import re
 from playwright.async_api import async_playwright
 
 import aztek_core as core
-from web import browser_launch
+from web import aztek_form, browser_launch
+from web.activity_runner import ActivityBuilder
 from web.search_runner import to_web_url
 
 
@@ -123,3 +124,223 @@ async def fetch_options(game, storage_state, kinds):
         finally:
             await context.close()
             await browser.close()
+
+
+def _date_trigger(page, label):
+    """The Product date-time button immediately following a visible label."""
+    return page.locator(
+        'xpath=//label[contains(normalize-space(.),"%s")]'
+        '/following::button[1]' % label).first
+
+
+class ProductBuilder(ActivityBuilder):
+    """Fill Aztek v2's Product form without inventing live option values."""
+
+    PATH = 'products'
+    SAVE_LABEL = 'สร้าง Product'
+    KIND = 'Product'
+    WRITE_MARK = 'product'
+
+    def create_url(self, game):
+        return product_create_url(game)
+
+    async def _fill_general(self, page, spec, missing):
+        for field, selector, label in (
+            ('name_th', 'input[name="th_name"]', 'ชื่อ Product (ไทย)'),
+            ('name_en', 'input[name="en_name"]', 'ชื่อ Product (อังกฤษ)'),
+        ):
+            value = str(spec.get(field) or '').strip()
+            ok = await aztek_form.fill(
+                page, selector, value, self.log, label)
+            if not value or not ok:
+                missing.append(label)
+        category_id = str(spec.get('category_id') or '').strip()
+        if not category_id:
+            missing.append('หมวดหมู่')
+        elif not await aztek_form.select_after_label(
+                page, 'หมวดหมู่', category_id, self.log):
+            missing.append('หมวดหมู่')
+
+    async def _fill_rich_text(self, page, language, value):
+        """Fill the visible TinyMCE after selecting its language tab."""
+        if not str(value or ''):
+            return True
+        label = 'ไทย' if language == 'th' else 'English'
+        try:
+            tab = page.get_by_role('tab', name=label, exact=True).first
+            if await tab.count():
+                await tab.click(timeout=6000)
+                await page.wait_for_timeout(500)
+            frame = page.locator(
+                'iframe.tox-edit-area__iframe:visible').first
+            await frame.wait_for(state='visible', timeout=6000)
+            await frame.content_frame.locator('body').fill(str(value))
+            return True
+        except Exception as exc:
+            self.log('กรอกรายละเอียด %s ไม่สำเร็จ: %s'
+                     % (label, exc), 'WARNING')
+            return False
+
+    async def _fill_details(self, page, spec):
+        for language, field in (
+            ('th', 'details_th'), ('en', 'details_en'),
+        ):
+            value = spec.get(field)
+            if str(value or ''):
+                await self._fill_rich_text(page, language, value)
+
+    async def _fill_images(self, page, spec, missing):
+        images = spec.get('images') or {}
+        for slot in (
+            'thumbnail_th', 'banner_th', 'thumbnail_en', 'banner_en',
+        ):
+            image = images.get(slot)
+            if not image:
+                continue
+            try:
+                await page.locator(
+                    'input[name="%s"]' % slot).first.set_input_files({
+                        'name': image['name'],
+                        'mimeType': image['content_type'],
+                        'buffer': image['bytes'],
+                    })
+            except Exception as exc:
+                missing.append('รูป %s' % slot)
+                self.log('ใส่รูป %s ไม่สำเร็จ: %s' % (slot, exc), 'WARNING')
+
+    async def _add_price_row(self, page, index):
+        original = page.locator(
+            'input[name="prices.%d.original_price"]' % index).first
+        if await original.count():
+            return original
+        add = page.locator(
+            'button:has-text("เพิ่มสกุลเงิน"),'
+            'button:has-text("เพิ่มราคา"),'
+            'button:has-text("Add Currency")').first
+        try:
+            await add.click(timeout=8000)
+            await original.wait_for(state='attached', timeout=8000)
+            await page.wait_for_timeout(500)
+            return original
+        except Exception as exc:
+            self.log('เพิ่มแถวสกุลเงินที่ %d ไม่สำเร็จ: %s'
+                     % (index + 1, exc), 'WARNING')
+            return None
+
+    async def _fill_prices(self, page, spec, missing):
+        prices = spec.get('prices') or []
+        if not prices:
+            missing.append('สกุลเงิน')
+            return
+        for index, price in enumerate(prices):
+            currency_id = str(price.get('currency_id') or '').strip()
+            where = 'สกุลเงินที่ %d' % (index + 1)
+            original = await self._add_price_row(page, index)
+            if original is None:
+                missing.append(where)
+                continue
+            if not currency_id:
+                missing.append(where)
+            else:
+                select = original.locator(
+                    'xpath=ancestor::*[.//select][1]').first.locator(
+                        'select').first
+                try:
+                    await select.select_option(value=currency_id)
+                except Exception as exc:
+                    missing.append(where)
+                    self.log('เลือก %s ไม่สำเร็จ: %s'
+                             % (where, exc), 'WARNING')
+            for field, label in (
+                ('original_price', 'ราคาปกติ'),
+                ('price', 'ราคาขาย'),
+            ):
+                value = price.get(field)
+                ok = await aztek_form.fill(
+                    page, 'input[name="prices.%d.%s"]' % (index, field),
+                    value, self.log, '%s %s' % (where, label))
+                if value in (None, '') or not ok:
+                    missing.append('%s: %s' % (where, label))
+
+    async def _fill_display(self, page, spec, missing):
+        for label, field, default in (
+            ('เปิดใช้งาน', 'is_enabled', False),
+            ('โหมดทดสอบ', 'is_test_mode', True),
+            ('ซ่อน', 'is_hidden', False),
+        ):
+            await aztek_form.set_switch(
+                page, label, bool(spec.get(field, default)), self.log)
+        await aztek_form.fill(
+            page, 'input[name="position"]',
+            spec.get('position', '0'), self.log, 'ตำแหน่ง')
+        for label, field in (
+            ('วันเริ่มขาย', 'start_at'),
+            ('วันสิ้นสุด', 'end_at'),
+        ):
+            value = str(spec.get(field) or '').strip()
+            if not value:
+                missing.append(label)
+                continue
+            if not await aztek_form.set_datetime(
+                    page, _date_trigger(page, label), value,
+                    self.log, label=label):
+                missing.append(label)
+
+    async def _fill_limit(self, page, spec, missing):
+        limit_type = str(spec.get('limit_type') or '').strip()
+        if not limit_type:
+            missing.append('ประเภทการจำกัด')
+            return
+        if not await aztek_form.select_after_label(
+                page, 'ประเภทการจำกัด', limit_type, self.log):
+            missing.append('ประเภทการจำกัด')
+        if limit_type == 'UNLIMITED':
+            return
+        quantity = str(spec.get('limit_quantity') or '').strip()
+        ok = await aztek_form.fill(
+            page, 'input[name="limit_quantity"]', quantity,
+            self.log, 'จำนวนที่ซื้อได้')
+        if not quantity or not ok:
+            missing.append('จำนวนที่ซื้อได้')
+        interval = str(
+            spec.get('limit_reset_interval_days') or '').strip()
+        if interval:
+            await aztek_form.fill(
+                page, 'input[name="limit_reset_interval_days"]',
+                interval, self.log, 'รีเซ็ตทุกกี่วัน')
+        reset_at = str(spec.get('limit_reset_at') or '').strip()
+        if reset_at and not await aztek_form.set_datetime(
+                page, _date_trigger(page, 'รีเซ็ตล่าสุด'), reset_at,
+                self.log, label='รีเซ็ตล่าสุด'):
+            missing.append('รีเซ็ตล่าสุด')
+
+    async def _fill_tags(self, page, spec):
+        approved = {'EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE'}
+        for tag in spec.get('tags') or []:
+            if tag not in approved:
+                continue
+            try:
+                await page.get_by_text(tag, exact=True).first.click(
+                    timeout=6000)
+            except Exception as exc:
+                self.log('เลือก Tag %s ไม่สำเร็จ: %s' % (tag, exc), 'WARNING')
+
+    async def _fill_bundle(self, page, spec, missing):
+        bundle_id = str(spec.get('bundle_id') or '').strip()
+        if not bundle_id:
+            missing.append('Bundle')
+        elif not await aztek_form.pick_bundle(
+                page, page, bundle_id, self.log):
+            missing.append('Bundle %s' % bundle_id)
+
+    async def fill_form(self, page, spec):
+        missing = []
+        await self._fill_general(page, spec, missing)
+        await self._fill_details(page, spec)
+        await self._fill_images(page, spec, missing)
+        await self._fill_prices(page, spec, missing)
+        await self._fill_display(page, spec, missing)
+        await self._fill_limit(page, spec, missing)
+        await self._fill_tags(page, spec)
+        await self._fill_bundle(page, spec, missing)
+        return missing

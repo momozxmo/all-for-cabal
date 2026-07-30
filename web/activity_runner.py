@@ -44,6 +44,15 @@ class ActivityBuilder:
     def log(self, message, level='INFO'):
         self._log(message, level)
 
+    def create_url(self, game):
+        """Return this builder's create page.
+
+        Product lives under ``/shop/`` while Item Code and Event live at the
+        game root, so subclasses may override this without changing the safe
+        preview/create lifecycle.
+        """
+        return create_url(game, self.PATH)
+
     def cancel(self):
         """Stop before the next item — a run in flight finishes its page."""
         self._cancel = True
@@ -135,7 +144,7 @@ class ActivityBuilder:
         A headed preview leaves the window standing so the operator can read
         the real form rather than a screenshot of it.
         """
-        url = create_url(game, self.PATH)
+        url = self.create_url(game)
         self.log('เปิดหน้าสร้าง%s: %s' % (self.KIND, url), 'STEP')
         if keep_open_key:
             await close_kept(keep_open_key)
@@ -179,7 +188,7 @@ class ActivityBuilder:
         one that was never made, and the operator can see exactly which field
         stopped it.
         """
-        url = create_url(game, self.PATH)
+        url = self.create_url(game)
         self.log('==== สร้าง%s %d รายการ ====' % (self.KIND, len(specs)), 'STEP')
         pw = await async_playwright().start()
         browser = await pw.chromium.launch(**browser_launch.launch_kwargs(headed))

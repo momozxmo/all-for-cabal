@@ -128,6 +128,25 @@ async def select_by_options(page, wanted, options, log=None, index=0):
     return False
 
 
+async def select_after_label(page, label, value, log=None):
+    """Select an exact live option value from the hidden select after ``label``.
+
+    Product Category and limit widgets are searchable comboboxes visually, but
+    keep a real select in the DOM. Selecting the fetched server ID on that
+    select is both more stable and safer than clicking a text match.
+    """
+    target = page.locator(
+        'xpath=//label[contains(normalize-space(.),"%s")]'
+        '/following::select[1]' % label).first
+    try:
+        await target.select_option(value=str(value))
+        return True
+    except Exception as exc:
+        if log:
+            log('เลือก "%s" ไม่สำเร็จ: %s' % (label, exc), 'WARNING')
+        return False
+
+
 async def _show_month(page, day, log=None):
     """Page the calendar until the month holding ``day`` is on screen."""
     want = int(day[:4]) * 12 + int(day[5:7]) - 1
