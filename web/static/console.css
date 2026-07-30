@@ -94,7 +94,7 @@
     /* pipeline spine — status for the steps that have no page, navigation for
        the ones that do. Buttons need the browser chrome stripped so a step
        still looks like the plain <div> beside it. */
-    .spine{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:14px;background:var(--obsidian);border:1px solid var(--edge);border-radius:14px;overflow:hidden}
+    .spine{display:grid;grid-template-columns:repeat(5,1fr);margin-bottom:14px;background:var(--obsidian);border:1px solid var(--edge);border-radius:14px;overflow:hidden}
     .snode{display:flex;align-items:center;gap:11px;padding:11px 15px;border:0;border-right:1px solid var(--edge-soft);position:relative;
       width:100%;text-align:left;font:inherit;background:transparent;color:inherit}
     .snode:last-child{border-right:0}

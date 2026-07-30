@@ -423,6 +423,15 @@ def events_page(
     return _tool_page(request, afc_session, db, 'events.html')
 
 
+@router.get('/products', response_class=HTMLResponse)
+def products_page(
+    request: Request,
+    afc_session: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+):
+    return _tool_page(request, afc_session, db, 'products.html')
+
+
 @router.get('/pair-bridge', response_class=HTMLResponse)
 def pair_bridge_page():
     # Landing page for the bookmarklet: it receives the Aztek cookies in the URL

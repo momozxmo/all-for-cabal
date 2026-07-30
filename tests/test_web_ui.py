@@ -11,10 +11,19 @@ EVENTS = open(os.path.join(ROOT, 'web', 'static', 'events.html'),
               encoding='utf-8').read()
 ITEMCODES = open(os.path.join(ROOT, 'web', 'static', 'itemcodes.html'),
                  encoding='utf-8').read()
+PRODUCTS = open(os.path.join(ROOT, 'web', 'static', 'products.html'),
+                encoding='utf-8').read()
 ACCOUNT = open(os.path.join(ROOT, 'web', 'static', 'account.html'),
                encoding='utf-8').read()
 CONSOLE_JS = open(os.path.join(ROOT, 'web', 'static', 'console.js'),
                   encoding='utf-8').read()
+
+
+def test_product_page_is_in_the_pipeline_and_shop_handoff():
+    assert 'id="btnToProduct"' in HTML
+    assert 'afc.productQueue.v1' in PRODUCTS
+    for page in (HTML, BUNDLES, ITEMCODES, EVENTS, PRODUCTS):
+        assert 'href="/products"' in page or 'id="btnToProduct"' in page
 
 
 def test_create_bundle_stands_on_its_own_page():

@@ -97,7 +97,7 @@
     /* pipeline spine — status for the steps that have no page, navigation for
        the ones that do. Buttons need the browser chrome stripped so a step
        still looks like the plain <div> beside it. */
-    .spine{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:14px;background:var(--obsidian);border:1px solid var(--edge);border-radius:14px;overflow:hidden}
+    .spine{display:grid;grid-template-columns:repeat(5,1fr);margin-bottom:14px;background:var(--obsidian);border:1px solid var(--edge);border-radius:14px;overflow:hidden}
     .snode{display:flex;align-items:center;gap:11px;padding:11px 15px;border:0;border-right:1px solid var(--edge-soft);position:relative;
       width:100%;text-align:left;font:inherit;background:transparent;color:inherit}
     .snode:last-child{border-right:0}
@@ -255,14 +255,14 @@
     </div>
   </header>
 
-  <!-- Each step that has a page of its own is a link to it. Steps 3 and 4 name
-       tools that do not exist on the web yet, so they are marked unavailable
-       rather than left looking like a click that does nothing. -->
+  <!-- Every creation step has its own page; the current step stays highlighted
+       while the remaining nodes are direct navigation links. -->
   <nav class="spine" aria-label="ขั้นตอนการทำงาน (pipeline)">
     <div class="snode active"><span class="k">1</span><span class="lab"><b>หาไอดีไอเทม</b><span>Item Finder</span></span></div>
     <a class="snode go" href="/bundles" title="ไปหน้าสร้าง Bundle"><span class="k">2</span><span class="lab"><b>สร้าง Bundle</b><span>Create Bundle</span></span></a>
     <a class="snode go" href="/itemcodes"><span class="k">3</span><span class="lab"><b>โค้ดแลกของ</b><span>Item Code</span></span></a>
     <a class="snode go" href="/events"><span class="k">4</span><span class="lab"><b>อีเวนต์</b><span>Event</span></span></a>
+    <a class="snode go" href="/products"><span class="k">5</span><span class="lab"><b>สินค้า</b><span>Product</span></span></a>
   </nav>
 
   <div class="grid">
@@ -297,6 +297,8 @@
                     title="อ่านเงื่อนไขในไฟล์มากรอกหน้า Item Code ให้ กลุ่มละ 1 โค้ด">➡ ส่งเข้าสร้าง Item Code</button>
             <button id="btnToEvent" class="primary" disabled
                     title="ส่ง Event เฉพาะแท็บที่เลือกไว้ไปแก้ต่อ">➡ ส่งเข้าสร้าง Event</button>
+            <button id="btnToProduct" class="primary" disabled hidden
+                    title="ส่ง Product จาก Shop plan ที่เลือกไว้ไปแก้ต่อ">➡ ส่งเข้าสร้าง Product</button>
           </div>
           <input id="templateFile" class="hidden" type="file" accept=".xlsx,.xlsm,.csv">
           <input id="planFile" class="hidden" type="file" accept=".xlsx,.xlsm">
@@ -447,6 +449,7 @@ async function applyMode(mode, clear=true){
   $('btnImportPlan').textContent=mode==='shop'?'🛒 Import Shop Plan':mode==='event'?'🎁 Import Event Plan':'🎁 Import Event/Prize';
   $('btnToItemCode').hidden=mode!=='itemcode';
   $('btnToEvent').hidden=mode!=='event';
+  $('btnToProduct').hidden=mode!=='shop';
 }
 document.querySelectorAll('input[name=mode]').forEach(input=>input.addEventListener('change',()=>applyMode(input.value)));
 
@@ -481,6 +484,7 @@ function useWorkspace(data){ state.workspaceId=data.workspace_id; rememberWorksp
   if(data.skipped?.length){const warning=document.createElement('span');warning.className='warning';warning.textContent=` · ข้าม ${data.skipped.length}`;summary.appendChild(warning);}
   $('btnToItemCode').disabled=data.mode!=='itemcode';
   $('btnToEvent').disabled=data.mode!=='event';
+  $('btnToProduct').disabled=data.mode!=='shop';
   setBusy(false); if(data.results?.length){state.results=data.results;renderResults();} }
 async function upload(kind,file){ if(!file)return; const form=new FormData(); form.append('file',file);form.append('mode',state.mode);if(state.workspaceId)form.append('workspace_id',state.workspaceId);
   setBusy(true); try{const response=await apiFetch(kind==='template'?'/api/import-template':'/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
@@ -496,7 +500,7 @@ $('btnApplySheets').onclick=async()=>{const selected=[...document.querySelectorA
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 
 async function clearWorkspace(){ if(state.socket)state.socket.close();if(state.workspaceId)await apiFetch('/api/workspaces/'+state.workspaceId,{method:'DELETE'});
-  state.workspaceId='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;setBusy(false);}
+  state.workspaceId='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;$('btnToProduct').disabled=true;setBusy(false);}
 $('btnClearWorkspace').onclick=clearWorkspace;
 
 function setRowSelected(index,tr,select,on){select.checked=on;on?state.selected.add(index):state.selected.delete(index);tr.classList.toggle('row-selected',on);resultActions();}
@@ -623,6 +627,15 @@ async function sendToEventPage(){
   }catch(e){alert('ส่งไปหน้า Event ไม่สำเร็จ');}
   finally{$('btnToEvent').disabled=!(state.workspaceId&&state.mode==='event');}}
 $('btnToEvent').onclick=sendToEventPage;
+
+// ---- ส่ง Product จาก Shop workspace เดิมไปหน้า Product ----
+function sendToProductPage(){
+  if(!state.workspaceId||state.mode!=='shop')return;
+  const game=$('game').value;
+  window.location.href='/products?workspace='+
+    encodeURIComponent(state.workspaceId)+'&game='+encodeURIComponent(game);
+}
+$('btnToProduct').onclick=sendToProductPage;
 
 $('btnClearLog').onclick=()=>$('log').replaceChildren();
 

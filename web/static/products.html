@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>All for Cabal — สร้าง Product</title>
+  <link rel="stylesheet" href="/static/console.css">
+  <style>
+    .topline{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+    .topline label{display:grid;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
+    .topline label:first-child{min-width:190px}
+    .topline label:nth-child(2){flex:1;min-width:300px}
+    .topline select{width:100%}
+    .product-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .product-summary label{display:grid;gap:5px;color:var(--muted);font-size:12px}
+    .product-summary input{width:100%}
+    @media(max-width:720px){.product-summary{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="gem"></span><div><h1>All for Cabal</h1><p>Create Product · Operator Console</p></div></div>
+    <div class="userbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <span id="aztekStatus" class="badge" style="background:#3a2f14;color:var(--yellow)">Aztek: กำลังตรวจสอบ…</span>
+      <span id="currentUser" class="hint" data-hosted-auth></span>
+      <a class="button" href="/account" data-account-link>บัญชี / เชื่อม Aztek</a>
+      <button id="btnLogout" type="button" class="danger" data-hosted-auth>ออกจากระบบ</button>
+    </div>
+  </header>
+
+  <nav class="spine" aria-label="ขั้นตอนการทำงาน (pipeline)">
+    <a class="snode go" href="/"><span class="k">1</span><span class="lab"><b>หาไอดีไอเทม</b><span>Item Finder</span></span></a>
+    <a class="snode go" href="/bundles"><span class="k">2</span><span class="lab"><b>สร้าง Bundle</b><span>Create Bundle</span></span></a>
+    <a class="snode go" href="/itemcodes"><span class="k">3</span><span class="lab"><b>โค้ดแลกของ</b><span>Item Code</span></span></a>
+    <a class="snode go" href="/events"><span class="k">4</span><span class="lab"><b>อีเวนต์</b><span>Event</span></span></a>
+    <a class="snode active" href="/products"><span class="k">5</span><span class="lab"><b>สินค้า</b><span>Product</span></span></a>
+  </nav>
+
+  <div class="stack">
+    <section class="card">
+      <div class="card-body">
+        <div class="topline">
+          <label>เกม / เซิร์ฟ<select id="game"></select></label>
+          <label>Product ในคิว <span id="queueCount" class="count">0</span>
+            <select id="productQueue"></select></label>
+          <button id="btnQueueNew" class="success" type="button">+ Product ใหม่</button>
+          <button id="btnQueueDel" type="button">✕ เอาออก</button>
+          <button id="btnQueueClear" class="danger" type="button">ล้างคิว</button>
+        </div>
+        <p class="hint" id="queueHint">ยังไม่มี Product ในคิว — ส่ง Shop plan จาก Item Finder หรือเพิ่มเอง</p>
+      </div>
+    </section>
+
+    <section class="card" id="editor" hidden>
+      <div class="card-head"><h2>แก้ Product</h2><span id="editorWhich" class="hint"></span></div>
+      <div class="card-body product-summary">
+        <label>ชื่อ Product (ไทย)<input id="nameTh" type="text"></label>
+        <label>ชื่อ Product (อังกฤษ)<input id="nameEn" type="text"></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Log</h2><button id="btnClearLog" type="button">ล้าง Log</button></div>
+      <div id="log" class="log" aria-live="polite"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/console.js"></script>
+<script>
+const PRODUCT_QUEUE_KEY = 'afc.productQueue.v1';
+const PRODUCT_WORKSPACE_KEY = 'afc.productWorkspace';
+const productQueue = new Queue(PRODUCT_QUEUE_KEY);
+productQueue.load();
+productQueue.active = productQueue.items[0]?.key || '';
+
+function identityOf(entry) {
+  return `${entry.workspace_id || ''}:${entry.source_group_key || ''}`;
+}
+
+function renderQueue() {
+  const pick = $('productQueue');
+  pick.replaceChildren();
+  productQueue.items.forEach(entry => {
+    const option = document.createElement('option');
+    option.value = entry.key;
+    option.textContent = entry.name_th || entry.name_en || 'Product ใหม่';
+    pick.appendChild(option);
+  });
+  if (productQueue.active) pick.value = productQueue.active;
+  $('queueCount').textContent = String(productQueue.items.length);
+  $('queueHint').hidden = productQueue.items.length > 0;
+  $('editor').hidden = !productQueue.current();
+  const entry = productQueue.current();
+  if (entry) {
+    $('nameTh').value = entry.name_th || '';
+    $('nameEn').value = entry.name_en || '';
+    $('editorWhich').textContent = entry.source_sheet || '';
+  }
+}
+
+function addDrafts(drafts, workspaceId) {
+  const existing = new Map(productQueue.items.map(
+    row => [identityOf(row), row]));
+  for (const source of drafts || []) {
+    const draft = structuredClone(source);
+    draft.key = draft.key || nextKey('p');
+    draft.workspace_id = workspaceId || draft.workspace_id || '';
+    const old = existing.get(identityOf(draft));
+    if (!old) {
+      productQueue.add(draft);
+      existing.set(identityOf(draft), draft);
+    }
+  }
+  productQueue.save();
+  renderQueue();
+}
+
+async function loadWorkspaceProducts(workspaceId) {
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/products`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'โหลด Product ไม่สำเร็จ');
+  addDrafts(data.products || [], data.workspace_id || workspaceId);
+  localStorage.setItem(PRODUCT_WORKSPACE_KEY, workspaceId);
+  if (data.game) $('game').value = data.game;
+}
+
+function blankProduct() {
+  return {
+    key: nextKey('p'), workspace_id: '', source_group_key: '',
+    source_sheet: '', name_th: '', name_en: '',
+  };
+}
+
+$('productQueue').onchange = () => {
+  productQueue.active = $('productQueue').value;
+  renderQueue();
+};
+$('btnQueueNew').onclick = () => {
+  productQueue.add(blankProduct());
+  productQueue.save();
+  renderQueue();
+};
+$('btnQueueDel').onclick = () => {
+  productQueue.removeActive();
+  productQueue.save();
+  renderQueue();
+};
+$('btnQueueClear').onclick = () => {
+  productQueue.clear();
+  productQueue.save();
+  renderQueue();
+};
+$('nameTh').oninput = () => {
+  const entry = productQueue.current();
+  if (entry) { entry.name_th = $('nameTh').value; productQueue.save(); renderQueue(); }
+};
+$('nameEn').oninput = () => {
+  const entry = productQueue.current();
+  if (entry) { entry.name_en = $('nameEn').value; productQueue.save(); renderQueue(); }
+};
+$('btnClearLog').onclick = () => $('log').replaceChildren();
+$('btnLogout').onclick = async () => {
+  try { await fetch('/api/auth/logout', {method: 'POST'}); }
+  finally { window.location.replace('/login'); }
+};
+
+async function bootProductPage() {
+  renderQueue();
+  try {
+    const [meResponse, gamesResponse, statusResponse] = await Promise.all([
+      apiFetch('/api/auth/me'),
+      apiFetch('/api/games'),
+      apiFetch('/api/aztek/status'),
+    ]);
+    const me = await meResponse.json();
+    const games = await gamesResponse.json();
+    const status = await statusResponse.json();
+    applyRuntimeMode(me);
+    $('currentUser').textContent = `${me.username || ''} (${me.role || ''})`;
+    for (const game of games.games || []) {
+      const option = document.createElement('option');
+      option.value = option.textContent = game;
+      $('game').appendChild(option);
+    }
+    paintAztek(status.status);
+  } catch (error) {
+    log(error.message || 'โหลดข้อมูลหน้า Product ไม่สำเร็จ', 'WARNING');
+  }
+  const query = new URLSearchParams(window.location.search);
+  const game = query.get('game') || localStorage.getItem(GAME_KEY) || '';
+  if (game) $('game').value = game;
+  const workspaceId = query.get('workspace')
+    || localStorage.getItem(PRODUCT_WORKSPACE_KEY) || '';
+  if (workspaceId) {
+    try { await loadWorkspaceProducts(workspaceId); }
+    catch (error) { log(error.message, 'ERROR'); }
+  }
+}
+
+bootProductPage();
+</script>
+</body>
+</html>

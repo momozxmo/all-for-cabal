@@ -263,14 +263,17 @@ def test_item_finder_shows_only_the_handoff_for_the_selected_mode():
         page.evaluate("applyMode('event', false)")
         assert page.locator('#btnToEvent').is_visible()
         assert not page.locator('#btnToItemCode').is_visible()
+        assert not page.locator('#btnToProduct').is_visible()
 
         page.evaluate("applyMode('itemcode', false)")
         assert page.locator('#btnToItemCode').is_visible()
         assert not page.locator('#btnToEvent').is_visible()
+        assert not page.locator('#btnToProduct').is_visible()
 
         page.evaluate("applyMode('shop', false)")
         assert not page.locator('#btnToItemCode').is_visible()
         assert not page.locator('#btnToEvent').is_visible()
+        assert page.locator('#btnToProduct').is_visible()
         browser.close()
 
 
