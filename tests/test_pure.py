@@ -144,6 +144,109 @@ def test_a_product_without_a_rate_column_stays_fixed():
     assert 'is_random' not in items[0]['group_meta']
 
 
+def test_shop_parser_keeps_product_header_metadata_without_fixed_columns():
+    now = dt.datetime(2026, 7, 30, 19, 0, 0)
+    rows = [
+        ['', 'Main Shop', '', '', '', '', '', 'Future Coin', 6600],
+        ['Bundle ID', 'Shop Label', '20% Off', 'Start Date', 46218,
+         'Start Time', 'หลัง MA', 'Mystery Token', 66],
+        [223553, 'Category', 'Highlight', 'End Date', 46233,
+         'End Time', dt.time(7, 59)],
+        ['', 'Product Name', '', 'Limited Orb x30+5'],
+        ['', 'ItemKind', 'ItemIndex', 'ItemOption', 'DurationIndex',
+         'Stackable', 'Itemmove', 'Item Name', 'Amt'],
+        ['', 100, 200, 0, 0, 'No', 'No', 'Limited Orb x35', 1],
+    ]
+
+    items = item_finder._shop_sheet_items(
+        rows, 'Promotion shifted', now=now)
+    meta = items[0]['group_meta']['product_meta']
+
+    assert meta['name'] == 'Limited Orb x30+5'
+    assert meta['bundle_id'] == '223553'
+    assert meta['category_label'] == 'Highlight'
+    assert meta['shop_label'] == '20% Off'
+    assert meta['start_at'] == '2026-07-30 00:00:00'
+    assert meta['end_at'] == '2026-07-30 07:59:00'
+    assert {p['source_label'] for p in meta['price_candidates']} >= {
+        'Future Coin', 'Mystery Token'}
+
+
+def test_cash_shop_product_metadata_is_shared_by_every_item_in_the_table():
+    now = dt.datetime(2026, 7, 30, 8, 30, 0)
+    rows = [
+        ['Cash Product', '', 'Bundle ID', 880011, '', 'Gold Token', 250],
+        ['Product Name', 'Starter Pack', 'Category', 'Starter',
+         'Shop Label', 'New'],
+        ['Limit', 'Account', 'Reset Day', 'Everyday',
+         'Reset Time', dt.time(0, 0)],
+        ['End Date', dt.date(2026, 8, 31),
+         'End Time', dt.time(23, 59, 59), 'Silver Token', 25],
+        ['ItemKind', 'ItemIndex', 'ItemOption', 'DurationIndex',
+         'Itemmove', 'Item Name', 'Amt'],
+        [100, 200, 0, 0, 'No', 'First Reward', 1],
+        [101, 201, 1, 0, 'Yes', 'Second Reward', 2],
+    ]
+
+    items = item_finder._shop_sheet_items(rows, 'Cash Shop shifted', now=now)
+    assert len(items) == 2
+    assert items[0]['group_meta']['product'] == 'Starter Pack'
+    assert items[1]['group_meta']['product'] == 'Starter Pack'
+    assert items[0]['group_meta']['product_meta'] == \
+        items[1]['group_meta']['product_meta']
+    meta = items[0]['group_meta']['product_meta']
+    assert meta['name'] == 'Starter Pack'
+    assert meta['bundle_id'] == '880011'
+    assert meta['category_label'] == 'Starter'
+    assert meta['shop_label'] == 'New'
+    assert meta['limit_text'] == 'Account'
+    assert meta['reset_day'] == 'Everyday'
+    assert meta['reset_time'] == '00:00:00'
+    assert meta['start_at'] == '2026-07-30 00:00:00'
+    assert meta['end_at'] == '2026-08-31 23:59:59'
+    assert {p['source_label'] for p in meta['price_candidates']} >= {
+        'Gold Token', 'Silver Token'}
+
+
+def test_shop_product_full_price_is_used_only_for_one_currency_on_its_row():
+    rows = [
+        ['Future Token', 66, 'Full Price', 100],
+        ['Other Token', 20, 'Third Token', 30, 'Full Price', 50],
+        ['Product Name', 'Price Rules'],
+        ['End Date', dt.date(2026, 8, 31),
+         'End Time', dt.time(23, 59, 59)],
+        ['ItemKind', 'Item Name', 'Amt'],
+        [100, 'Reward', 1],
+    ]
+    items = item_finder._shop_sheet_items(
+        rows, 'Cash Shop prices', now=NOW)
+    prices = {
+        price['source_label']: price
+        for price in items[0]['group_meta']['product_meta']['price_candidates']
+    }
+    assert prices['Future Token'] == {
+        'source_label': 'Future Token',
+        'sale_price': 66,
+        'original_price': 100,
+    }
+    assert prices['Other Token']['original_price'] == 20
+    assert prices['Third Token']['original_price'] == 30
+
+
+def test_shop_product_unreadable_end_window_is_left_unresolved():
+    rows = [
+        ['Product Name', 'Broken Date'],
+        ['End Date', 'หลัง MA', 'End Time', 'หลัง MA'],
+        ['ItemKind', 'Item Name', 'Amt'],
+        [100, 'Reward', 1],
+    ]
+    items = item_finder._shop_sheet_items(
+        rows, 'Cash Shop broken date', now=NOW)
+    meta = items[0]['group_meta']['product_meta']
+    assert meta['end_at'] == ''
+    assert meta['warnings'] == ['อ่าน End Date/End Time ไม่ครบ']
+
+
 # --------------------------------------------------------------- runner (ไม่มี pytest ก็รันได้)
 if __name__ == "__main__":
     import traceback

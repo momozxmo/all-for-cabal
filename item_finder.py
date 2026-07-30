@@ -23,6 +23,8 @@ import re
 import sys
 import json
 import csv
+import datetime as dt
+import math
 from datetime import datetime
 
 try:
@@ -521,6 +523,174 @@ _SHOP_HDR = {
 }
 
 
+_PRODUCT_LABELS = {
+    'productname': 'name',
+    'bundleid': 'bundle_id',
+    'shoplabel': 'shop_label',
+    'category': 'category_label',
+    'enddate': 'end_date',
+    'endtime': 'end_time',
+    'limit': 'limit_text',
+    'resetday': 'reset_day',
+    'resettime': 'reset_time',
+    # Product always starts at today's Bangkok midnight. These labels are still
+    # structural, so their values must never be mistaken for Currency prices.
+    'startdate': '_ignored_start_date',
+    'starttime': '_ignored_start_time',
+}
+
+_PRODUCT_PRICE_QUALIFIERS = {
+    'normalprice', 'fullprice', 'originalprice', 'ราคาเต็ม',
+}
+
+
+def _shop_number(value):
+    """Return a JSON-safe price number, or ``None`` for non-numeric cells."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).replace(',', '').strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _shop_date_text(value):
+    if isinstance(value, dt.datetime):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, dt.date):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, (int, float)) and 1 <= float(value) <= 100000:
+        try:
+            converted = openpyxl.utils.datetime.from_excel(value)
+            return converted.strftime('%Y-%m-%d')
+        except (TypeError, ValueError, OverflowError):
+            return ''
+    text = str(value or '').strip()
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+        try:
+            return dt.datetime.strptime(text, fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            pass
+    return ''
+
+
+def _shop_time_text(value):
+    if isinstance(value, dt.datetime):
+        return value.strftime('%H:%M:%S')
+    if isinstance(value, dt.time):
+        return value.strftime('%H:%M:%S')
+    if isinstance(value, (int, float)) and 0 <= float(value) < 1:
+        seconds = int(round(float(value) * 24 * 60 * 60)) % (24 * 60 * 60)
+        return '%02d:%02d:%02d' % (
+            seconds // 3600, (seconds % 3600) // 60, seconds % 60)
+    text = str(value or '').strip()
+    for fmt in ('%H:%M:%S', '%H:%M'):
+        try:
+            return dt.datetime.strptime(text, fmt).strftime('%H:%M:%S')
+        except ValueError:
+            pass
+    return ''
+
+
+def _shop_end_at(date_value, time_value):
+    date_text = _shop_date_text(date_value)
+    time_text = _shop_time_text(time_value)
+    return '%s %s' % (date_text, time_text) if date_text and time_text else ''
+
+
+def _dedupe_price_candidates(candidates):
+    output = []
+    seen = set()
+    for candidate in candidates:
+        key = (_event_norm(candidate.get('source_label')),
+               candidate.get('sale_price'))
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        output.append(candidate)
+    return output
+
+
+def _shop_label_value(header_rows, row_index, column_index):
+    """Read a label's value horizontally, then directly below it.
+
+    The monthly-plan layouts use both arrangements. Stop horizontal scanning at
+    the next known structural label so a nearby field name is not returned as
+    this field's value.
+    """
+    row = header_rows[row_index]
+    for index in range(column_index + 1, len(row)):
+        raw = row[index]
+        if _event_norm(raw) in _PRODUCT_LABELS:
+            break
+        if raw not in (None, '') and str(raw).strip():
+            return raw
+    for next_row in header_rows[row_index + 1:]:
+        if column_index >= len(next_row):
+            continue
+        raw = next_row[column_index]
+        if raw not in (None, '') and str(raw).strip():
+            return raw
+    return None
+
+
+def _shop_product_meta(header_rows, sheet_title, group, now=None):
+    now = now or dt.datetime.now().astimezone()
+    values = {}
+    candidates = []
+    for row_index, row in enumerate(header_rows):
+        row_candidates = []
+        row_original_prices = []
+        for index, raw in enumerate(row):
+            label = _event_norm(raw)
+            if label in _PRODUCT_LABELS:
+                value = _shop_label_value(
+                    header_rows, row_index, index)
+                if value not in (None, ''):
+                    values[_PRODUCT_LABELS[label]] = value
+                continue
+            if label in _PRODUCT_PRICE_QUALIFIERS:
+                if index + 1 < len(row):
+                    original = _shop_number(row[index + 1])
+                    if original is not None:
+                        row_original_prices.append(original)
+                continue
+            if isinstance(raw, str) and raw.strip() and index + 1 < len(row):
+                numeric = _shop_number(row[index + 1])
+                if numeric is not None:
+                    row_candidates.append({
+                        'source_label': raw.strip(),
+                        'sale_price': numeric,
+                        'original_price': numeric,
+                    })
+        if len(row_candidates) == 1 and len(row_original_prices) == 1:
+            row_candidates[0]['original_price'] = row_original_prices[0]
+        candidates.extend(row_candidates)
+    end_at = _shop_end_at(
+        values.get('end_date'), values.get('end_time'))
+    warnings = []
+    if (values.get('end_date') not in (None, '')
+            or values.get('end_time') not in (None, '')) and not end_at:
+        warnings.append('อ่าน End Date/End Time ไม่ครบ')
+    return {
+        'source_sheet': sheet_title,
+        'name': str(values.get('name') or group).strip(),
+        'bundle_id': _event_num(values.get('bundle_id')),
+        'category_label': str(values.get('category_label') or '').strip(),
+        'shop_label': str(values.get('shop_label') or '').strip(),
+        'start_at': now.strftime('%Y-%m-%d 00:00:00'),
+        'end_at': end_at,
+        'limit_text': str(values.get('limit_text') or '').strip(),
+        'reset_day': str(values.get('reset_day') or '').strip(),
+        'reset_time': _shop_time_text(values.get('reset_time')),
+        'price_candidates': _dedupe_price_candidates(candidates),
+        'warnings': warnings,
+    }
+
+
 def _shop_rate_percent(raw_rates):
     """Draw rates as Aztek wants them: percent, 0-100.
 
@@ -549,7 +719,7 @@ def _shop_rate_percent(raw_rates):
     return out
 
 
-def _shop_sheet_items(rows, sheet_title, skipped=None):
+def _shop_sheet_items(rows, sheet_title, skipped=None, now=None):
     """template Shop (Cash Shop / Promotion / In Game) 1 sheet -> finder-format items
     เลย์เอาต์ต่างกันแต่ละชีต (Cash Shop: Itemmove อยู่คอลัมน์ J, Promotion: G)
     -> จับจากชื่อหัวคอลัมน์ ไม่ล็อกตำแหน่ง
@@ -559,6 +729,7 @@ def _shop_sheet_items(rows, sheet_title, skipped=None):
     group = ''
     tbl = 0
     buf = []
+    product_meta = {}
     for row in rows:
         cn = [_event_norm(c) for c in row]
         if 'itemkind' in cn:                       # หัวตาราง -> เริ่มตารางใหม่
@@ -584,6 +755,8 @@ def _shop_sheet_items(rows, sheet_title, skipped=None):
                     break
             if not group:
                 group = '%s · ตาราง %d' % (sheet_title, tbl)
+            product_meta = _shop_product_meta(
+                buf[-16:], sheet_title, group, now=now)
             buf.append(row)
             buf[:] = buf[-16:]
             continue
@@ -616,7 +789,12 @@ def _shop_sheet_items(rows, sheet_title, skipped=None):
                 # told apart from percentages, so it is scaled below.
                 'rate': ('' if get('rate') is None else str(get('rate')).strip()),
                 'group': group,
-                'group_meta': {'is_shop': True, 'shop_sheet': sheet_title, 'product': group},
+                'group_meta': {
+                    'is_shop': True,
+                    'shop_sheet': sheet_title,
+                    'product': group,
+                    'product_meta': product_meta,
+                },
                 # โหมด Shop: ทุกตัวต้องมีรูปภาพไอเท็ม (ช่องรูปอยู่นอกกล่อง 'พารามิเตอร์แสดงบนเว็บ'
                 # -> อ่านได้ไม่ว่าจะเปิด/ปิดการแสดงผลบนเว็บ)
                 'web': 'any', 'img': 'yes',
