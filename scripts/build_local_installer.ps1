@@ -32,12 +32,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
 
     $env:PLAYWRIGHT_BROWSERS_PATH = $browserCache
+    & (Join-Path $PSScriptRoot 'reset_playwright_cache.ps1') `
+        -BuildCache (Join-Path $projectRoot 'build-cache')
     python -m playwright install chromium
     if ($LASTEXITCODE -ne 0) { throw 'Chromium download failed' }
 
     python -m pytest -q --basetemp=$pytestTemp
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; build stopped' }
 
+    & (Join-Path $PSScriptRoot 'sanitize_playwright_cache.ps1') `
+        -BuildCache (Join-Path $projectRoot 'build-cache')
     python -m PyInstaller --noconfirm --clean local_web.spec
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
     python -m local_app.release_verify 'dist\All for Cabal Web'

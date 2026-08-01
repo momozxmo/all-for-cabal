@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -115,6 +116,8 @@ def test_build_script_installs_browser_runs_tests_and_verifies_release():
         "$ErrorActionPreference = 'Stop'",
         'requirements-build.txt',
         'PLAYWRIGHT_BROWSERS_PATH',
+        'reset_playwright_cache.ps1',
+        'sanitize_playwright_cache.ps1',
         'playwright install chromium',
         'python -m pytest -q',
         'python -m PyInstaller',
@@ -123,3 +126,69 @@ def test_build_script_installs_browser_runs_tests_and_verifies_release():
         'LOCALAPPDATA',
     ):
         assert fragment in script
+
+
+def test_browser_cache_reset_removes_stale_revisions_without_touching_siblings(
+    tmp_path,
+):
+    build_cache = tmp_path / 'build-cache'
+    browser_cache = build_cache / 'ms-playwright'
+    stale_browser = browser_cache / 'chromium-1223' / 'chrome.exe'
+    stale_browser.parent.mkdir(parents=True)
+    stale_browser.write_bytes(b'old browser')
+    sibling = build_cache / 'keep.txt'
+    sibling.write_text('keep', encoding='utf-8')
+
+    result = subprocess.run(
+        [
+            'powershell.exe',
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            str(ROOT / 'scripts' / 'reset_playwright_cache.ps1'),
+            '-BuildCache',
+            str(build_cache),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert browser_cache.is_dir()
+    assert list(browser_cache.iterdir()) == []
+    assert sibling.read_text(encoding='utf-8') == 'keep'
+
+
+def test_browser_cache_sanitizer_removes_runtime_logs_only(tmp_path):
+    build_cache = tmp_path / 'build-cache'
+    browser_cache = build_cache / 'ms-playwright'
+    browser = browser_cache / 'chromium-1228' / 'chrome.exe'
+    runtime_log = browser.parent / 'debug.log'
+    browser.parent.mkdir(parents=True)
+    browser.write_bytes(b'current browser')
+    runtime_log.write_text('runtime noise', encoding='utf-8')
+    sibling_log = build_cache / 'keep.log'
+    sibling_log.write_text('keep', encoding='utf-8')
+
+    result = subprocess.run(
+        [
+            'powershell.exe',
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            str(ROOT / 'scripts' / 'sanitize_playwright_cache.ps1'),
+            '-BuildCache',
+            str(build_cache),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert browser.read_bytes() == b'current browser'
+    assert not runtime_log.exists()
+    assert sibling_log.read_text(encoding='utf-8') == 'keep'
