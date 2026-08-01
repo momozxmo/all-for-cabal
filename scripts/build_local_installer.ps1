@@ -37,7 +37,7 @@ try {
     python -m playwright install chromium
     if ($LASTEXITCODE -ne 0) { throw 'Chromium download failed' }
 
-    python -m pytest -q --basetemp=$pytestTemp
+    python -m pytest -q tests --basetemp=$pytestTemp
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; build stopped' }
 
     & (Join-Path $PSScriptRoot 'sanitize_playwright_cache.ps1') `

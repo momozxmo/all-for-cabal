@@ -119,7 +119,7 @@ def test_build_script_installs_browser_runs_tests_and_verifies_release():
         'reset_playwright_cache.ps1',
         'sanitize_playwright_cache.ps1',
         'playwright install chromium',
-        'python -m pytest -q',
+        'python -m pytest -q tests',
         'python -m PyInstaller',
         'local_app.release_verify',
         'ISCC.exe',
