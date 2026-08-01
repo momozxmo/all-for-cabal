@@ -319,6 +319,46 @@ def test_the_singular_spelling_of_the_codes_column_is_read_too():
     assert meta['set_count'] == '1'
 
 
+def test_ranked_prize_tables_keep_the_package_row_and_use_it_in_group_names():
+    """Reward PVE2 puts a package title on a name-only row after each header."""
+    rows = [
+        ['Date', '', 'Event Name', 'Path of Dusk'],
+        ['', '', '', '', '', '', 'อันดับ 1', '',
+         'Item Kind', 'Item Index', 'ItemOption', 'DurationIndex',
+         'Stackable', 'Display Name', 'Amt'],
+        ['', '', '', '', '', '', '60 Code', '',
+         '', '', '', '', '', 'Platinum Wing 30 วัน'],
+        ['', '', '', '', '', '', '', '',
+         111, 1, 0, 30, 'No', 'First item', 1],
+        [],
+        ['', '', '', '', '', '', 'อันดับ 2', '',
+         'Item Kind', 'Item Index', 'ItemOption', 'DurationIndex',
+         'Stackable', 'Display Name', 'Amt'],
+        ['', '', '', '', '', '', 'อันดับละ 60 Code', '',
+         '', '', '', '', '', 'Platinum Wing 15 วัน'],
+        ['', '', '', '', '', '', '', '',
+         222, 2, 0, 15, 'No', 'Second item', 1],
+        [],
+        ['', '', '', '', '', '', '', '',
+         'Item Kind', 'Item Index', 'ItemOption', 'DurationIndex',
+         'Stackable', 'Display Name', 'Amt'],
+        ['', '', '', '', '', '', 'รางวัลปลอบใจ', '',
+         '', '', '', '', '', 'Platinum Wing 3 วัน'],
+        ['', '', '', '', '', '', '30 Code', '',
+         333, 3, 0, 3, 'No', 'Consolation item', 1],
+    ]
+
+    sheets = _sheet(rows)
+    parsed = sheets[0][1]
+
+    assert [item['kind'] for item in parsed] == ['111', '222', '333']
+    assert [item['sources'][0] for item in parsed] == [
+        'อันดับ 1 Platinum Wing 30 วัน',
+        'อันดับ 2 Platinum Wing 15 วัน',
+        'รางวัลปลอบใจ Platinum Wing 3 วัน',
+    ]
+
+
 def _workbook_bytes(rows, title='plan'):
     import io
 

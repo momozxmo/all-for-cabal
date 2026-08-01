@@ -285,6 +285,23 @@ def _event_is_generic(v):
     return any(n.startswith(p) for p in _EVENT_GENERIC_PREFIX)
 
 
+def _event_reward_label(row, kind_column):
+    """Return a rank/consolation label written to the left of Item Kind."""
+    if kind_column is None:
+        return ''
+    label = ''
+    for value in row[:kind_column]:
+        if value is None:
+            continue
+        raw = str(value).strip().replace('\n', ' ')
+        low = raw.lower()
+        rank_label = raw.startswith('อันดับ') and not raw.startswith('อันดับละ')
+        if (rank_label or raw.startswith('รางวัล')
+                or re.match(r'^(?:rank|consolation)(?:\b|\s|:)', low)):
+            label = raw
+    return label
+
+
 _EVENT_LEGEND_COL = 17   # คอลัมน์ >= นี้ = ข้อความอธิบาย template (มี Unique/Master Code ปนกัน) -> ข้าม
 
 # หัวคอลัมน์เขียนได้หลายแบบ ('Number [codes per set]' / 'Number [code/set]') —
@@ -392,18 +409,34 @@ def _parse_event_rows(rows, skipped=None):
     last_col = None
     headerless_block = False
     group = ''
+    group_prefix = ''
+    group_finalized = False
+    table_has_items = False
     cur_meta = {}
     tbl = 0
     seen = {}
     buf = []
     sheet_activity = ''                            # ชื่อกิจกรรมระดับชีต (เช่น VICI/VENI) เก็บครั้งเดียว
 
-    def begin_table(column_map):
+    def finalize_group():
+        nonlocal group, group_finalized
+        if group_finalized:
+            return
+        seen[group] = seen.get(group, 0) + 1
+        if seen[group] > 1:
+            group = '%s (%d)' % (group, seen[group])
+        cur_meta['event_name'] = group
+        group_finalized = True
+
+    def begin_table(column_map, header_row=None):
         """Start one prize table, including malformed repeats with no header."""
-        nonlocal col, last_col, headerless_block, group, cur_meta, tbl
+        nonlocal col, last_col, headerless_block, group, group_prefix
+        nonlocal group_finalized, table_has_items, cur_meta, tbl
         col = dict(column_map)
         last_col = dict(column_map)
         headerless_block = False
+        group_finalized = False
+        table_has_items = False
         tbl += 1
         banner = ''                                # แบนเนอร์ section ในคอลัมน์ Item Kind (เช่น 'GM Slayer')
         kc = col.get('kind')
@@ -420,18 +453,19 @@ def _parse_event_rows(rows, skipped=None):
                         break
         # ดึงเงื่อนไข (วันหมดอายุ/codes per set/เติมซ้ำไม่ได้/unique code/เลข Code)
         cur_meta = _event_extract_meta(buf)
-        cur_meta['activity'] = sheet_activity
+        group_prefix = _event_reward_label(header_row or (), kc)
+        cur_meta['activity'] = group_prefix or sheet_activity
         # ชื่อรางวัล = แบนเนอร์ section ถ้ามี ไม่งั้น fallback เป็นเลข Code
         reward = banner or cur_meta.get('code_no', '')
+        if group_prefix:
+            reward = ''
         cur_meta['reward'] = reward
         # ชื่อกลุ่ม (แสดง/จัดกลุ่มผล) = 'ชื่อกิจกรรม ชื่อรางวัล'
-        display = (sheet_activity + ' ' + reward).strip() if reward else sheet_activity
+        activity = group_prefix or sheet_activity
+        display = (activity + ' ' + reward).strip() if reward else activity
         group = display or banner or ('ตาราง %d' % tbl)
         # ตารางที่วางซ้อนกันลงมาในชีตเดียว = คนละโค้ด แม้ไม่มีชื่อ section แยก
         # ชื่อกลุ่มซ้ำจะทำให้สองโค้ดถูกยุบเป็นอันเดียว จึงเติมลำดับให้ไม่ซ้ำ
-        seen[group] = seen.get(group, 0) + 1
-        if seen[group] > 1:
-            group = '%s (%d)' % (group, seen[group])
         cur_meta['event_name'] = group
 
     for row in rows:
@@ -450,7 +484,7 @@ def _parse_event_rows(rows, skipped=None):
                     found_col[_EVENT_HDR[c]] = i
                 elif c == 'displayname' and 'name' not in found_col:
                     found_col['name'] = i          # fallback ถ้าไม่มี Item Name
-            begin_table(found_col)
+            begin_table(found_col, row)
             buf.append(row)
             buf[:] = buf[-16:]
             continue
@@ -490,6 +524,8 @@ def _parse_event_rows(rows, skipped=None):
         name_filled = nm is not None and str(nm).strip() != ''
 
         if kind and kind.isdigit():
+            finalize_group()
+            table_has_items = True
             items.append({
                 'kind': kind,
                 'opt': _event_num(get('opt')),
@@ -501,6 +537,19 @@ def _parse_event_rows(rows, skipped=None):
                 'web': 'any', 'img': 'any', 'qty_val': '',
                 'trade': 'any', 'drill': 'any', 'crit_val': '',
             })
+        elif name_filled and (kraw is None or str(kraw).strip() == '') \
+                and not table_has_items:
+            # Reward PVE2 writes a package title (for example Platinum Wing)
+            # on a descriptor row immediately after the header. It is not an
+            # item row and must not terminate the table before its real items.
+            row_label = _event_reward_label(row, k)
+            if row_label:
+                group_prefix = row_label
+            title = str(nm).strip().replace('\n', ' ')
+            group = ('%s %s' % (group_prefix, title)).strip()
+            cur_meta['activity'] = group_prefix
+            cur_meta['reward'] = title
+            cur_meta['event_name'] = group
         elif name_filled and kraw is not None and str(kraw).strip() != '':
             # แถวมีชื่อไอเทมแต่ ItemKind อ่านไม่ได้ (#VALUE! จาก date-format) -> ข้าม+เตือน (ไม่จบตาราง)
             if skipped is not None:

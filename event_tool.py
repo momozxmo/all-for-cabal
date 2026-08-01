@@ -42,6 +42,23 @@ def _norm(x):
     return str(x).strip().lower().replace(' ', '').replace('\n', '') if x is not None else ''
 
 
+def _plan_reward_label(row, kind_column):
+    """Return a rank/consolation label written to the left of Item Kind."""
+    if kind_column is None:
+        return ''
+    label = ''
+    for value in row[:kind_column]:
+        if value is None:
+            continue
+        raw = str(value).strip().replace('\n', ' ')
+        low = raw.lower()
+        rank_label = raw.startswith('อันดับ') and not raw.startswith('อันดับละ')
+        if (rank_label or raw.startswith('รางวัล')
+                or re.match(r'^(?:rank|consolation)(?:\b|\s|:)', low)):
+            label = raw
+    return label
+
+
 def _isnum(x):
     try:
         float(str(x).strip())
@@ -279,6 +296,8 @@ def _plan_sheet_items(rows, skipped):
     banner = ''
     col = None
     cur_group = ''
+    group_prefix = ''
+    table_has_items = False
     cur_meta = {}
     ntab = 0
     for row in rows:
@@ -301,7 +320,9 @@ def _plan_sheet_items(rows, skipped):
                 elif k in ('amount', 'amt'):
                     col['amt'] = i
             ntab += 1
-            cur_group = banner or ('รางวัลที่ %d' % ntab)
+            group_prefix = _plan_reward_label(row, col.get('kind'))
+            table_has_items = False
+            cur_group = group_prefix or banner or ('รางวัลที่ %d' % ntab)
             cur_meta = {'event_name': event_name, 'reward': cur_group, 'is_event': True,
                         'reward_index': ntab,
                         'start_dt': start_dt, 'end_date': end_date, 'end_time': end_time}
@@ -318,6 +339,7 @@ def _plan_sheet_items(rows, skipped):
         nm = get('name')
         name_filled = nm is not None and str(nm).strip() != ''
         if kind and kind.isdigit():
+            table_has_items = True
             items.append({
                 'kind': kind, 'opt': _num(get('opt')), 'dur': _num(get('dur')),
                 'name': str(nm).strip() if name_filled else '', 'amt': _num(get('amt')),
@@ -325,6 +347,14 @@ def _plan_sheet_items(rows, skipped):
                 'web': 'any', 'img': 'any', 'qty_val': '',
                 'trade': 'any', 'drill': 'any', 'crit_val': '',
             })
+        elif name_filled and (kv is None or str(kv).strip() == '') \
+                and not table_has_items:
+            row_label = _plan_reward_label(row, col['kind'])
+            if row_label:
+                group_prefix = row_label
+            title = str(nm).strip().replace('\n', ' ')
+            cur_group = ('%s %s' % (group_prefix, title)).strip()
+            cur_meta['reward'] = cur_group
         elif name_filled and kv is not None and str(kv).strip() != '':
             if skipped is not None:
                 skipped.append(str(nm).strip())
