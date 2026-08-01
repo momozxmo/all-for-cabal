@@ -6,6 +6,7 @@ current Currency and Category options and never clicks the create button.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from playwright.async_api import async_playwright
@@ -56,6 +57,55 @@ async def _read_options(select):
     return _clean_option_rows(rows)
 
 
+def _category_trigger(page):
+    return page.locator(
+        'button[data-slot="popover-trigger"]').filter(
+            has_text='เลือก Category').first
+
+
+def _currency_trigger(original_price):
+    return original_price.locator(
+        'xpath=ancestor::*[.//button[@data-slot="popover-trigger"]][1]'
+    ).locator('button[data-slot="popover-trigger"]').first
+
+
+async def _read_popover_options(page, trigger):
+    """Read Radix/cmdk options and keep their server IDs."""
+    await trigger.click(timeout=8000)
+    options = page.locator('[role="dialog"] [role="option"]')
+    await options.first.wait_for(state='attached', timeout=8000)
+    rows = await options.evaluate_all(
+        """nodes => nodes.map(node => {
+          const raw = node.getAttribute('data-value') || '';
+          const parts = raw.split('\\u0000');
+          return {
+            value: parts.length > 1 ? parts[parts.length - 1] : '',
+            text: (node.textContent || '').trim()
+          };
+        })""")
+    await page.keyboard.press('Escape')
+    return _clean_option_rows(rows)
+
+
+async def _select_popover_option(page, trigger, option_id):
+    """Select one live Radix/cmdk option by its fetched server ID."""
+    try:
+        await trigger.click(timeout=8000)
+        selector = (
+            '[role="dialog"] [role="option"][data-value$=%s]'
+            % json.dumps(str(option_id)))
+        option = page.locator(selector).first
+        await option.wait_for(state='attached', timeout=8000)
+        await option.click(timeout=8000)
+        return True
+    except Exception:
+        try:
+            await page.keyboard.press('Escape')
+        except Exception:
+            pass
+        return False
+
+
 async def _category_select(page):
     selectors = (
         'xpath=//label[contains(normalize-space(.),"หมวดหมู่")]'
@@ -92,13 +142,25 @@ async def _currency_select(page):
 async def _harvest_product_options(page, wanted):
     options = {}
     if 'categories' in wanted:
-        select = await _category_select(page)
-        options['categories'] = (
-            await _read_options(select) if select is not None else [])
+        trigger = _category_trigger(page)
+        if await trigger.count():
+            options['categories'] = await _read_popover_options(
+                page, trigger)
+        else:
+            select = await _category_select(page)
+            options['categories'] = (
+                await _read_options(select) if select is not None else [])
     if 'currencies' in wanted:
         select = await _currency_select(page)
-        options['currencies'] = (
-            await _read_options(select) if select is not None else [])
+        original = page.locator(
+            'input[name="prices.0.original_price"]').first
+        trigger = _currency_trigger(original)
+        if await original.count() and await trigger.count():
+            options['currencies'] = await _read_popover_options(
+                page, trigger)
+        else:
+            options['currencies'] = (
+                await _read_options(select) if select is not None else [])
     return options
 
 
@@ -157,9 +219,16 @@ class ProductBuilder(ActivityBuilder):
         category_id = str(spec.get('category_id') or '').strip()
         if not category_id:
             missing.append('หมวดหมู่')
-        elif not await aztek_form.select_after_label(
-                page, 'หมวดหมู่', category_id, self.log):
-            missing.append('หมวดหมู่')
+        else:
+            trigger = _category_trigger(page)
+            if await trigger.count():
+                selected = await _select_popover_option(
+                    page, trigger, category_id)
+            else:
+                selected = await aztek_form.select_after_label(
+                    page, 'หมวดหมู่', category_id, self.log)
+            if not selected:
+                missing.append('หมวดหมู่')
 
     async def _fill_rich_text(self, page, language, value):
         """Fill the visible TinyMCE after selecting its language tab."""
@@ -242,15 +311,23 @@ class ProductBuilder(ActivityBuilder):
             if not currency_id:
                 missing.append(where)
             else:
-                select = original.locator(
-                    'xpath=ancestor::*[.//select][1]').first.locator(
-                        'select').first
-                try:
-                    await select.select_option(value=currency_id)
-                except Exception as exc:
+                trigger = _currency_trigger(original)
+                if await trigger.count():
+                    selected = await _select_popover_option(
+                        page, trigger, currency_id)
+                else:
+                    select = original.locator(
+                        'xpath=ancestor::*[.//select][1]').first.locator(
+                            'select').first
+                    try:
+                        await select.select_option(value=currency_id)
+                        selected = True
+                    except Exception as exc:
+                        selected = False
+                        self.log('เลือก %s ไม่สำเร็จ: %s'
+                                 % (where, exc), 'WARNING')
+                if not selected:
                     missing.append(where)
-                    self.log('เลือก %s ไม่สำเร็จ: %s'
-                             % (where, exc), 'WARNING')
             for field, label in (
                 ('original_price', 'ราคาปกติ'),
                 ('price', 'ราคาขาย'),

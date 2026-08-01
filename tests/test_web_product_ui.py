@@ -70,6 +70,14 @@ def test_future_currency_matches_fetched_data_without_a_catalog():
             'slug': 'future-token',
             'label': 'Future Token',
         }
+        assert page.evaluate("""matchFetchedOption(
+          'Highlight',
+          [{id:'8',slug:'',label:'Main Shop - Highlight'}]
+        )""") == {
+            'id': '8',
+            'slug': '',
+            'label': 'Main Shop - Highlight',
+        }
         assert 'THB' not in page.content()
         assert 'Forcegem' not in page.content()
         browser.close()
@@ -97,7 +105,41 @@ def test_option_cache_is_separate_per_server_and_kind():
           optionCacheKey('CabalPC SEA', 'currencies')
         ]""")
         assert len(set(keys)) == 3
-        assert all(key.startswith('afc.productOptions.v1:') for key in keys)
+        assert all(key.startswith('afc.productOptions.v2:') for key in keys)
+        browser.close()
+
+
+def test_legacy_wrong_option_cache_is_not_reused_after_aztek_dropdown_change():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          const game = 'CabalPC TH';
+          document.querySelector('#game').add(new Option(game, game));
+          document.querySelector('#game').value = game;
+          localStorage.setItem(
+            `afc.productOptions.v1:${game}:currencies`,
+            JSON.stringify({fetched_at:'2026-08-01T00:00:00.000Z',
+              options:[{id:'PLAYER',slug:'',label:'PLAYER'}]}));
+        }""")
+        calls = []
+
+        def fresh_options(route):
+            calls.append(route.request.post_data_json)
+            route.fulfill(
+                status=200, content_type='application/json',
+                body='{"options":{"currencies":['
+                     '{"id":"91","slug":"wallet-point",'
+                     '"label":"Wallet Point"}]}}')
+
+        page.route('**/api/products/options', fresh_options)
+        label = page.evaluate(
+            "() => ensureOptions('currencies').then(rows => rows[0].label)")
+        assert label == 'Wallet Point'
+        assert calls == [{
+            'game': 'CabalPC TH',
+            'kinds': ['currencies'],
+        }]
         browser.close()
 
 
@@ -200,6 +242,53 @@ def test_unique_matches_fill_draft_and_unmatched_sources_remain_visible():
             'price': 66,
         }]
         assert result['price_candidates'][1]['source_label'] == 'Unknown Token'
+        browser.close()
+
+
+def test_stale_limit_ids_are_removed_then_live_options_are_matched():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          optionState.categories.options = [
+            {id:'8',slug:'',label:'Main Shop - Highlight'}];
+          optionState.currencies.options = [
+            {id:'91',slug:'wallet-point',label:'Wallet Point'}];
+          const entry = {
+            category_source:'Highlight', category_id:'PLAYER',
+            price_candidates:[
+              {source_label:'Wallet Point',original_price:100,sale_price:66}],
+            prices:[{source_label:'Wallet Point',currency_id:'PLAYER',
+              currency_slug:'',currency_label:'PLAYER',
+              original_price:100,price:66}]
+          };
+          applyOptionMatches(entry);
+          return entry;
+        }""")
+        assert result['category_id'] == '8'
+        assert result['prices'] == [{
+            'source_label': 'Wallet Point',
+            'currency_id': '91',
+            'currency_slug': 'wallet-point',
+            'currency_label': 'Wallet Point',
+            'original_price': 100,
+            'price': 66,
+        }]
+        browser.close()
+
+
+def test_product_run_reports_missing_category_and_currency_before_api_call():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        assert page.evaluate("""runnableError([{
+          name_th:'Gold Merit X', category_id:'', prices:[]
+        }])""") == (
+            'Gold Merit X: กรุณาเลือกหมวดหมู่บน Aztek')
+        assert page.evaluate("""runnableError([{
+          name_th:'Gold Merit X', category_id:'8', prices:[]
+        }])""") == (
+            'Gold Merit X: กรุณาเลือก Currency อย่างน้อย 1 รายการ')
         browser.close()
 
 

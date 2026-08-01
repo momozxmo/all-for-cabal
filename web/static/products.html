@@ -304,13 +304,14 @@ function matchFetchedOption(source, options) {
   const wanted = normalizeOptionText(source);
   if (!wanted) return null;
   const hits = (options || []).filter(option =>
-    [option.id, option.slug, option.label].some(
+    [option.id, option.slug, option.label,
+      ...String(option.label || '').split(/\s+-\s+/)].some(
       value => normalizeOptionText(value) === wanted));
   return hits.length === 1 ? structuredClone(hits[0]) : null;
 }
 
 function optionCacheKey(game, kind) {
-  return `afc.productOptions.v1:${game}:${kind}`;
+  return `afc.productOptions.v2:${game}:${kind}`;
 }
 
 function readOptionCache(game, kind) {
@@ -352,6 +353,13 @@ function resolvedPrice(entry, sourceLabel) {
 
 function applyOptionMatches(entry) {
   if (!entry) return entry;
+  if (entry.category_id && optionState.categories.options.length
+      && !optionState.categories.options.some(option =>
+        String(option.id) === String(entry.category_id))) {
+    entry.category_id = '';
+    entry.category_label = '';
+    entry.category_slug = '';
+  }
   const category = matchFetchedOption(
     entry.category_source, optionState.categories.options);
   if (!entry.category_id && category) {
@@ -360,6 +368,11 @@ function applyOptionMatches(entry) {
     entry.category_slug = category.slug || '';
   }
   entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
+  if (optionState.currencies.options.length) {
+    entry.prices = entry.prices.filter(price =>
+      optionState.currencies.options.some(option =>
+        String(option.id) === String(price.currency_id)));
+  }
   for (const candidate of entry.price_candidates || []) {
     if (resolvedPrice(entry, candidate.source_label)) continue;
     const currency = matchFetchedOption(
@@ -1003,6 +1016,19 @@ function runnableError(entries) {
   if (conflict) {
     return `${conflict.name_th || conflict.name_en || 'Product'}: `
       + 'กรุณาเลือกเลข Bundle ฝั่งใดฝั่งหนึ่งก่อน';
+  }
+  const missingCategory = entries.find(entry =>
+    !String(entry.category_id || '').trim());
+  if (missingCategory) {
+    return `${missingCategory.name_th || missingCategory.name_en || 'Product'}: `
+      + 'กรุณาเลือกหมวดหมู่บน Aztek';
+  }
+  const missingCurrency = entries.find(entry =>
+    !(entry.prices || []).some(price =>
+      String(price.currency_id || '').trim()));
+  if (missingCurrency) {
+    return `${missingCurrency.name_th || missingCurrency.name_en || 'Product'}: `
+      + 'กรุณาเลือก Currency อย่างน้อย 1 รายการ';
   }
   return '';
 }

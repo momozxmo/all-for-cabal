@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+from playwright.async_api import async_playwright
 from sqlalchemy import select
 
 from web import app as web_app
@@ -14,6 +15,65 @@ from web.models import AuditLog
 
 
 GAME = 'CabalM TH'
+
+
+CUSTOM_PRODUCT_FORM = r'''
+<label>หมวดหมู่</label>
+<button type="button" role="combobox" data-slot="popover-trigger"
+        data-kind="categories">เลือก Category</button>
+<input name="th_name"><input name="en_name">
+<button type="button" id="addCurrency">เพิ่มสกุลเงิน</button>
+<div id="priceRows"></div>
+<label>รูปแบบการจำกัดการซื้อ</label>
+<select id="limitType">
+  <option value="NONE">ไม่จำกัด</option>
+  <option value="PLAYER">PLAYER</option>
+  <option value="CHARACTER">CHARACTER</option>
+</select>
+<script>
+window.chosen = {};
+const liveOptions = {
+  categories: [
+    {id:'category-8', text:'Main Shop - Highlight'},
+    {id:'category-9', text:'Bonus Shop - General - Bonus'}],
+  currencies: [
+    {id:'currency-91', text:'cabal-wallet-point - Wallet Point'},
+    {id:'currency-92', text:'cabal-force-gem - Force Gem'}]
+};
+function openPicker(kind, trigger) {
+  document.querySelector('[role="dialog"]')?.remove();
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  for (const row of liveOptions[kind]) {
+    const option = document.createElement('div');
+    option.setAttribute('role', 'option');
+    option.setAttribute('data-value', `${row.text}\u0000${row.id}`);
+    option.textContent = row.text;
+    option.onclick = () => {
+      window.chosen[kind] = row.id;
+      trigger.textContent = row.text;
+      dialog.remove();
+    };
+    dialog.appendChild(option);
+  }
+  document.body.appendChild(dialog);
+}
+document.querySelector('[data-kind="categories"]').onclick = event =>
+  openPicker('categories', event.currentTarget);
+document.querySelector('#addCurrency').onclick = () => {
+  const index = document.querySelectorAll(
+    'input[name$=".original_price"]').length;
+  const row = document.createElement('div');
+  row.innerHTML = `<button type="button" role="combobox"
+    data-slot="popover-trigger" data-kind="currencies">เลือกสกุลเงิน</button>
+    <input name="prices.${index}.original_price">
+    <input name="prices.${index}.price">`;
+  row.querySelector('[data-kind="currencies"]').onclick = event =>
+    openPicker('currencies', event.currentTarget);
+  document.querySelector('#priceRows').appendChild(row);
+};
+</script>
+'''
 
 
 def _connect_aztek(client):
@@ -88,6 +148,68 @@ def test_option_rows_keep_live_value_slug_and_label():
         {'id': '18', 'slug': 'future-token', 'label': 'Future Token'},
         {'id': '22', 'slug': '', 'label': 'Bonus Shop - General - Bonus'},
     ]
+
+
+def test_product_options_read_custom_popovers_not_purchase_limit_select():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content(CUSTOM_PRODUCT_FORM)
+                return await product_runner._harvest_product_options(
+                    page, {'categories', 'currencies'})
+            finally:
+                await browser.close()
+
+    assert asyncio.run(scenario()) == {
+        'categories': [
+            {'id': 'category-8', 'slug': '',
+             'label': 'Main Shop - Highlight'},
+            {'id': 'category-9', 'slug': '',
+             'label': 'Bonus Shop - General - Bonus'},
+        ],
+        'currencies': [
+            {'id': 'currency-91', 'slug': 'cabal-wallet-point',
+             'label': 'Wallet Point'},
+            {'id': 'currency-92', 'slug': 'cabal-force-gem',
+             'label': 'Force Gem'},
+        ],
+    }
+
+
+def test_product_builder_selects_custom_category_and_currency_ids():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content(CUSTOM_PRODUCT_FORM)
+                missing = []
+                await product_runner.ProductBuilder(
+                    lambda *_: None)._fill_general(page, {
+                        'name_th': 'สินค้า',
+                        'name_en': 'Product',
+                        'category_id': 'category-8',
+                    }, missing)
+                await product_runner.ProductBuilder(
+                    lambda *_: None)._fill_prices(page, {
+                        'prices': [{
+                            'currency_id': 'currency-91',
+                            'original_price': 100,
+                            'price': 66,
+                        }],
+                    }, missing)
+                return await page.evaluate('window.chosen'), missing
+            finally:
+                await browser.close()
+
+    chosen, missing = asyncio.run(scenario())
+    assert chosen == {
+        'categories': 'category-8',
+        'currencies': 'currency-91',
+    }
+    assert missing == []
 
 
 def test_product_options_requires_authentication(anonymous_client):
@@ -321,6 +443,8 @@ class _Locator:
         return self
 
     async def count(self):
+        if 'data-slot="popover-trigger"' in self.selector:
+            return 0
         return 1
 
     async def wait_for(self, **kwargs):
