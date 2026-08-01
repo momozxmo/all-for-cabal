@@ -51,6 +51,33 @@ def _standalone_page(browser, path):
     return page
 
 
+def _bundle_page(context):
+    """Serve the real Bundle page on one origin so localStorage can reload."""
+    page = context.new_page()
+
+    def fulfill(route):
+        url = route.request.url
+        if url == 'http://tool.test/bundles':
+            route.fulfill(body=BUNDLES.read_text(encoding='utf-8'),
+                          content_type='text/html')
+        elif url.endswith('/static/console.css'):
+            route.fulfill(body=CSS.read_text(encoding='utf-8'),
+                          content_type='text/css')
+        elif url.endswith('/api/auth/me'):
+            route.fulfill(json={'username': 'local.owner', 'local_mode': True})
+        elif url.endswith('/api/games'):
+            route.fulfill(json={'games': ['CabalPC TH']})
+        elif url.endswith('/api/aztek/status'):
+            route.fulfill(json={'status': 'active'})
+        else:
+            route.fulfill(status=404, body='not found')
+
+    page.route('**/*', fulfill)
+    page.goto('http://tool.test/bundles', wait_until='domcontentloaded')
+    page.wait_for_function("typeof renderItems === 'function'")
+    return page
+
+
 def test_local_mode_hides_hosted_auth_in_every_tool_header():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -109,6 +136,88 @@ def test_done_button_really_hides_the_calendar_popover():
 
         page.get_by_role('button', name='ตกลง').click()
         assert not popover.is_visible()
+        browser.close()
+
+
+def test_calendar_popover_is_not_clipped_by_its_card():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 420, 'height': 500})
+        page.set_content('''
+          <div class="card" style="width:360px;margin:24px">
+            <div class="card-body">
+              <input id="when" class="dtpick" type="text"
+                     value="2026-07-31 00:00:00">
+            </div>
+          </div>
+        ''')
+        page.add_style_tag(path=str(CSS))
+        page.add_script_tag(path=str(JS))
+        page.evaluate('attachPickers()')
+        page.locator('#when').click()
+
+        visible_below_card = page.evaluate('''() => {
+          const card = document.querySelector('.card').getBoundingClientRect();
+          const pop = document.querySelector('.dtpop').getBoundingClientRect();
+          const target = document.elementFromPoint(pop.left + 12, card.bottom + 12);
+          return pop.bottom > card.bottom
+            && !!target && document.querySelector('.dtpop').contains(target);
+        }''')
+
+        assert visible_below_card is True
+        browser.close()
+
+
+def test_bundle_quantity_accepts_more_than_one_typed_digit():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = _bundle_page(context)
+        page.evaluate('''() => {
+          state.queue = [{key: 'b1', name: 'Bundle 1', type: 'FIXED',
+            deliver: true, rewards: [], items: [
+              {id: '10', name: 'Item', qty: '1', tier: 'Common', rate: ''}
+            ]}];
+          state.active = 'b1';
+          select('b1');
+        }''')
+        quantity = page.locator('#itemsTable tbody tr').first.locator(
+            'input[type="number"]').first
+
+        quantity.click()
+        quantity.press('Control+A')
+        page.keyboard.type('42')
+
+        assert quantity.input_value() == '42'
+        assert page.evaluate("current().items[0].qty") == '42'
+        context.close()
+        browser.close()
+
+
+def test_created_bundle_results_survive_leaving_and_returning_to_page():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = _bundle_page(context)
+        page.evaluate('''() => {
+          state.results = [{name: 'Made Bundle', saved: true, bundle_id: '90210',
+            added: 2, total: 2, rewards_total: 0, rewards_added: 0}];
+          state.made = [{name: 'Made Bundle', bundle_id: '90210',
+            workspace_id: 'workspace-1', group: 'G1', group_key: 'g1'}];
+          renderResults(state.results, false);
+          document.getElementById('handoff').hidden = false;
+          saveQueue();
+        }''')
+        page.close()
+
+        restored = _bundle_page(context)
+        restored.wait_for_timeout(50)
+
+        assert restored.locator('#bundleResults tbody tr').count() == 1
+        assert '90210' in restored.locator('#bundleResults').inner_text()
+        assert restored.locator('#handoff').is_visible()
+        assert restored.evaluate("state.made[0].bundle_id") == '90210'
+        context.close()
         browser.close()
 
 

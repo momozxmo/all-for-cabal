@@ -49,6 +49,39 @@ def test_merge_imported_deduplicates_search_but_preserves_occurrences_and_metada
     assert all('group_meta' not in row for row in merged.criteria)
 
 
+def test_duplicate_items_keep_each_bundles_order_and_own_amount():
+    """Merging one search criterion must not merge its document occurrences."""
+    imported = [
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+         'amt': '5', 'sources': ['G1']},
+        {'kind': '2', 'opt': '', 'dur': '', 'name': 'Only G1',
+         'amt': '1', 'sources': ['G1']},
+        {'kind': '3', 'opt': '', 'dur': '', 'name': 'First in G2',
+         'amt': '1', 'sources': ['G2']},
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+         'amt': '3', 'sources': ['G2']},
+    ]
+    merged = svc.merge_imported([], [], {}, imported)
+    found = [
+        {'aztek_id': '10', 'item_kind': '1', 'item_option': '',
+         'duration_index': '', 'item_name': 'Shared'},
+        {'aztek_id': '20', 'item_kind': '2', 'item_option': '',
+         'duration_index': '', 'item_name': 'Only G1'},
+        {'aztek_id': '30', 'item_kind': '3', 'item_option': '',
+         'duration_index': '', 'item_name': 'First in G2'},
+    ]
+
+    rows = svc.regroup_results(found, merged.occurrences)
+    bundles = svc.build_bundles(rows, {})
+
+    assert [row['sources'] for row in merged.occurrences] == [
+        ['G1'], ['G1'], ['G2'], ['G2']]
+    assert [[item['id'] for item in bundle['items']] for bundle in bundles] == [
+        ['10', '20'], ['30', '10']]
+    assert [[item['qty'] for item in bundle['items']] for bundle in bundles] == [
+        ['5', '1'], ['1', '3']]
+
+
 def test_regroup_results_follows_document_occurrences():
     found = [
         {'aztek_id': '10', 'item_kind': '1', 'item_option': '2',

@@ -266,6 +266,7 @@
   background:var(--obsidian);border:1px solid var(--edge);border-radius:12px;
   box-shadow:var(--shadow);padding:11px;display:grid;gap:9px}
 .dtpop[hidden]{display:none}
+.card:has(.dtpop:not([hidden])){overflow:visible;position:relative;z-index:5}
 .dthead{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .dthead b{font-size:13.5px}
 .dthead button{padding:3px 10px;line-height:1}

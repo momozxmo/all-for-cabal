@@ -131,11 +131,12 @@ const TIERS=['Common','Rare','Epic','Mystic','Legend'];
 // reload or a trip to Item Finder must not throw away half-built bundles.
 const QUEUE_KEY='afc.bundleQueue';
 const EVENT_DRAFT_KEY='afc.bundleEventDrafts';
+const RESULTS_KEY='afc.bundleResults', MADE_KEY='afc.bundleMade';
 // Shared with Item Finder so the chosen server, the mode and the document's
 // misses follow the operator between the two pages.
 const GAME_KEY='afc.game', MODE_KEY='afc.mode', MISS_KEY='afc.notFound';
 const state={queue:[],active:'',rewardOptions:{},rewardOptionsGame:'',
-  eventDrafts:[],workspaceId:''};
+  eventDrafts:[],workspaceId:'',results:[],made:[]};
 
 async function apiFetch(url, options){
   const response = await fetch(url, Object.assign({credentials:'same-origin'}, options||{}));
@@ -164,10 +165,16 @@ function loadQueue(){try{const raw=localStorage.getItem(QUEUE_KEY);
   catch(e){state.queue=[];}
   try{const raw=localStorage.getItem(EVENT_DRAFT_KEY);
     const parsed=raw?JSON.parse(raw):[];
-    state.eventDrafts=Array.isArray(parsed)?parsed:[];}catch(e){state.eventDrafts=[];}}
+    state.eventDrafts=Array.isArray(parsed)?parsed:[];}catch(e){state.eventDrafts=[];}
+  try{const parsed=JSON.parse(localStorage.getItem(RESULTS_KEY)||'[]');
+    state.results=Array.isArray(parsed)?parsed:[];}catch(e){state.results=[];}
+  try{const parsed=JSON.parse(localStorage.getItem(MADE_KEY)||'[]');
+    state.made=Array.isArray(parsed)?parsed:[];}catch(e){state.made=[];}}
 function saveQueue(){try{
   localStorage.setItem(QUEUE_KEY,JSON.stringify(state.queue));
   localStorage.setItem(EVENT_DRAFT_KEY,JSON.stringify(state.eventDrafts));
+  localStorage.setItem(RESULTS_KEY,JSON.stringify(state.results));
+  localStorage.setItem(MADE_KEY,JSON.stringify(state.made));
 }catch(e){}}
 function current(){return state.queue.find(b=>b.key===state.active);}
 function liveItems(b){return b?b.items:[];}
@@ -213,7 +220,9 @@ function select(key){state.active=key;const b=current();
 
 $('btnQueueClear').onclick=()=>{if(!state.queue.length)return;
   if(!confirm(`ล้างคิวทั้งหมด ${state.queue.length} บันเดิล? (ที่แก้ไว้จะหายหมด)`))return;
-  state.queue=[];state.active='';$('bundleResults').replaceChildren();$('runMsg').textContent='';select('');};
+  state.queue=[];state.active='';state.results=[];state.made=[];
+  $('bundleResults').replaceChildren();$('handoff').hidden=true;
+  $('runMsg').textContent='';select('');};
 
 // ---- รับของจาก Item Finder ----
 // Item Finder writes here and sends the operator over; the handoff is one-way
@@ -292,7 +301,7 @@ function renderItems(){const b=current();const body=$('itemsTable').tBodies[0];b
       it.name_mismatch?'ชื่อในเอกสารไม่ตรงกับชื่อบนเว็บ — ตรวจเอง (ค้นด้วย kind/opt/dur ถูกแล้ว)':'');
     const qtyTd=document.createElement('td');const qi=document.createElement('input');
     qi.type='number';qi.min='1';qi.value=it.qty||'1';qi.style.width='64px';
-    qi.oninput=()=>{it.qty=qi.value;renderItems();saveQueue();};qtyTd.appendChild(qi);
+    qtyTd.appendChild(qi);
     // เอกสาร: the Amt column as imported. Shown beside the editable count so a
     // value typed over it is visible instead of silently replacing the document.
     const docQty=String(it.doc_qty||'');
@@ -300,6 +309,13 @@ function renderItems(){const b=current();const body=$('itemsTable').tBodies[0];b
     const docQtyTd=cell(docQty?(drift?docQty+' ⚠':docQty):'—',
       drift?'doc-col review-cell':'doc-col',
       drift?'จำนวนถูกแก้ไปจากที่เอกสารระบุ':'');
+    qi.oninput=()=>{it.qty=qi.value;
+      const changed=docQty&&docQty!==String(it.qty||'');
+      docQtyTd.textContent=docQty?(changed?docQty+' ⚠':docQty):'—';
+      docQtyTd.className=changed?'doc-col review-cell':'doc-col';
+      docQtyTd.title=changed?'จำนวนถูกแก้ไปจากที่เอกสารระบุ':'';
+      tr.classList.toggle('needs-review',!!(it.shared||it.name_mismatch||changed));
+      paintReview();saveQueue();};
     const tierTd=document.createElement('td');const ts=document.createElement('select');
     TIERS.forEach(t=>{const o=document.createElement('option');o.value=o.textContent=t;ts.appendChild(o);});
     ts.value=it.tier||'Common';ts.onchange=()=>{it.tier=ts.value;saveQueue();};tierTd.appendChild(ts);
@@ -512,7 +528,7 @@ async function runBundles(bundles, doSave){
   finally{paintRunButtons();}}
 
 $('btnPreview').onclick=async()=>{const b=current();if(!b)return;
-  $('runMsg').textContent='กำลังเปิดหน้าเว็บและกรอกฟอร์ม…';$('bundleResults').replaceChildren();
+  $('runMsg').textContent='กำลังเปิดหน้าเว็บและกรอกฟอร์ม…';
   const d=await runBundles([b],false);if(!d)return;
   const r=(d.results||[])[0]||{};
   $('runMsg').textContent=`✓ กรอกฟอร์มแล้ว "${r.name}" · ไอเทม ${r.added}/${r.total} · `
@@ -525,10 +541,11 @@ async function createThese(bundles){
   if(!confirm(`สร้างจริงบน Aztek ${bundles.length} บันเดิล (${total} ไอเทม) ใช่ไหม?\n\n`
              +`กดแล้วสร้างทีละอันจนครบ ย้อนกลับเองไม่ได้`))return;
   $('runMsg').textContent=`กำลังสร้าง ${bundles.length} บันเดิล… (ดูความคืบหน้าในหน้าต่าง Chrome)`;
-  $('bundleResults').replaceChildren();
   const d=await runBundles(bundles,true);if(!d)return;
-  renderResults(d.results||[],false);
-  offerHandoff(d.results||[]);
+  const fresh=d.results||[];
+  state.results=fresh;
+  renderResults(state.results,false);
+  offerHandoff(fresh);
   // Created bundles leave the queue so a second pass cannot duplicate them.
   const made=new Set((d.results||[]).filter(r=>r.saved).map(r=>r.name));
   state.queue=state.queue.filter(b=>!made.has(b.name));
@@ -549,7 +566,7 @@ function offerHandoff(results){
       return {workspace_id:source.workspace_id||state.workspaceId||'',
         group:source.group||r.group||'',group_key:source.group_key||'',
         name:r.name||'',bundle_id:String(r.bundle_id)};});
-  $('handoff').hidden=!state.made.length;}
+  $('handoff').hidden=!state.made.length;saveQueue();}
 function sendMade(where){
   if(!state.made||!state.made.length)return;
   try{
@@ -600,6 +617,7 @@ async function init(){
     try{localStorage.setItem(GAME_KEY,$('game').value);}catch(e){}}catch(e){}
   if(!state.active&&state.queue.length)state.active=state.queue[0].key;
   select(state.active);
+  renderResults(state.results,false);$('handoff').hidden=!state.made.length;
   try{const s=await apiFetch('/api/aztek/status').then(r=>r.json());paintAztek(s.status);}
   catch(e){paintAztek('disconnected');}}
 init().catch(e=>log(e.message,'ERROR'));

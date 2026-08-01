@@ -219,7 +219,15 @@ def merge_imported(criteria, occurrences, group_meta, items):
                 saved['group_key'] = group_key
                 saved.setdefault('group', group)
                 group_meta[group_key] = saved
-        occurrences.append(dict(row))
+        # Occurrences are the document rows; their group lists and Amt must stay
+        # independent from the deduplicated search criterion below.  A shallow
+        # copy shared the list with ``criteria`` and later group merges silently
+        # rewrote the first occurrence into every group.
+        occurrence = dict(row)
+        occurrence['sources'] = list(row['sources'])
+        if keys is not None:
+            occurrence['group_keys'] = list(keys)
+        occurrences.append(occurrence)
         key = _criteria_key(row)
         if key in index:
             target = index[key]
