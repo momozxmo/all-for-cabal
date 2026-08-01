@@ -64,22 +64,20 @@ def _reset_at(reset_day, reset_time, now) -> str:
     current = _bangkok_now(now)
     if day in ('everyday', 'every day', 'daily', 'ทุกวัน'):
         candidate = dt.datetime.combine(
-            current.date(), clock, tzinfo=BANGKOK)
-        if candidate <= current:
-            candidate += dt.timedelta(days=1)
+            current.date() - dt.timedelta(days=1),
+            clock,
+            tzinfo=BANGKOK,
+        )
         return candidate.strftime('%Y-%m-%d %H:%M:%S')
 
     weekday = _WEEKDAYS.get(day)
     if weekday is None:
         return ''
-    days = (weekday - current.weekday()) % 7
     candidate = dt.datetime.combine(
-        current.date() + dt.timedelta(days=days),
+        current.date() - dt.timedelta(days=7),
         clock,
         tzinfo=BANGKOK,
     )
-    if candidate <= current:
-        candidate += dt.timedelta(days=7)
     return candidate.strftime('%Y-%m-%d %H:%M:%S')
 
 

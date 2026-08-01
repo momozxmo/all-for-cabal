@@ -588,9 +588,7 @@ _PRODUCT_LABELS = {
     'starttime': '_ignored_start_time',
 }
 
-_PRODUCT_PRICE_QUALIFIERS = {
-    'normalprice', 'fullprice', 'originalprice', 'ราคาเต็ม',
-}
+_PRODUCT_PRICE_LABEL = 'walletpoint'
 
 
 def _shop_number(value):
@@ -641,6 +639,14 @@ def _shop_time_text(value):
             return dt.datetime.strptime(text, fmt).strftime('%H:%M:%S')
         except ValueError:
             pass
+    embedded = re.search(
+        r'(?<!\d)([01]?\d|2[0-3])[.:](\d{2})(?:[.:](\d{2}))?(?!\d)',
+        text,
+    )
+    if embedded:
+        hour, minute, second = embedded.groups()
+        return '%02d:%02d:%02d' % (
+            int(hour), int(minute), int(second or 0))
     return ''
 
 
@@ -688,11 +694,14 @@ def _shop_label_value(header_rows, row_index, column_index):
 
 def _shop_product_meta(header_rows, sheet_title, group, now=None):
     now = now or dt.datetime.now().astimezone()
+    for row_index in range(len(header_rows) - 1, -1, -1):
+        if any(_event_norm(raw) == 'productname'
+               for raw in header_rows[row_index]):
+            header_rows = header_rows[row_index:]
+            break
     values = {}
-    candidates = []
+    wallet_price = None
     for row_index, row in enumerate(header_rows):
-        row_candidates = []
-        row_original_prices = []
         for index, raw in enumerate(row):
             label = _event_norm(raw)
             if label in _PRODUCT_LABELS:
@@ -701,23 +710,11 @@ def _shop_product_meta(header_rows, sheet_title, group, now=None):
                 if value not in (None, ''):
                     values[_PRODUCT_LABELS[label]] = value
                 continue
-            if label in _PRODUCT_PRICE_QUALIFIERS:
-                if index + 1 < len(row):
-                    original = _shop_number(row[index + 1])
-                    if original is not None:
-                        row_original_prices.append(original)
-                continue
-            if isinstance(raw, str) and raw.strip() and index + 1 < len(row):
-                numeric = _shop_number(row[index + 1])
+            if label == _PRODUCT_PRICE_LABEL:
+                numeric = _shop_number(_shop_label_value(
+                    header_rows, row_index, index))
                 if numeric is not None:
-                    row_candidates.append({
-                        'source_label': raw.strip(),
-                        'sale_price': numeric,
-                        'original_price': numeric,
-                    })
-        if len(row_candidates) == 1 and len(row_original_prices) == 1:
-            row_candidates[0]['original_price'] = row_original_prices[0]
-        candidates.extend(row_candidates)
+                    wallet_price = numeric
     end_at = _shop_end_at(
         values.get('end_date'), values.get('end_time'))
     warnings = []
@@ -735,7 +732,11 @@ def _shop_product_meta(header_rows, sheet_title, group, now=None):
         'limit_text': str(values.get('limit_text') or '').strip(),
         'reset_day': str(values.get('reset_day') or '').strip(),
         'reset_time': _shop_time_text(values.get('reset_time')),
-        'price_candidates': _dedupe_price_candidates(candidates),
+        'price_candidates': ([{
+            'source_label': 'Wallet Point',
+            'sale_price': wallet_price,
+            'original_price': wallet_price,
+        }] if wallet_price is not None else []),
         'warnings': warnings,
     }
 

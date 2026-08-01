@@ -86,7 +86,7 @@ def test_ambiguous_limit_stays_unresolved_with_a_warning():
     assert any('Limit' in warning for warning in draft['warnings'])
 
 
-def test_everyday_and_weekday_reset_are_mapped_deterministically():
+def test_everyday_and_weekday_reset_start_one_interval_in_the_past():
     drafts = product_plan.build_products({
         'daily': _meta(
             reset_day='Everyday', reset_time='04:30:00'),
@@ -94,9 +94,9 @@ def test_everyday_and_weekday_reset_are_mapped_deterministically():
             reset_day='Friday', reset_time='09:15:00'),
     }, 'CabalPC TH', now=NOW)
     assert drafts[0]['limit_reset_interval_days'] == '1'
-    assert drafts[0]['limit_reset_at'] == '2026-07-31 04:30:00'
+    assert drafts[0]['limit_reset_at'] == '2026-07-29 04:30:00'
     assert drafts[1]['limit_reset_interval_days'] == '7'
-    assert drafts[1]['limit_reset_at'] == '2026-07-31 09:15:00'
+    assert drafts[1]['limit_reset_at'] == '2026-07-23 09:15:00'
 
 
 def test_all_approved_tags_have_stable_order():

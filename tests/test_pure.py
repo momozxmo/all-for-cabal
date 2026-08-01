@@ -148,11 +148,12 @@ def test_shop_parser_keeps_product_header_metadata_without_fixed_columns():
     now = dt.datetime(2026, 7, 30, 19, 0, 0)
     rows = [
         ['', 'Main Shop', '', '', '', '', '', 'Future Coin', 6600],
-        ['Bundle ID', 'Shop Label', '20% Off', 'Start Date', 46218,
+        ['', 'Product Name', '', 'Limited Orb x30+5', '', '',
+         'Wallet Point', 390],
+        ['Bundle ID', 223553, 'Shop Label', '20% Off', 'Start Date', 46218,
          'Start Time', 'หลัง MA', 'Mystery Token', 66],
-        [223553, 'Category', 'Highlight', 'End Date', 46233,
+        ['', 'Category', 'Highlight', 'End Date', 46233,
          'End Time', dt.time(7, 59)],
-        ['', 'Product Name', '', 'Limited Orb x30+5'],
         ['', 'ItemKind', 'ItemIndex', 'ItemOption', 'DurationIndex',
          'Stackable', 'Itemmove', 'Item Name', 'Amt'],
         ['', 100, 200, 0, 0, 'No', 'No', 'Limited Orb x35', 1],
@@ -168,18 +169,22 @@ def test_shop_parser_keeps_product_header_metadata_without_fixed_columns():
     assert meta['shop_label'] == '20% Off'
     assert meta['start_at'] == '2026-07-30 00:00:00'
     assert meta['end_at'] == '2026-07-30 07:59:00'
-    assert {p['source_label'] for p in meta['price_candidates']} >= {
-        'Future Coin', 'Mystery Token'}
+    assert meta['price_candidates'] == [{
+        'source_label': 'Wallet Point',
+        'sale_price': 390,
+        'original_price': 390,
+    }]
 
 
 def test_cash_shop_product_metadata_is_shared_by_every_item_in_the_table():
     now = dt.datetime(2026, 7, 30, 8, 30, 0)
     rows = [
-        ['Cash Product', '', 'Bundle ID', 880011, '', 'Gold Token', 250],
+        ['Cash Product', '', '', '', '', 'Gold Token', 250],
         ['Product Name', 'Starter Pack', 'Category', 'Starter',
-         'Shop Label', 'New'],
+         'Shop Label', 'New', 'Wallet Point', 990],
+        ['Bundle ID', 880011],
         ['Limit', 'Account', 'Reset Day', 'Everyday',
-         'Reset Time', dt.time(0, 0)],
+         'Reset Time', 'เริ่มตั้งเวลา 00.01 น.'],
         ['End Date', dt.date(2026, 8, 31),
          'End Time', dt.time(23, 59, 59), 'Silver Token', 25],
         ['ItemKind', 'ItemIndex', 'ItemOption', 'DurationIndex',
@@ -201,18 +206,21 @@ def test_cash_shop_product_metadata_is_shared_by_every_item_in_the_table():
     assert meta['shop_label'] == 'New'
     assert meta['limit_text'] == 'Account'
     assert meta['reset_day'] == 'Everyday'
-    assert meta['reset_time'] == '00:00:00'
+    assert meta['reset_time'] == '00:01:00'
     assert meta['start_at'] == '2026-07-30 00:00:00'
     assert meta['end_at'] == '2026-08-31 23:59:59'
-    assert {p['source_label'] for p in meta['price_candidates']} >= {
-        'Gold Token', 'Silver Token'}
+    assert meta['price_candidates'] == [{
+        'source_label': 'Wallet Point',
+        'sale_price': 990,
+        'original_price': 990,
+    }]
 
 
-def test_shop_product_full_price_is_used_only_for_one_currency_on_its_row():
+def test_shop_product_uses_only_wallet_point_as_the_price_currency():
     rows = [
         ['Future Token', 66, 'Full Price', 100],
         ['Other Token', 20, 'Third Token', 30, 'Full Price', 50],
-        ['Product Name', 'Price Rules'],
+        ['Product Name', 'Price Rules', 'Wallet Point', 990],
         ['End Date', dt.date(2026, 8, 31),
          'End Time', dt.time(23, 59, 59)],
         ['ItemKind', 'Item Name', 'Amt'],
@@ -220,17 +228,39 @@ def test_shop_product_full_price_is_used_only_for_one_currency_on_its_row():
     ]
     items = item_finder._shop_sheet_items(
         rows, 'Cash Shop prices', now=NOW)
-    prices = {
-        price['source_label']: price
-        for price in items[0]['group_meta']['product_meta']['price_candidates']
-    }
-    assert prices['Future Token'] == {
-        'source_label': 'Future Token',
-        'sale_price': 66,
-        'original_price': 100,
-    }
-    assert prices['Other Token']['original_price'] == 20
-    assert prices['Third Token']['original_price'] == 30
+    prices = items[0]['group_meta']['product_meta']['price_candidates']
+    assert prices == [{
+        'source_label': 'Wallet Point',
+        'sale_price': 990,
+        'original_price': 990,
+    }]
+
+
+def test_shop_product_does_not_inherit_wallet_point_from_previous_block():
+    rows = [
+        ['Product Name', 'First Product', 'Wallet Point', 100],
+        ['Category', 'Old', 'End Date', dt.date(2026, 7, 20),
+         'End Time', dt.time(7, 59)],
+        ['ItemKind', 'Item Name', 'Amt'],
+        [100, 'First Reward', 1],
+        ['Product Name', 'Second Product', 'Wallet Point', 390],
+        ['Category', 'Highlight', 'End Date', dt.date(2026, 7, 30),
+         'End Time', dt.time(7, 59)],
+        ['ItemKind', 'Item Name', 'Amt'],
+        [200, 'Second Reward', 1],
+    ]
+
+    items = item_finder._shop_sheet_items(
+        rows, 'Promotion multiple products', now=NOW)
+    second = items[1]['group_meta']['product_meta']
+
+    assert second['name'] == 'Second Product'
+    assert second['category_label'] == 'Highlight'
+    assert second['price_candidates'] == [{
+        'source_label': 'Wallet Point',
+        'sale_price': 390,
+        'original_price': 390,
+    }]
 
 
 def test_shop_product_unreadable_end_window_is_left_unresolved():
