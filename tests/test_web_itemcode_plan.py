@@ -83,12 +83,22 @@ def test_a_single_set_is_generated_as_one_batch_with_the_buffer():
     assert reward['limited'] is True
 
 
-def test_the_item_code_itself_carries_no_counts():
-    """The counts belong to the reward set — the code-wide "จำกัดจำนวน" is not
-    part of how these are written, so nothing here may set it."""
+def test_a_plan_with_a_calculable_total_limits_the_item_code():
     draft = _one(_event())
-    assert not {'limited', 'quantity', 'remaining', 'kind',
-                'desc_th', 'desc_en'} & set(draft)
+    assert draft['limited'] is True
+    assert (draft['quantity'], draft['remaining']) == ('40', '40')
+
+
+def test_a_plan_without_a_positive_total_leaves_the_item_code_unlimited():
+    draft = _one(_event(codes_per_set='', set_count='', total=''))
+    assert draft['limited'] is False
+    assert (draft['quantity'], draft['remaining']) == ('', '')
+
+
+def test_pride_uses_the_explicit_code_limit_at_item_level():
+    draft = _one(_pride(unique_code=True, code_count='500'))
+    assert draft['limited'] is True
+    assert (draft['quantity'], draft['remaining']) == ('500', '500')
 
 
 def test_the_buffer_is_bigger_on_pc_th():

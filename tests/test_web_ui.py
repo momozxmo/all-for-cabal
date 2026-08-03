@@ -68,6 +68,15 @@ def test_event_drafts_and_group_keys_survive_the_bundle_handoff():
     assert 'item.group_key === row.group_key' in EVENTS
 
 
+def test_itemcode_drafts_survive_the_bundle_handoff():
+    assert 'itemcode_drafts:d.itemcode_drafts||[]' in HTML
+    for fragment in ('itemcode_drafts', 'state.itemcodeDrafts',
+                     'ITEMCODE_DRAFT_KEY'):
+        assert fragment in BUNDLES, fragment
+    assert 'itemcode_drafts:state.itemcodeDrafts' in BUNDLES
+    assert 'function applyBundleHandoff(payload)' in ITEMCODES
+
+
 def test_the_queue_outlives_a_reload():
     """Half-built bundles must survive a refresh or a trip back to the search."""
     assert 'localStorage' in BUNDLES and 'afc.bundleQueue' in BUNDLES

@@ -135,6 +135,23 @@ def test_an_event_defaults_to_what_the_plan_always_says():
     assert (spec.kind, spec.quantity, spec.remaining) == ('WINNER', '0', '0')
 
 
+def test_item_code_limit_defaults_to_unlimited():
+    payload = ItemCodeRunRequest(game=GAME, itemcodes=[{}])
+    spec = payload.itemcodes[0]
+    assert spec.limited is False
+    assert (spec.quantity, spec.remaining) == ('', '')
+
+
+def test_enabled_item_code_limit_requires_both_positive_counts(client):
+    response = client.post('/api/itemcodes/run', json={
+        'game': GAME,
+        'itemcodes': [_itemcode(limited=True, quantity='', remaining='40')],
+        'do_save': False,
+    })
+    assert response.status_code == 400
+    assert 'จำนวนครั้งที่สามารถใช้งานได้' in response.json()['detail']
+
+
 @pytest.mark.parametrize('path', ['/itemcodes', '/events'])
 def test_the_pages_need_a_session(anonymous_client, path):
     response = anonymous_client.get(path, follow_redirects=False)
@@ -378,14 +395,61 @@ def test_the_two_forms_are_told_apart_by_where_they_write():
     assert 'aztek-tools-v2' in activity_runner.create_url(GAME, 'events')
 
 
-def test_an_item_code_is_always_all_and_leaves_the_rest_of_the_form_alone():
-    """WINNER is the Event's idea. The descriptions and the code-wide
-    "จำกัดจำนวน" are not part of how these are written, so the page's own
-    defaults must not be overwritten with blanks."""
+def test_an_item_code_is_always_all_and_leaves_descriptions_alone():
+    """WINNER is the Event's idea and descriptions are still left alone."""
     source = inspect.getsource(itemcode_runner.ItemCodeBuilder._fill_header)
     assert "select_by_options(page, 'ALL'" in source
     assert 'desc_th' not in source and 'desc_en' not in source
-    assert "set_switch" not in source
+
+
+def test_itemcode_builder_fills_code_wide_limit_only_when_enabled(monkeypatch):
+    calls = []
+
+    async def fake_fill(page, selector, value, log=None, label='', scope=None):
+        calls.append(('fill', selector, str(value)))
+        return True
+
+    async def fake_switch(page, label, wanted, log=None, occurrence=0):
+        calls.append(('switch', label, wanted))
+        return True
+
+    async def fake_select(page, wanted, options, log=None, index=0):
+        calls.append(('select', wanted))
+        return True
+
+    async def fake_datetime(page, trigger, value, log=None, label=''):
+        calls.append(('datetime', label, value))
+        return True
+
+    monkeypatch.setattr(aztek_form, 'fill', fake_fill)
+    monkeypatch.setattr(aztek_form, 'set_switch', fake_switch)
+    monkeypatch.setattr(aztek_form, 'select_by_options', fake_select)
+    monkeypatch.setattr(aztek_form, 'set_datetime', fake_datetime)
+
+    class Locator:
+        @property
+        def first(self):
+            return self
+
+    class Page:
+        def locator(self, selector):
+            return Locator()
+
+    builder = itemcode_runner.ItemCodeBuilder(lambda *args: None)
+    finite = _itemcode(limited=True, quantity='40', remaining='40')
+    asyncio.run(builder._fill_header(Page(), finite, []))
+    assert ('switch', 'จำกัดจำนวน', True) in calls
+    assert ('fill', 'input[name="quantity"]', '40') in calls
+    assert ('fill', 'input[name="remaining"]', '40') in calls
+
+    calls.clear()
+    unlimited = _itemcode(limited=False, quantity='99', remaining='99')
+    asyncio.run(builder._fill_header(Page(), unlimited, []))
+    assert ('switch', 'จำกัดจำนวน', False) in calls
+    assert not any(call[:2] == ('fill', 'input[name="quantity"]')
+                   for call in calls)
+    assert not any(call[:2] == ('fill', 'input[name="remaining"]')
+                   for call in calls)
 
 
 def test_a_reward_set_still_gets_its_own_code_limit():

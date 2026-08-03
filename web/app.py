@@ -90,14 +90,18 @@ class ItemCodeSpec(BaseModel):
     ``rewards`` is a list of sets: each carries its own codes and exactly one
     bundle, because v2 replaces a reward set's bundle rather than adding to it.
 
-    The type is not a field: an Item Code is always ALL. Neither are the
-    descriptions or the code-wide "จำกัดจำนวน" — those are not part of how
-    these are written, and the counts live on the reward set.
+    The type is not a field: an Item Code is always ALL. Descriptions are left
+    to the page defaults. The code-wide limit is separate from the limit on
+    each reward set and is filled only when imported data or the operator
+    enables it.
     """
     name_th: str = Field(default='', max_length=200)
     name_en: str = Field(default='', max_length=200)
     slug: str = Field(default='', max_length=120)
     uses_per_user: str = Field(default='1', max_length=12)
+    limited: bool = False
+    quantity: str = Field(default='', max_length=12)
+    remaining: str = Field(default='', max_length=12)
     start_time: str = Field(default='', max_length=32)
     end_time: str = Field(default='', max_length=32)
     # Which bundle group this came from, so a page that handed it over can show
@@ -1067,7 +1071,7 @@ def workspace_events(workspace_id: str, request: Request, game: str = '',
 @router.post('/api/workspaces/{workspace_id}/bundles')
 def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
                    user: User = Depends(require_user), db: Session = Depends(get_db)):
-    from web import event_plan
+    from web import event_plan, itemcode_plan
 
     workspace = _get_workspace(WorkspaceRepository(db), user.id, workspace_id)
     indexes = payload.selected_indexes
@@ -1084,6 +1088,9 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
     event_drafts = event_plan.build_workspace_events(
         workspace.group_meta, workspace.game, group_keys=group_keys
     ) if workspace.mode == 'event' else []
+    itemcode_drafts = itemcode_plan.build_itemcodes(
+        workspace.group_meta, workspace.game, groups=group_keys
+    ) if workspace.mode == 'itemcode' else []
     write_audit(
         db, user_id=user.id, action='bundle.previewed', status='success',
         summary={'count': len(rows), 'mode': workspace.mode},
@@ -1096,6 +1103,7 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
     return {'bundles': bundles, 'mode': workspace.mode,
             'game': workspace.game or '',
             'event_drafts': event_drafts,
+            'itemcode_drafts': itemcode_drafts,
             'not_found': workspace.not_found or []}
 
 
@@ -1737,10 +1745,18 @@ async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
     jobs = []
     for index, spec in enumerate(payload.itemcodes[:MAX_ACTIVITIES]):
         where = spec.name_th.strip() or 'Item Code ที่ %d' % (index + 1)
+        limited = bool(spec.limited)
+        quantity = _positive_digits(
+            spec.quantity, 'จำนวนครั้งที่สามารถใช้งานได้', where
+        ) if limited else ''
+        remaining = _positive_digits(
+            spec.remaining, 'จำนวนคงเหลือ', where
+        ) if limited else ''
         jobs.append({
             'name_th': spec.name_th.strip(), 'name_en': spec.name_en.strip(),
             'slug': _require_slug(spec.slug, where),
             'uses_per_user': spec.uses_per_user.strip() or '1',
+            'limited': limited, 'quantity': quantity, 'remaining': remaining,
             'start_time': _require_datetime(spec.start_time, 'เวลาเริ่มใช้งาน', where),
             'end_time': _require_datetime(spec.end_time, 'เวลาสิ้นสุด', where),
             'group': spec.group,

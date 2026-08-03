@@ -131,12 +131,13 @@ const TIERS=['Common','Rare','Epic','Mystic','Legend'];
 // reload or a trip to Item Finder must not throw away half-built bundles.
 const QUEUE_KEY='afc.bundleQueue';
 const EVENT_DRAFT_KEY='afc.bundleEventDrafts';
+const ITEMCODE_DRAFT_KEY='afc.bundleItemCodeDrafts';
 const RESULTS_KEY='afc.bundleResults', MADE_KEY='afc.bundleMade';
 // Shared with Item Finder so the chosen server, the mode and the document's
 // misses follow the operator between the two pages.
 const GAME_KEY='afc.game', MODE_KEY='afc.mode', MISS_KEY='afc.notFound';
 const state={queue:[],active:'',rewardOptions:{},rewardOptionsGame:'',
-  eventDrafts:[],workspaceId:'',results:[],made:[]};
+  eventDrafts:[],itemcodeDrafts:[],workspaceId:'',results:[],made:[]};
 
 async function apiFetch(url, options){
   const response = await fetch(url, Object.assign({credentials:'same-origin'}, options||{}));
@@ -166,6 +167,9 @@ function loadQueue(){try{const raw=localStorage.getItem(QUEUE_KEY);
   try{const raw=localStorage.getItem(EVENT_DRAFT_KEY);
     const parsed=raw?JSON.parse(raw):[];
     state.eventDrafts=Array.isArray(parsed)?parsed:[];}catch(e){state.eventDrafts=[];}
+  try{const raw=localStorage.getItem(ITEMCODE_DRAFT_KEY);
+    const parsed=raw?JSON.parse(raw):[];
+    state.itemcodeDrafts=Array.isArray(parsed)?parsed:[];}catch(e){state.itemcodeDrafts=[];}
   try{const parsed=JSON.parse(localStorage.getItem(RESULTS_KEY)||'[]');
     state.results=Array.isArray(parsed)?parsed:[];}catch(e){state.results=[];}
   try{const parsed=JSON.parse(localStorage.getItem(MADE_KEY)||'[]');
@@ -173,6 +177,7 @@ function loadQueue(){try{const raw=localStorage.getItem(QUEUE_KEY);
 function saveQueue(){try{
   localStorage.setItem(QUEUE_KEY,JSON.stringify(state.queue));
   localStorage.setItem(EVENT_DRAFT_KEY,JSON.stringify(state.eventDrafts));
+  localStorage.setItem(ITEMCODE_DRAFT_KEY,JSON.stringify(state.itemcodeDrafts));
   localStorage.setItem(RESULTS_KEY,JSON.stringify(state.results));
   localStorage.setItem(MADE_KEY,JSON.stringify(state.made));
 }catch(e){}}
@@ -236,6 +241,9 @@ function drainHandoff(){
   state.workspaceId=String(payload.workspace_id||'');
   if(Array.isArray(payload.event_drafts)){
     state.eventDrafts=payload.event_drafts;
+  }
+  if(Array.isArray(payload.itemcode_drafts)){
+    state.itemcodeDrafts=payload.itemcode_drafts;
   }
   let added=0;
   payload.bundles.forEach(b=>{
@@ -588,7 +596,7 @@ function sendMade(where){
     }
     sessionStorage.setItem('afc.codeHandoff',
       JSON.stringify({game:$('game').value,event_drafts:state.eventDrafts,
-        rows:state.made}));
+        itemcode_drafts:state.itemcodeDrafts,rows:state.made}));
   }catch(e){}
   window.location.href=where;}
 $('btnToItemCode').onclick=()=>sendMade('/itemcodes');

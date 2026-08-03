@@ -20,8 +20,21 @@
     .itemcode-panel h3{margin:0 0 14px;color:var(--ink)}
     .itemcode-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .itemcode-fields label{display:grid;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
-    .itemcode-fields label.full{grid-column:1/-1}
+    .itemcode-fields .full{grid-column:1/-1}
     .itemcode-fields input,.itemcode-fields select{width:100%}
+    .itemcode-limit-toggle{display:flex!important;align-items:center;gap:8px;
+      color:var(--ink)!important;padding-top:2px}
+    .itemcode-limit-toggle input{appearance:none;width:32px!important;height:18px;
+      margin:0;border:0;border-radius:999px;background:#526174;cursor:pointer;
+      position:relative;transition:background .15s ease}
+    .itemcode-limit-toggle input::before{content:"";position:absolute;top:2px;left:2px;
+      width:14px;height:14px;border-radius:50%;background:#f8fafc;
+      transition:transform .15s ease}
+    .itemcode-limit-toggle input:checked{background:var(--arc)}
+    .itemcode-limit-toggle input:checked::before{transform:translateX(14px)}
+    .itemcode-limit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:12px}
+    .itemcode-limit-fields[hidden]{display:none}
     .formgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
     .formgrid label{display:grid;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
     .formgrid label.wide{grid-column:span 2}
@@ -56,7 +69,8 @@
     }
     @media(max-width:650px){
       .itemcode-fields{grid-template-columns:1fr}
-      .itemcode-fields label.full{grid-column:auto}
+      .itemcode-fields .full{grid-column:auto}
+      .itemcode-limit-fields{grid-template-columns:1fr}
     }
   </style>
 </head>
@@ -100,8 +114,7 @@
     <section class="card" id="editor" hidden>
       <div class="card-head"><h2>แก้ Item Code</h2><span id="editorWhich" class="hint"></span></div>
       <div class="card-body section">
-        <!-- ประเภทล็อกเป็น ALL · ไม่มี "จำกัดจำนวน" และคำอธิบายระดับ Item Code
-             (ไม่ได้ใช้ ปล่อยค่าเริ่มต้นของเว็บไว้) -->
+        <!-- ประเภทล็อกเป็น ALL และคำอธิบายระดับ Item Code ปล่อยค่าเว็บไว้ -->
         <div class="itemcode-layout">
           <div class="itemcode-column">
             <section class="itemcode-panel" data-itemcode-section="general">
@@ -122,6 +135,11 @@
                 <label>ใช้ต่อ 1 User<input id="usesPerUser" type="number" min="1" value="1"></label>
                 <label>เวลาเริ่มใช้งาน *<input id="startTime" class="dtpick" type="text"></label>
                 <label>เวลาสิ้นสุด *<input id="endTime" class="dtpick" type="text"></label>
+                <label class="itemcode-limit-toggle full"><input id="itemLimited" type="checkbox">จำกัดจำนวน</label>
+                <div id="itemLimitFields" class="itemcode-limit-fields full" hidden>
+                  <label>จำนวนครั้งที่สามารถใช้งานได้ *<input id="itemQuantity" type="number" min="1" step="1"></label>
+                  <label>จำนวนคงเหลือ<input id="itemRemaining" type="number" min="1" step="1"></label>
+                </div>
               </div>
             </section>
           </div>
@@ -184,6 +202,14 @@ const queue = new Queue('afc.itemcodeQueue');
 let pendingGame = '';
 let activeRewardIndex = 0;
 
+function bangkokMidnight() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date()).filter(part => part.type !== 'literal')
+    .map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} 00:00:00`;
+}
+
 function blankReward(bundleId, name) {
   return {name_th: name || '', name_en: name || '', uses_per_user: '1',
           limited: false, quantity: '', remaining: '',
@@ -192,8 +218,9 @@ function blankReward(bundleId, name) {
 }
 function blankCode(name) {
   return {key: nextKey('c'), name: queue.uniqueName(name || 'Item Code ใหม่'),
-          name_th: name || '', name_en: '', slug: '',
-          uses_per_user: '1', start_time: '', end_time: '', group: '',
+          name_th: name || '', name_en: name || '', slug: '',
+          uses_per_user: '1', limited: false, quantity: '', remaining: '',
+          start_time: bangkokMidnight(), end_time: '', group: '',
           rewards: [blankReward('')]};
 }
 
@@ -233,7 +260,16 @@ function select(key) {
       const value = entry[field] || '';
       input.value = input.classList.contains('dtpick') ? displayStamp(value) : value;
     });
+    $('itemLimited').checked = !!entry.limited;
+    $('itemQuantity').value = entry.quantity || '';
+    $('itemRemaining').value = entry.remaining || '';
+    $('itemLimitFields').hidden = !entry.limited;
     $('editorWhich').textContent = entry.name;
+  } else {
+    $('itemLimited').checked = false;
+    $('itemQuantity').value = '';
+    $('itemRemaining').value = '';
+    $('itemLimitFields').hidden = true;
   }
   renderQueue(); renderSets();
   // A preview belongs to the Item Code it ran for, so switching re-locks create.
@@ -249,6 +285,20 @@ Object.entries(FIELDS).forEach(([id, field]) => {
     renderQueue();
   };
 });
+$('itemLimited').onchange = () => {
+  const entry = queue.current(); if (!entry) return;
+  entry.limited = $('itemLimited').checked;
+  $('itemLimitFields').hidden = !entry.limited;
+  queue.save();
+};
+[['itemQuantity', 'quantity'], ['itemRemaining', 'remaining']]
+  .forEach(([id, field]) => {
+    $(id).oninput = () => {
+      const entry = queue.current(); if (!entry) return;
+      entry[field] = $(id).value;
+      queue.save();
+    };
+  });
 $('btnSlug').onclick = () => {
   const entry = queue.current(); if (!entry) return;
   const made = slugForGame(
@@ -401,31 +451,61 @@ function drainPlan() {
   addDrafts(payload.itemcodes, 'หน้าหาไอดีไอเทม', payload.game);
 }
 
+function entryFromDraft(draft, game) {
+  const entry = blankCode(draft.name_th || draft.group || '');
+  ['name_th', 'name_en', 'slug', 'uses_per_user', 'limited', 'quantity',
+   'remaining', 'start_time', 'end_time', 'group']
+    .forEach(field => { if (draft[field] !== undefined) entry[field] = draft[field]; });
+  if (entry.slug) entry.slug = slugForGame(
+    entry.slug, game || $('game').value || pendingGame);
+  entry.rewards = (draft.rewards || []).map(
+    reward => Object.assign(blankReward(''), reward));
+  if (!entry.rewards.length) entry.rewards = [blankReward('')];
+  entry.name = queue.uniqueName(entry.name_th || 'Item Code');
+  return entry;
+}
+
 // ---- รับเลข bundle จากหน้าสร้าง Bundle ----
-function drainHandoff() {
-  const payload = drainBundleIds(); if (!payload) return;
+function applyBundleHandoff(payload) {
+  if (!payload || !Array.isArray(payload.rows)) return;
   if (payload.game) pendingGame = payload.game;
-  let filled = 0, added = 0;
+  const drafts = Array.isArray(payload.itemcode_drafts)
+    ? payload.itemcode_drafts : [];
+  let filled = 0, added = 0, first = '';
   payload.rows.forEach(row => {
     if (!row.bundle_id) return;
-    // A draft made from the same group of the same plan is what this bundle
-    // was built for — fill its empty slot rather than start a second code.
-    const owner = row.group && queue.items.find(
-      entry => entry.group === row.group && entry.rewards.some(r => !r.bundle_id));
-    if (owner) {
-      owner.rewards.find(r => !r.bundle_id).bundle_id = String(row.bundle_id);
-      filled++;
-      return;
+    const keys = [row.group_key, row.group].filter(Boolean);
+    let owner = queue.items.find(entry => keys.includes(entry.group));
+    if (!owner) {
+      const draft = drafts.find(entry => keys.includes(entry.group));
+      if (draft) {
+        owner = entryFromDraft(draft, payload.game);
+      } else {
+        owner = blankCode(row.name || row.group || '');
+        owner.group = row.group_key || row.group || '';
+        owner.rewards = [blankReward('', row.name || '')];
+        owner.slug = slugForGame(
+          row.name || '', payload.game || $('game').value);
+      }
+      queue.add(owner); added++;
     }
-    const entry = blankCode(row.name || row.group || '');
-    entry.group = row.group || '';
-    entry.rewards = [blankReward(row.bundle_id, row.name || '')];
-    entry.slug = slugForGame(
-      row.name || '', payload.game || $('game').value);
-    queue.add(entry); added++;
+    first = first || owner.key;
+    owner.rewards.forEach(reward => {
+      if (!reward.bundle_id) {
+        reward.bundle_id = String(row.bundle_id);
+        filled++;
+      }
+    });
   });
-  if (filled) log(`ใส่เลข bundle ให้ร่างที่มีอยู่แล้ว ${filled} ชุด`, 'SUCCESS');
+  if (first) queue.active = first;
+  if (filled) log(`ใส่เลข bundle ให้ชุดรางวัล ${filled} ชุด`, 'SUCCESS');
   if (added) log(`รับ ${added} bundle จากหน้าสร้าง Bundle — ใส่เป็นชุดรางวัลให้แล้ว`, 'SUCCESS');
+  if (first) select(first);
+}
+
+function drainHandoff() {
+  const payload = drainBundleIds(); if (!payload) return;
+  applyBundleHandoff(payload);
 }
 
 // ---- Import ไฟล์แผนตรงหน้านี้ ----
@@ -491,17 +571,7 @@ document.querySelectorAll('[data-close]').forEach(
 function addDrafts(drafts, from, game) {
   let first = '';
   drafts.forEach(draft => {
-    const entry = blankCode(draft.name_th || draft.group || '');
-    ['name_th', 'name_en', 'slug', 'uses_per_user', 'start_time', 'end_time', 'group']
-      .forEach(field => { if (draft[field] !== undefined) entry[field] = draft[field]; });
-    if (entry.slug) {
-      entry.slug = slugForGame(
-        entry.slug, game || $('game').value || pendingGame);
-    }
-    entry.rewards = (draft.rewards || []).map(
-      reward => Object.assign(blankReward(''), reward));
-    if (!entry.rewards.length) entry.rewards = [blankReward('')];
-    entry.name = queue.uniqueName(entry.name_th || 'Item Code');
+    const entry = entryFromDraft(draft, game);
     queue.add(entry);
     first = first || entry.key;
     (draft.notes || []).forEach(note => log(`${entry.name}: ${note}`, 'WARNING'));
@@ -515,6 +585,9 @@ function addDrafts(drafts, from, game) {
 function jobFrom(entry) {
   return {name_th: entry.name_th, name_en: entry.name_en, slug: entry.slug,
           uses_per_user: String(entry.uses_per_user || '1'),
+          limited: !!entry.limited,
+          quantity: entry.limited ? String(entry.quantity || '') : '',
+          remaining: entry.limited ? String(entry.remaining || '') : '',
           start_time: withSeconds(entry.start_time),
           end_time: withSeconds(entry.end_time), group: entry.group || '',
           rewards: entry.rewards};

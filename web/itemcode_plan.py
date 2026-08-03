@@ -157,11 +157,11 @@ def _from_event(meta, game, name, now, notes):
             code_type='2' if server else '1',
             num_codes=each if server else ''))
     start, end = _window(meta, game, now, notes)
-    # Nothing is set at the Item Code level beyond the name, the window and how
-    # many times one player may use it: the counts belong to the reward set,
-    # which is where the codes are.
+    item_limit = str(item_total) if item_total > 0 else ''
     return {'name_th': name, 'name_en': name, 'slug': _slug(name, game, notes),
             'uses_per_user': uses,
+            'limited': bool(item_limit),
+            'quantity': item_limit, 'remaining': item_limit,
             'start_time': start, 'end_time': end, 'rewards': rewards}
 
 
@@ -177,8 +177,11 @@ def _from_pride(meta, game, name, now, notes):
     if not server and not fixed:
         notes.append('ไฟล์ไม่มีตัวโค้ด — ใส่รายการ Code เองก่อนสร้าง')
     start, end = _window(meta, game, now, notes)
+    item_limit = limit if limit.isdigit() and int(limit) > 0 else ''
     return {'name_th': name, 'name_en': name, 'slug': _slug(name, game, notes),
             'uses_per_user': '1',
+            'limited': bool(item_limit),
+            'quantity': item_limit, 'remaining': item_limit,
             'start_time': start, 'end_time': end,
             'rewards': [_reward(
                 name, '1', limited=bool(limit), quantity=limit, remaining=limit,

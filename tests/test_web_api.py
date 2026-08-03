@@ -225,6 +225,43 @@ def test_event_bundle_preview_carries_only_selected_event_drafts(
     assert body['event_drafts'][0]['rewards'][0]['group_key'] == 'gb'
 
 
+def test_itemcode_bundle_preview_carries_the_complete_selected_draft(
+        client, member, test_database):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'itemcode', 'plan.xlsx')
+        workspace.game = 'CabalPC TH'
+        workspace.group_meta = {
+            'ga': {
+                'group_key': 'ga', 'activity': 'Summer Event',
+                'reward': 'Winner Prize', 'expire': '2026-08-31',
+                'codes_per_set': '20', 'set_count': '1', 'total': '20',
+                'unique_code': True,
+            },
+        }
+        workspace.results = [
+            {'aztek_id': '11', 'item_name': 'Prize',
+             'sources': ['Winner Prize'], 'group_keys': ['ga']},
+        ]
+        workspace_id = workspace.id
+
+    response = client.post(
+        '/api/workspaces/%s/bundles' % workspace_id,
+        json={'selected_indexes': [0]},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['event_drafts'] == []
+    assert len(body['itemcode_drafts']) == 1
+    draft = body['itemcode_drafts'][0]
+    assert draft['group'] == 'ga'
+    assert draft['name_en'] == 'Summer Event - Winner Prize'
+    assert draft['start_time'].endswith('00:00:00')
+    assert draft['limited'] is True
+    assert (draft['quantity'], draft['remaining']) == ('30', '30')
+
+
 def test_search_websocket_persists_results_not_found_and_regroups(
     client, member, test_database, monkeypatch
 ):

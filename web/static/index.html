@@ -588,7 +588,8 @@ async function sendToBundlePage(){
     sessionStorage.setItem('afc.bundleHandoff',JSON.stringify({
       game:$('game').value,mode:d.mode||state.mode,
       workspace_id:state.workspaceId,bundles:d.bundles,
-      event_drafts:d.event_drafts||[],not_found:d.not_found||[]}));
+      event_drafts:d.event_drafts||[],itemcode_drafts:d.itemcode_drafts||[],
+      not_found:d.not_found||[]}));
     window.location.href='/bundles';
   }catch(e){alert('ส่งไปหน้าสร้างบันเดิลไม่สำเร็จ');}
   finally{resultActions();}}

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Browser-level regression tests for the shared 24-hour calendar."""
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
 
@@ -292,6 +294,61 @@ def test_imported_itemcode_datetime_displays_a_space_instead_of_t():
 
         assert page.locator('#startTime').input_value() == '2026-07-26 00:00:00'
         assert page.locator('#endTime').input_value() == '2026-08-31 23:59:59'
+        browser.close()
+
+
+def test_itemcode_blank_code_uses_bangkok_midnight_and_fills_both_names():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser, ITEMCODES)
+
+        entry = page.evaluate("blankCode('Fallback Name')")
+
+        expected_start = datetime.now(ZoneInfo('Asia/Bangkok')).strftime(
+            '%Y-%m-%d 00:00:00')
+        assert entry['name_th'] == 'Fallback Name'
+        assert entry['name_en'] == 'Fallback Name'
+        assert entry['start_time'] == expected_start
+        assert entry['limited'] is False
+        assert (entry['quantity'], entry['remaining']) == ('', '')
+        browser.close()
+
+
+def test_itemcode_code_wide_limit_matches_aztek_layout_and_payload():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser, ITEMCODES)
+        page.evaluate("select(queue.add(blankCode('Manual')).key)")
+
+        assert not page.locator('#itemLimited').is_checked()
+        assert not page.locator('#itemLimitFields').is_visible()
+
+        page.locator('#itemLimited').click()
+        assert page.locator('#itemLimitFields').is_visible()
+        columns = page.locator('#itemLimitFields').evaluate(
+            "el => getComputedStyle(el).gridTemplateColumns.split(' ').length")
+        assert columns == 2
+        page.locator('#itemQuantity').fill('40')
+        page.locator('#itemRemaining').fill('39')
+
+        assert page.evaluate("queue.current().limited") is True
+        manual = page.evaluate("jobFrom(queue.current())")
+        assert (manual['limited'], manual['quantity'], manual['remaining']) \
+            == (True, '40', '39')
+
+        page.evaluate("""
+          addDrafts([{
+            name_th: 'Imported', name_en: 'Imported EN',
+            limited: true, quantity: '25', remaining: '24'
+          }], 'test')
+        """)
+        assert page.locator('#itemLimited').is_checked()
+        assert page.locator('#itemLimitFields').is_visible()
+        assert page.locator('#itemQuantity').input_value() == '25'
+        assert page.locator('#itemRemaining').input_value() == '24'
+        imported = page.evaluate("jobFrom(queue.current())")
+        assert (imported['limited'], imported['quantity'], imported['remaining']) \
+            == (True, '25', '24')
         browser.close()
 
 
@@ -600,6 +657,72 @@ def test_itemcode_reward_tabs_select_added_set_remove_safely_and_reset_per_queue
         assert page.locator('.reward-tab').nth(0).get_attribute(
             'aria-selected') == 'true'
         assert page.locator('#rsets input').first.input_value() == 'Second A'
+        browser.close()
+
+
+def test_itemcode_bundle_handoff_preserves_full_draft_and_fills_every_set():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser, ITEMCODES)
+        _choose_game(page, 'CabalPC TH')
+        page.evaluate("""
+          applyBundleHandoff({
+            game: 'CabalPC TH',
+            itemcode_drafts: [{
+              group: 'group-a', name_th: 'Summer Prize',
+              name_en: 'Summer Prize EN', slug: 'summer-prize-pcth',
+              uses_per_user: '40', limited: true,
+              quantity: '40', remaining: '40',
+              start_time: '2026-08-03 00:00:00',
+              end_time: '2026-08-31 23:59:59',
+              rewards: [
+                {name_th: 'Set 1', name_en: 'Set 1', bundle_id: ''},
+                {name_th: 'Set 2', name_en: 'Set 2', bundle_id: ''}
+              ]
+            }],
+            rows: [{group: 'Summer Prize', group_key: 'group-a',
+                    name: 'Bundle A', bundle_id: '224184'}]
+          })
+        """)
+
+        assert page.evaluate("queue.items.length") == 1
+        entry = page.evaluate("queue.current()")
+        assert entry['name_th'] == 'Summer Prize'
+        assert entry['name_en'] == 'Summer Prize EN'
+        assert entry['slug'] == 'summer-prize-pcth'
+        assert entry['uses_per_user'] == '40'
+        assert (entry['limited'], entry['quantity'], entry['remaining']) \
+            == (True, '40', '40')
+        assert entry['start_time'] == '2026-08-03 00:00:00'
+        assert entry['end_time'] == '2026-08-31 23:59:59'
+        assert [reward['bundle_id'] for reward in entry['rewards']] == [
+            '224184', '224184']
+        browser.close()
+
+
+def test_itemcode_bundle_handoff_fallback_fills_english_and_midnight_only():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser, ITEMCODES)
+        _choose_game(page, 'CabalM SEA')
+        page.evaluate("""
+          applyBundleHandoff({
+            game: 'CabalM SEA', itemcode_drafts: [],
+            rows: [{group: 'Manual', group_key: 'manual',
+                    name: 'Fallback Bundle', bundle_id: '900'}]
+          })
+        """)
+
+        entry = page.evaluate("queue.current()")
+        expected_start = datetime.now(ZoneInfo('Asia/Bangkok')).strftime(
+            '%Y-%m-%d 00:00:00')
+        assert (entry['name_th'], entry['name_en']) == (
+            'Fallback Bundle', 'Fallback Bundle')
+        assert entry['slug'] == 'fallback-bundle-msea'
+        assert entry['start_time'] == expected_start
+        assert entry['end_time'] == ''
+        assert entry['limited'] is False
+        assert entry['rewards'][0]['bundle_id'] == '900'
         browser.close()
 
 

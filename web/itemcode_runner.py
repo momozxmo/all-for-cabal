@@ -35,9 +35,8 @@ class ItemCodeBuilder(ActivityBuilder):
     WRITE_MARK = 'itemcode'
 
     async def _fill_header(self, page, spec, missing):
-        # Only three fields belong to the Item Code itself. The descriptions and
-        # the "จำกัดจำนวน" switch are not part of how these are written, so the
-        # page's own defaults are left alone rather than overwritten with blanks.
+        # Descriptions stay on the page defaults. Names, slug, use limit,
+        # availability window and the optional code-wide count belong here.
         for field, value, label in (
             ('name_th', spec.get('name_th'), 'ชื่อ Item Code (ไทย)'),
             ('name_en', spec.get('name_en'), 'ชื่อ Item Code (อังกฤษ)'),
@@ -60,6 +59,15 @@ class ItemCodeBuilder(ActivityBuilder):
                     page, _date_trigger(page, label), spec.get(key),
                     self.log, label):
                 missing.append(label)
+        limited = bool(spec.get('limited'))
+        await aztek_form.set_switch(page, 'จำกัดจำนวน', limited, self.log)
+        if limited:
+            await aztek_form.fill(
+                page, 'input[name="quantity"]', spec.get('quantity') or '',
+                self.log, 'จำนวนครั้งที่สามารถใช้งานได้')
+            await aztek_form.fill(
+                page, 'input[name="remaining"]', spec.get('remaining') or '',
+                self.log, 'จำนวนคงเหลือ')
 
     async def _fill_reward(self, page, index, reward, missing):
         where = 'ชุดรางวัลที่ %d' % (index + 1)
