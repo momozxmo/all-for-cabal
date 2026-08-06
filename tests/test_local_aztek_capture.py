@@ -148,6 +148,22 @@ def test_capture_returns_complete_http_only_state_after_live_app_check(
     assert fake.browser.closed is True
 
 
+def test_capture_waits_through_transient_aztek_page_and_ipa_login(
+        test_settings):
+    """The pre-SSO Aztek shell must not close Chromium when IPA appears."""
+    page = FakePage(
+        [AZTEK_ITEMS_URL, AZTEK_ITEMS_URL],
+        wait_urls=[LOGIN_URL, AZTEK_ITEMS_URL],
+    )
+    fake = FakePlaywright(page)
+
+    state = run_capture(test_settings, fake)
+
+    assert state == complete_storage_state()
+    assert fake.context.closed is True
+    assert fake.browser.closed is True
+
+
 def test_capture_reports_closed_window_and_cleans_up(test_settings):
     page = FakePage([LOGIN_URL], closed=True)
     fake = FakePlaywright(page)
@@ -171,7 +187,10 @@ def test_capture_times_out_without_persisting_a_login_page(test_settings):
 
 
 def test_capture_rejects_final_navigation_that_returns_to_login(test_settings):
-    page = FakePage([AZTEK_ITEMS_URL, LOGIN_URL])
+    page = FakePage(
+        [LOGIN_URL, LOGIN_URL],
+        wait_urls=[AZTEK_ITEMS_URL],
+    )
     fake = FakePlaywright(page)
 
     with pytest.raises(LocalCaptureLoginRequired):

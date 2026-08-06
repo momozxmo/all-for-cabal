@@ -94,10 +94,13 @@ class LocalAztekCaptureService:
 
     async def _wait_for_authenticated_app(self, page) -> None:
         deadline = asyncio.get_running_loop().time() + self.timeout_seconds
+        saw_login_page = False
         while True:
             if page.is_closed():
                 raise LocalCaptureClosed()
-            if await self._is_authenticated_app(page):
+            if await search_runner.is_login_page(page):
+                saw_login_page = True
+            elif saw_login_page and await self._is_authenticated_app(page):
                 return
             if asyncio.get_running_loop().time() >= deadline:
                 raise LocalCaptureTimeout()
