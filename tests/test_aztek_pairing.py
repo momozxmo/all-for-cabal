@@ -267,6 +267,20 @@ def test_save_storage_state_reactivates_and_replaces_one_user_session(
             rows[0].encrypted_state, test_settings) == second
 
 
+def test_expired_session_can_seed_local_reconnect(
+        member, test_database, test_settings):
+    service = AztekSessionService(test_settings)
+    state = valid_storage_state()
+
+    with test_database.session() as db:
+        user = db.get(User, member.id)
+        service.save_storage_state(db, member.id, state, 'old')
+        service.mark_expired(db, user)
+
+        assert service.load_storage_state(db, user) is None
+        assert service.load_storage_state_for_reconnect(db, user) == state
+
+
 def test_invalid_storage_keeps_pairing_token_pending(
         client, member, test_database, test_settings):
     """A failed capture must not burn the operator's single-use token."""

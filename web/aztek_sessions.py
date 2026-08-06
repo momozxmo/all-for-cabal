@@ -298,6 +298,19 @@ class AztekSessionService:
             return None
         return decrypt_storage_state(session.encrypted_state, self.settings)
 
+    def load_storage_state_for_reconnect(
+        self,
+        db: Session,
+        user: User,
+    ) -> dict[str, Any] | None:
+        """Decrypt any saved state solely to seed a Local reconnect browser."""
+        session = db.scalar(
+            select(AztekSession).where(AztekSession.user_id == user.id)
+        )
+        if session is None:
+            return None
+        return decrypt_storage_state(session.encrypted_state, self.settings)
+
     def mark_expired(self, db: Session, user: User) -> None:
         """Flag the stored session as expired (e.g. Aztek rejected the cookies)."""
         session = db.scalar(
