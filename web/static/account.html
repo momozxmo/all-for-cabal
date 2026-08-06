@@ -77,21 +77,31 @@
           <div><dt>บัญชีที่เชื่อม</dt><dd id="aztekAccountLabel">-</dd></div>
           <div><dt>อัปเดตล่าสุด</dt><dd id="aztekUpdatedAt">-</dd></div>
         </dl>
-        <p class="hint" style="margin-top:12px"><b>ครั้งแรก:</b> ลากปุ่ม “เชื่อม Aztek” ด้านล่างไปวางที่แถบบุ๊กมาร์กของเบราว์เซอร์ (ทำครั้งเดียว) — ไม่ต้องลงส่วนขยายหรือโปรแกรมใด ๆ</p>
-        <div class="actions">
+        <div data-local-aztek hidden>
+          <p class="hint" style="margin-top:12px">กดปุ่มด้านล่าง แล้วเข้าสู่ระบบ IPA/Aztek ในหน้าต่าง Chromium ที่เปิดขึ้น โปรแกรมจะเชื่อมต่อให้หลังล็อกอินสำเร็จ</p>
+          <div class="actions">
+            <button id="localCaptureButton" class="primary" type="button">🌐 เปิด Aztek และเชื่อม</button>
+          </div>
+        </div>
+        <p data-hosted-aztek class="hint" style="margin-top:12px"><b>ครั้งแรก:</b> ลากปุ่ม “เชื่อม Aztek” ด้านล่างไปวางที่แถบบุ๊กมาร์กของเบราว์เซอร์ (ทำครั้งเดียว) — ไม่ต้องลงส่วนขยายหรือโปรแกรมใด ๆ</p>
+        <div data-hosted-aztek class="actions">
           <a id="bookmarklet" class="button" href="#" draggable="true" title="ลากปุ่มนี้ไปวางที่แถบบุ๊กมาร์ก">🔖 เชื่อม Aztek</a>
         </div>
-        <p class="hint" style="margin-top:12px"><b>ทุกครั้งที่เชื่อม:</b> 1) กด “สร้างรหัสจับคู่” แล้วคัดลอก · 2) เปิดหน้า Aztek (ล็อกอินแล้ว) · 3) กดบุ๊กมาร์ก “เชื่อม Aztek” → วางรหัส → กดเชื่อม (ภายใน 5 นาที รหัสใช้ครั้งเดียว)</p>
-        <div class="actions">
+        <p data-hosted-aztek class="hint" style="margin-top:12px"><b>ทุกครั้งที่เชื่อม:</b> 1) กด “สร้างรหัสจับคู่” แล้วคัดลอก · 2) เปิดหน้า Aztek (ล็อกอินแล้ว) · 3) กดบุ๊กมาร์ก “เชื่อม Aztek” → วางรหัส → กดเชื่อม (ภายใน 5 นาที รหัสใช้ครั้งเดียว)</p>
+        <div data-hosted-aztek class="actions">
           <a id="openAztekLink" class="button" href="https://aztek-tools-v2.combo-interactive.com/init" target="_blank" rel="noopener">↗ เปิด Aztek (init / ล็อกอิน)</a>
           <button id="createPairingButton" class="primary" type="button">สร้างรหัสจับคู่</button>
-          <button id="disconnectAztekButton" class="danger" type="button">ตัดการเชื่อมต่อ</button>
         </div>
-        <div id="pairingBox" class="card notice" hidden style="margin-top:14px">
-          <div class="card-body">
-            <label for="pairingToken">รหัสจับคู่ (ใช้ครั้งเดียว)<input id="pairingToken" type="text" readonly></label>
-            <div class="actions"><button id="copyPairingButton" type="button">คัดลอกรหัส</button><span id="pairingCountdown" class="hint"></span></div>
+        <div data-hosted-aztek>
+          <div id="pairingBox" class="card notice" hidden style="margin-top:14px">
+            <div class="card-body">
+              <label for="pairingToken">รหัสจับคู่ (ใช้ครั้งเดียว)<input id="pairingToken" type="text" readonly></label>
+              <div class="actions"><button id="copyPairingButton" type="button">คัดลอกรหัส</button><span id="pairingCountdown" class="hint"></span></div>
+            </div>
           </div>
+        </div>
+        <div class="actions">
+          <button id="disconnectAztekButton" class="danger" type="button">ตัดการเชื่อมต่อ</button>
         </div>
         <p id="aztekMessage" class="message" role="status" aria-live="polite" style="color:var(--muted)"></p>
       </div>
@@ -120,6 +130,10 @@
       const localMode = !!(me && me.local_mode);
       document.querySelectorAll('[data-hosted-auth]').forEach(
         node => { node.hidden = localMode; });
+      document.querySelectorAll('[data-hosted-aztek]').forEach(
+        node => { node.hidden = localMode; });
+      document.querySelectorAll('[data-local-aztek]').forEach(
+        node => { node.hidden = !localMode; });
     }
 
     async function loadAccount() {
@@ -170,6 +184,7 @@
     const aztekStatusText = document.getElementById('aztekStatusText');
     const aztekAccountLabel = document.getElementById('aztekAccountLabel');
     const aztekUpdatedAt = document.getElementById('aztekUpdatedAt');
+    const localCaptureButton = document.getElementById('localCaptureButton');
     const createPairingButton = document.getElementById('createPairingButton');
     const disconnectAztekButton = document.getElementById('disconnectAztekButton');
     const pairingBox = document.getElementById('pairingBox');
@@ -274,6 +289,25 @@
         aztekMessage.textContent = 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้';
       } finally {
         createPairingButton.disabled = false;
+      }
+    });
+
+    localCaptureButton.addEventListener('click', async () => {
+      localCaptureButton.disabled = true;
+      aztekMessage.textContent = 'กำลังเปิด Chromium — เข้าสู่ระบบ IPA/Aztek ในหน้าต่างที่เปิดขึ้น';
+      try {
+        const response = await fetch('/api/aztek/local-capture', {method: 'POST'});
+        if (!response.ok) {
+          aztekMessage.textContent = await errorMessage(
+            response, 'เชื่อม Aztek ไม่สำเร็จ — session เดิมยังอยู่');
+          return;
+        }
+        await loadAztekStatus();
+        aztekMessage.textContent = 'เชื่อมต่อ Aztek สำเร็จแล้ว';
+      } catch (error) {
+        aztekMessage.textContent = 'ติดต่อโปรแกรม Local ไม่สำเร็จ — session เดิมยังอยู่';
+      } finally {
+        localCaptureButton.disabled = false;
       }
     });
 

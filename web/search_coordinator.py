@@ -15,6 +15,7 @@ import aztek_core as core
 
 from web import item_service, search_runner
 from web.audit import write_audit
+from web.browser_gate import BrowserOperationGate
 from web.models import Job, User, utc_now
 from web.security import InvalidEncryptedState
 from web.workspaces import WorkspaceNotFound, WorkspaceRepository
@@ -59,11 +60,13 @@ class LiveSearch:
 
 
 class SearchCoordinator:
-    def __init__(self, database, settings, aztek_session_service) -> None:
+    def __init__(self, database, settings, aztek_session_service,
+                 browser_gate: BrowserOperationGate | None = None) -> None:
         self._database = database
         self._settings = settings
         self._aztek = aztek_session_service
-        self._semaphore = asyncio.Semaphore(max(1, settings.browser_concurrency))
+        self._browser_gate = browser_gate or BrowserOperationGate(
+            settings.browser_concurrency)
         # Searches in flight, by workspace. One per workspace: starting a search
         # already wipes that workspace's results, so two at once would fight.
         self._live: dict[str, LiveSearch] = {}
@@ -239,11 +242,11 @@ class SearchCoordinator:
                     message.get('level', 'INFO'), message.get('msg', '')))
             live.publish(message)
 
-        await self._semaphore.acquire()
         try:
-            say({'type': 'job', 'job_id': job_id, 'status': 'running'})
-            self._mark_job_running(job_id)
-            await finder.run(data, storage_state)
+            async with self._browser_gate.slot():
+                say({'type': 'job', 'job_id': job_id, 'status': 'running'})
+                self._mark_job_running(job_id)
+                await finder.run(data, storage_state)
             # Persist the same view that was streamed to the browser so a
             # workspace reload keeps every derived field (params, groups, and
             # the name_mismatch highlight flag).
@@ -279,7 +282,6 @@ class SearchCoordinator:
             say({'type': 'log', 'msg': 'error: %s' % error, 'level': 'ERROR'})
             say({'type': 'done', 'count': 0, 'not_found': []})
         finally:
-            self._semaphore.release()
             try:
                 self._finalize(user_id, workspace_id, job_id, game, outcome,
                                log_lines)

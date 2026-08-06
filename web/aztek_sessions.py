@@ -189,6 +189,37 @@ class AztekSessionService:
         db.flush()
         return PairingIssue(raw_token=raw_token, expires_at=expires_at)
 
+    def save_storage_state(
+        self,
+        db: Session,
+        user_id: str,
+        storage_state: Any,
+        account_label: str | None = None,
+    ) -> AztekSession:
+        """Validate, encrypt, and activate one user's captured browser state."""
+        validate_storage_state(storage_state, self.settings)
+        ciphertext = encrypt_storage_state(storage_state, self.settings)
+        clean_label = (account_label or '').strip() or None
+
+        session = db.scalar(
+            select(AztekSession).where(AztekSession.user_id == user_id)
+        )
+        if session is None:
+            session = AztekSession(
+                user_id=user_id,
+                encrypted_state=ciphertext,
+                account_label=clean_label,
+                status='active',
+            )
+            db.add(session)
+        else:
+            session.encrypted_state = ciphertext
+            session.account_label = clean_label
+            session.status = 'active'
+            session.last_validated_at = None
+        db.flush()
+        return session
+
     def consume_pairing_token(
         self,
         db: Session,
@@ -213,27 +244,9 @@ class AztekSessionService:
             db.flush()
             raise PairingTokenUnavailable()
 
-        # Raises InvalidStorageState before any state is persisted.
-        validate_storage_state(storage_state, self.settings)
-        ciphertext = encrypt_storage_state(storage_state, self.settings)
-        clean_label = (account_label or '').strip() or None
-
-        session = db.scalar(
-            select(AztekSession).where(AztekSession.user_id == record.user_id)
-        )
-        if session is None:
-            session = AztekSession(
-                user_id=record.user_id,
-                encrypted_state=ciphertext,
-                account_label=clean_label,
-                status='active',
-            )
-            db.add(session)
-        else:
-            session.encrypted_state = ciphertext
-            session.account_label = clean_label
-            session.status = 'active'
-            session.last_validated_at = None
+        # Raises InvalidStorageState before the token is consumed.
+        session = self.save_storage_state(
+            db, record.user_id, storage_state, account_label)
 
         record.status = 'used'
         record.used_at = now

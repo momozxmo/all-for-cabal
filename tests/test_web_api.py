@@ -50,6 +50,9 @@ def test_modes_and_template_download(client):
     response = client.get('/api/modes')
     assert response.status_code == 200
     assert set(response.json()) == {'event', 'itemcode', 'shop'}
+    assert response.json()['event'] == {
+        'web_mode': 'no', 'web_locked': False, 'read_desc': False,
+    }
     assert response.json()['itemcode']['web_locked'] is True
     response = client.get('/api/template')
     assert response.status_code == 200

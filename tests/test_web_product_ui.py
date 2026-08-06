@@ -354,16 +354,128 @@ def test_product_editor_matches_aztek_columns_and_collapses():
         browser.close()
 
 
-def test_only_the_selected_execution_mode_button_is_visible():
+def test_product_live_actions_show_three_buttons_without_mode_controls():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
-        page.locator('#runModePreview').check()
+        assert page.get_by_role(
+            'heading', name='สร้างบนเว็บจริง').is_visible()
         assert page.locator('#btnPreview').is_visible()
-        assert not page.locator('#btnCreateSelected').is_visible()
-        page.locator('#runModeCreate').check()
-        assert not page.locator('#btnPreview').is_visible()
-        assert page.locator('#btnCreateSelected').is_visible()
+        assert page.locator('#btnCreateOne').is_visible()
+        assert page.locator('#btnCreateAll').is_visible()
+        assert page.locator('#runModePreview').count() == 0
+        assert page.locator('#runModeCreate').count() == 0
+        assert page.locator('#selectForRun').count() == 0
+        browser.close()
+
+
+def test_product_preview_gate_follows_active_key_and_invalidates_on_edit():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""async () => {
+          addDrafts([
+            {source_group_key:'g1',name_th:'A',name_en:'A',
+             category_id:'12',bundle_id:'100',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:10,price:10}]},
+            {source_group_key:'g2',name_th:'B',name_en:'B',
+             category_id:'12',bundle_id:'200',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:20,price:20}]}
+          ], 'workspace-1');
+          const first = productQueue.items[0];
+          const second = productQueue.items[1];
+          productQueue.active = first.key;
+          renderQueue();
+          window.sent = [];
+          submitProducts = async (entries, doSave) => {
+            window.sent.push({
+              groups: entries.map(entry => entry.source_group_key), doSave});
+            return {
+              ok: true,
+              json: async () => ({
+                results:[{
+                  client_key:entries[0].key,name:entries[0].name_th,
+                  saved:false,made_id:'',missing:[],error:null
+                }],
+                logs:[],created:0,planned:1
+              })
+            };
+          };
+          const before = document.querySelector('#btnCreateOne').disabled;
+          await runPreviewProduct();
+          const afterPreview =
+            document.querySelector('#btnCreateOne').disabled;
+          productQueue.active = second.key;
+          renderQueue();
+          const afterSwitch =
+            document.querySelector('#btnCreateOne').disabled;
+          productQueue.active = first.key;
+          renderQueue();
+          const afterReturn =
+            document.querySelector('#btnCreateOne').disabled;
+          const name = document.querySelector('#nameTh');
+          name.value = 'A edited';
+          name.dispatchEvent(new Event('input', {bubbles:true}));
+          const afterEdit =
+            document.querySelector('#btnCreateOne').disabled;
+          return {
+            before, afterPreview, afterSwitch, afterReturn, afterEdit,
+            sent: window.sent
+          };
+        }""")
+
+        assert result['sent'] == [{'groups': ['g1'], 'doSave': False}]
+        assert result['before'] is True
+        assert result['afterPreview'] is False
+        assert result['afterSwitch'] is True
+        assert result['afterReturn'] is False
+        assert result['afterEdit'] is True
+        browser.close()
+
+
+def test_product_edit_during_preview_does_not_unlock_stale_submission():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        unlocked = page.evaluate("""async () => {
+          addDrafts([{
+            source_group_key:'g1',name_th:'A',name_en:'A',
+            category_id:'12',bundle_id:'100',
+            start_at:'2026-07-30 00:00:00',
+            end_at:'2026-08-30 07:59:00',
+            limit_type:'UNLIMITED',price_candidates:[],
+            prices:[{currency_id:'91',original_price:10,price:10}]
+          }], 'workspace-1');
+          let finishPreview;
+          submitProducts = async entries => new Promise(resolve => {
+            finishPreview = () => resolve({
+              ok:true,
+              json:async () => ({
+                results:[{
+                  client_key:entries[0].key,name:'A',saved:false,
+                  made_id:'',missing:[],error:null
+                }],
+                logs:[],created:0,planned:1
+              })
+            });
+          });
+          const pending = runPreviewProduct();
+          await Promise.resolve();
+          const name = document.querySelector('#nameTh');
+          name.value = 'A edited while waiting';
+          name.dispatchEvent(new Event('input', {bubbles:true}));
+          finishPreview();
+          await pending;
+          return !document.querySelector('#btnCreateOne').disabled;
+        }""")
+
+        assert unlocked is False
         browser.close()
 
 
@@ -539,7 +651,7 @@ def test_submit_products_sends_json_and_memory_images_as_multipart():
         browser.close()
 
 
-def test_create_uses_checked_entries_confirms_and_updates_product_ids():
+def test_create_active_product_uses_only_matching_previewed_entry():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
@@ -550,49 +662,114 @@ def test_create_uses_checked_entries_confirms_and_updates_product_ids():
              start_at:'2026-07-30 00:00:00',
              end_at:'2026-08-30 07:59:00',
              limit_type:'UNLIMITED',price_candidates:[],
-             prices:[{currency_id:'91',original_price:10,price:10}],
-             selected:true},
+             prices:[{currency_id:'91',original_price:10,price:10}]},
             {source_group_key:'g2',name_th:'B',name_en:'B',
              category_id:'12',bundle_id:'200',
              start_at:'2026-07-30 00:00:00',
              end_at:'2026-08-30 07:59:00',
              limit_type:'UNLIMITED',price_candidates:[],
-             prices:[{currency_id:'91',original_price:20,price:20}],
-             selected:false}
+             prices:[{currency_id:'91',original_price:20,price:20}]}
+          ], 'workspace-1');
+          productQueue.active = productQueue.items[0].key;
+          renderQueue();
+          window.confirmText = '';
+          window.confirm = text => { window.confirmText = text; return true; };
+          window.sent = [];
+          submitProducts = async (entries, doSave) => {
+            window.sent.push({
+              groups: entries.map(entry => entry.source_group_key), doSave});
+            return {
+              ok: true,
+              json: async () => ({
+                results:[{
+                  client_key:entries[0].key,name:'A',saved:doSave,
+                  made_id:doSave ? '501' : '',missing:[],error:null
+                }],
+                logs:[],created:doSave ? 1 : 0,planned:1
+              })
+            };
+          };
+          await runPreviewProduct();
+          const unlocked = !document.querySelector('#btnCreateOne').disabled;
+          await runActiveProduct();
+          const first = productQueue.items.find(
+            entry => entry.source_group_key === 'g1');
+          return {
+            confirmText: window.confirmText,
+            sent: window.sent,
+            unlocked,
+            first: {status:first.status,product_id:first.product_id}
+          };
+        }""")
+
+        assert '1 Product' in result['confirmText']
+        assert result['unlocked'] is True
+        assert result['sent'] == [
+            {'groups': ['g1'], 'doSave': False},
+            {'groups': ['g1'], 'doSave': True},
+        ]
+        assert result['first'] == {'status': 'created', 'product_id': '501'}
+        browser.close()
+
+
+def test_create_all_counts_and_submits_only_uncreated_products_in_queue_order():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""async () => {
+          addDrafts([
+            {source_group_key:'g1',name_th:'Already made',name_en:'Made',
+             category_id:'12',bundle_id:'100',product_id:'500',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:10,price:10}]},
+            {source_group_key:'g2',name_th:'Second',name_en:'Second',
+             category_id:'12',bundle_id:'200',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:20,price:20}]},
+            {source_group_key:'g3',name_th:'Third',name_en:'Third',
+             category_id:'12',bundle_id:'300',
+             start_at:'2026-07-30 00:00:00',
+             end_at:'2026-08-30 07:59:00',
+             limit_type:'UNLIMITED',price_candidates:[],
+             prices:[{currency_id:'91',original_price:30,price:30}]}
           ], 'workspace-1');
           window.confirmText = '';
           window.confirm = text => { window.confirmText = text; return true; };
           window.sent = null;
           submitProducts = async (entries, doSave) => {
-            window.sent = {keys: entries.map(entry => entry.key), doSave};
+            window.sent = {
+              groups:entries.map(entry => entry.source_group_key), doSave};
             return {
-              ok: true,
-              json: async () => ({
-                results:[{
-                  client_key:entries[0].key,name:'A',saved:true,
-                  made_id:'501',missing:[],error:null
-                }],
-                logs:[],created:1,planned:1
+              ok:true,
+              json:async () => ({
+                results:entries.map((entry, index) => ({
+                  client_key:entry.key,name:entry.name_th,saved:true,
+                  made_id:String(601 + index),missing:[],error:null
+                })),
+                logs:[],created:entries.length,planned:entries.length
               })
             };
           };
-          await runSelectedProducts();
-          const first = productQueue.items.find(
-            entry => entry.source_group_key === 'g1');
-          const second = productQueue.items.find(
-            entry => entry.source_group_key === 'g2');
-          second.status = 'failed';
+          const buttonText = document.querySelector('#btnCreateAll').textContent;
+          await runAllProducts();
           return {
-            confirmText: window.confirmText,
-            sent: window.sent,
-            first: {status:first.status,product_id:first.product_id},
-            retry: retryableProducts().map(entry => entry.source_group_key)
+            buttonText,
+            confirmText:window.confirmText,
+            sent:window.sent,
+            ids:productQueue.items.map(entry => entry.product_id || '')
           };
         }""")
 
-        assert '1 Product' in result['confirmText']
-        assert result['sent']['doSave'] is True
-        assert len(result['sent']['keys']) == 1
-        assert result['first'] == {'status': 'created', 'product_id': '501'}
-        assert result['retry'] == ['g2']
+        assert '(2)' in result['buttonText']
+        assert '2 Product' in result['confirmText']
+        assert 'Second' in result['confirmText']
+        assert 'Third' in result['confirmText']
+        assert 'Already made' not in result['confirmText']
+        assert result['sent'] == {
+            'groups': ['g2', 'g3'], 'doSave': True}
+        assert result['ids'] == ['500', '601', '602']
         browser.close()

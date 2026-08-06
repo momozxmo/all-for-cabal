@@ -5,7 +5,8 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from web import security
-from web.models import AztekSession, PairingToken, utc_now
+from web.aztek_sessions import (AztekSessionService, InvalidStorageState)
+from web.models import AztekSession, PairingToken, User, utc_now
 
 
 SECRET_COOKIE_VALUE = 'top-secret-aztek-cookie'
@@ -241,3 +242,49 @@ def test_pairing_reconnect_replaces_prior_session(client, anonymous_client, memb
         assert rows[0].account_label == 'second'
         assert (security.decrypt_storage_state(rows[0].encrypted_state, test_settings)
                 == second_state)
+
+
+def test_save_storage_state_reactivates_and_replaces_one_user_session(
+        member, test_database, test_settings):
+    """Duplicating instead of replacing would leave runners with stale state."""
+    service = AztekSessionService(test_settings)
+    first = valid_storage_state()
+    second = valid_storage_state()
+    second['cookies'][0]['value'] = 'replacement-http-only-cookie'
+
+    with test_database.session() as db:
+        service.save_storage_state(db, member.id, first, 'old')
+        service.mark_expired(db, db.get(User, member.id))
+        saved = service.save_storage_state(db, member.id, second, 'local')
+        assert saved.status == 'active'
+        assert saved.account_label == 'local'
+
+    with test_database.session() as db:
+        rows = db.scalars(select(AztekSession).where(
+            AztekSession.user_id == member.id)).all()
+        assert len(rows) == 1
+        assert security.decrypt_storage_state(
+            rows[0].encrypted_state, test_settings) == second
+
+
+def test_invalid_storage_keeps_pairing_token_pending(
+        client, member, test_database, test_settings):
+    """A failed capture must not burn the operator's single-use token."""
+    token = issue_pairing_token(client)
+    service = AztekSessionService(test_settings)
+    invalid = valid_storage_state()
+    invalid['cookies'] = []
+
+    with test_database.session() as db:
+        try:
+            service.consume_pairing_token(db, token, invalid)
+        except InvalidStorageState:
+            pass
+        else:
+            raise AssertionError('invalid storage state was accepted')
+
+    with test_database.session() as db:
+        record = db.scalar(select(PairingToken).where(
+            PairingToken.user_id == member.id))
+        assert record.status == 'pending'
+        assert record.used_at is None

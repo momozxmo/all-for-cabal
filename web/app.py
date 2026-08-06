@@ -33,8 +33,13 @@ from web.audit import write_audit  # noqa: E402
 from web.auth_service import AuthService  # noqa: E402
 from web.aztek_sessions import (AztekSessionService, InvalidStorageState,  # noqa: E402
                                 PairingTokenNotFound, PairingTokenUnavailable)
+from web.browser_gate import BrowserOperationGate  # noqa: E402
 from web.db import Database  # noqa: E402
 from web.local_access import LocalAccessService  # noqa: E402
+from web.local_aztek_capture import (LocalAztekCaptureService,  # noqa: E402
+                                     LocalCaptureClosed,
+                                     LocalCaptureLoginRequired,
+                                     LocalCaptureTimeout)
 from web.models import Job, User, utc_now  # noqa: E402
 from web.search_coordinator import SearchCoordinator  # noqa: E402
 from web.security import hash_password, hash_token, verify_password  # noqa: E402
@@ -668,6 +673,63 @@ def create_pairing_token(request: Request, user: User = Depends(require_user),
     return {'pairing_token': issue.raw_token, 'expires_at': issue.expires_at.isoformat()}
 
 
+@router.post('/api/aztek/local-capture')
+async def capture_local_aztek_session(
+    request: Request,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Capture complete SSO state in visible Chromium on Local Setup only."""
+    if not request.app.state.local_access.enabled_for(_client_host(request)):
+        raise HTTPException(status_code=404)
+
+    # Preview windows intentionally stay open. Close this operator's kept
+    # previews before starting a clean authentication context.
+    from web import activity_runner, bundle_runner
+    await activity_runner.close_kept(str(user.id))
+    await bundle_runner.close_kept(str(user.id))
+
+    try:
+        storage_state = await request.app.state.local_aztek_capture.capture()
+        session = request.app.state.aztek_session_service.save_storage_state(
+            db, user.id, storage_state, 'Local Chromium')
+    except LocalCaptureClosed:
+        detail = 'ปิดหน้าต่าง Aztek ก่อนเชื่อมต่อเสร็จ — session เดิมยังอยู่'
+        failure = 'window_closed'
+    except LocalCaptureTimeout:
+        detail = 'หมดเวลารอเข้าสู่ระบบ Aztek — session เดิมยังอยู่'
+        failure = 'timeout'
+    except LocalCaptureLoginRequired:
+        detail = 'ยังเข้าสู่ระบบ IPA/Aztek ไม่สำเร็จ — session เดิมยังอยู่'
+        failure = 'login_required'
+    except InvalidStorageState:
+        detail = 'ข้อมูล session ที่จับมาไม่สมบูรณ์ — session เดิมยังอยู่'
+        failure = 'invalid_storage_state'
+    except Exception:  # noqa: BLE001 - do not leak browser/session details
+        write_audit(
+            db, user_id=user.id, action='aztek.local_capture',
+            status='failed', summary={'reason': 'browser_error'},
+            tool='aztek', resource_type='aztek_session', resource_id=user.id,
+            request=request)
+        raise HTTPException(
+            status_code=502,
+            detail='เปิด Chromium เพื่อเชื่อม Aztek ไม่สำเร็จ — session เดิมยังอยู่')
+    else:
+        write_audit(
+            db, user_id=user.id, action='aztek.local_capture',
+            status='success', summary={'source': 'local_chromium'},
+            tool='aztek', resource_type='aztek_session', resource_id=user.id,
+            request=request)
+        return {'status': 'connected',
+                'account_label': session.account_label}
+
+    write_audit(
+        db, user_id=user.id, action='aztek.local_capture', status='failed',
+        summary={'reason': failure}, tool='aztek',
+        resource_type='aztek_session', resource_id=user.id, request=request)
+    raise HTTPException(status_code=409, detail=detail)
+
+
 @router.post('/api/aztek/pair')
 def pair_aztek_session(payload: StorageStatePayload, request: Request,
                        db: Session = Depends(get_db)):
@@ -1127,9 +1189,11 @@ async def reward_options(payload: RewardOptionsRequest, request: Request,
 
     logs: list[dict] = []
     try:
-        options = await bundle_runner.fetch_reward_options(
-            payload.game, storage_state,
-            lambda message, level='INFO': logs.append({'msg': message, 'level': level}))
+        async with request.app.state.browser_gate.slot():
+            options = await bundle_runner.fetch_reward_options(
+                payload.game, storage_state,
+                lambda message, level='INFO': logs.append(
+                    {'msg': message, 'level': level}))
     except Exception as exc:
         write_audit(
             db, user_id=user.id, action='bundle.reward_options', status='failed',
@@ -1168,8 +1232,9 @@ async def product_options(
         raise HTTPException(
             status_code=409, detail='ยังไม่ได้เชื่อมเซสชัน Aztek')
     try:
-        options = await product_runner.fetch_options(
-            payload.game, storage_state, kinds)
+        async with request.app.state.browser_gate.slot():
+            options = await product_runner.fetch_options(
+                payload.game, storage_state, kinds)
     except Exception as exc:
         write_audit(
             db, user_id=user.id, action='product.options',
@@ -1465,29 +1530,32 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
     headed = settings.app_env != 'production'
     action = 'bundle.create' if payload.do_save else 'bundle.preview_open'
     try:
-        if payload.do_save:
-            # This run owns the single browser slot, so a window an earlier
-            # preview left standing has to go first.
-            await bundle_runner.close_kept(str(user.id))
-            results = await builder.run_many(
-                game=payload.game, bundles=jobs, storage_state=storage_state,
-                headed=headed)
-        else:
-            job = jobs[0]
-            outcome = await builder.run(
-                game=payload.game, name=job['name'], btype=job['type'],
-                deliver=job['deliver'], items=job['items'],
-                storage_state=storage_state, headed=headed,
-                rewards=job['rewards'], do_save=False,
-                # Keyed per operator so one person's leftover window is the only
-                # one their next run closes.
-                keep_open_key=str(user.id))
-            results = [{'name': job['name'], 'saved': False, 'bundle_id': None,
-                        'added': outcome['added'], 'total': outcome['total'],
-                        'rewards_added': outcome['rewards_added'],
-                        'rewards_total': outcome['rewards_total'],
-                        'error': None, 'kept_open': outcome['kept_open'],
-                        'screenshot': outcome.get('screenshot')}]
+        async with request.app.state.browser_gate.slot():
+            if payload.do_save:
+                # This run owns the single browser slot, so a window an earlier
+                # preview left standing has to go first.
+                await bundle_runner.close_kept(str(user.id))
+                results = await builder.run_many(
+                    game=payload.game, bundles=jobs, storage_state=storage_state,
+                    headed=headed)
+            else:
+                job = jobs[0]
+                outcome = await builder.run(
+                    game=payload.game, name=job['name'], btype=job['type'],
+                    deliver=job['deliver'], items=job['items'],
+                    storage_state=storage_state, headed=headed,
+                    rewards=job['rewards'], do_save=False,
+                    # Keyed per operator so one person's leftover window is the only
+                    # one their next run closes.
+                    keep_open_key=str(user.id))
+                results = [{
+                    'name': job['name'], 'saved': False, 'bundle_id': None,
+                    'added': outcome['added'], 'total': outcome['total'],
+                    'rewards_added': outcome['rewards_added'],
+                    'rewards_total': outcome['rewards_total'],
+                    'error': None, 'kept_open': outcome['kept_open'],
+                    'screenshot': outcome.get('screenshot'),
+                }]
     except Exception as exc:
         write_audit(
             db, user_id=user.id, action=action, status='failed',
@@ -1620,24 +1688,27 @@ async def _run_activity(builder, specs, *, game, do_save, request, db, user,
     if storage_state is None:
         raise HTTPException(status_code=409, detail='ยังไม่ได้เชื่อมเซสชัน Aztek')
     try:
-        if do_save:
-            # This run owns the single browser slot, so a window an earlier
-            # preview left standing has to go first.
-            await activity_runner.close_kept(str(user.id))
-            results = await builder.run_many(
-                game=game, specs=specs, storage_state=storage_state,
-                headed=headed)
-        else:
-            spec = specs[0]
-            outcome = await builder.run(
-                game=game, spec=spec, storage_state=storage_state,
-                headed=headed, keep_open_key=str(user.id))
-            results = [{'name': spec.get('name_th') or spec.get('slug') or '',
-                        'slug': spec.get('slug', ''),
-                        'group': spec.get('group', ''), 'saved': False,
-                        'made_id': None, 'missing': outcome['missing'],
-                        'error': None, 'kept_open': outcome['kept_open'],
-                        'screenshot': outcome.get('screenshot')}]
+        async with request.app.state.browser_gate.slot():
+            if do_save:
+                # This run owns the single browser slot, so a window an earlier
+                # preview left standing has to go first.
+                await activity_runner.close_kept(str(user.id))
+                results = await builder.run_many(
+                    game=game, specs=specs, storage_state=storage_state,
+                    headed=headed)
+            else:
+                spec = specs[0]
+                outcome = await builder.run(
+                    game=game, spec=spec, storage_state=storage_state,
+                    headed=headed, keep_open_key=str(user.id))
+                results = [{
+                    'name': spec.get('name_th') or spec.get('slug') or '',
+                    'slug': spec.get('slug', ''),
+                    'group': spec.get('group', ''), 'saved': False,
+                    'made_id': None, 'missing': outcome['missing'],
+                    'error': None, 'kept_open': outcome['kept_open'],
+                    'screenshot': outcome.get('screenshot'),
+                }]
     except Exception as exc:
         write_audit(
             db, user_id=user.id, action=action, status='failed',
@@ -1931,8 +2002,12 @@ def create_app(
         monotonic_clock,
     )
     aztek_session_service = AztekSessionService(resolved_settings)
+    browser_gate = BrowserOperationGate(resolved_settings.browser_concurrency)
+    local_aztek_capture = LocalAztekCaptureService(
+        resolved_settings, browser_gate)
     search_coordinator = SearchCoordinator(
-        resolved_database, resolved_settings, aztek_session_service)
+        resolved_database, resolved_settings, aztek_session_service,
+        browser_gate=browser_gate)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -1952,6 +2027,8 @@ def create_app(
     application.state.auth_service = auth_service
     application.state.local_access = local_access
     application.state.aztek_session_service = aztek_session_service
+    application.state.browser_gate = browser_gate
+    application.state.local_aztek_capture = local_aztek_capture
     application.state.search_coordinator = search_coordinator
     application.state.login_throttle = LoginThrottle(monotonic_clock)
     application.state.pairing_throttle = LoginThrottle(monotonic_clock)

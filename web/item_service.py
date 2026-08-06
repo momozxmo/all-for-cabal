@@ -145,7 +145,7 @@ def parser_for_mode(mode):
 
 def mode_policy(mode):
     policies = {
-        'event': {'web_mode': 'any', 'web_locked': False, 'read_desc': False},
+        'event': {'web_mode': 'no', 'web_locked': False, 'read_desc': False},
         'itemcode': {'web_mode': 'no', 'web_locked': True, 'read_desc': False},
         'shop': {'web_mode': 'no', 'web_locked': False, 'read_desc': True},
     }

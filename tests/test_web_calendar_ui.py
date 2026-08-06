@@ -116,8 +116,9 @@ def test_local_mode_account_page_keeps_only_aztek_controls():
         assert hosted_sections.count() == 2
         for index in range(hosted_sections.count()):
             assert not hosted_sections.nth(index).is_visible()
-        assert page.locator('#bookmarklet').is_visible()
-        assert page.locator('#createPairingButton').is_visible()
+        assert page.locator('#localCaptureButton').is_visible()
+        assert not page.locator('#bookmarklet').is_visible()
+        assert not page.locator('#createPairingButton').is_visible()
         assert page.locator('#disconnectAztekButton').is_visible()
         browser.close()
 
@@ -425,18 +426,29 @@ def test_item_finder_shows_only_the_handoff_for_the_selected_mode():
         page.set_content(
             INDEX.read_text(encoding='utf-8'), wait_until='domcontentloaded')
         page.wait_for_function("typeof applyMode === 'function'")
+        page.evaluate("""state.modes = {
+          event:{web_mode:'no',web_locked:false},
+          itemcode:{web_mode:'no',web_locked:true},
+          shop:{web_mode:'no',web_locked:false}
+        }""")
 
         page.evaluate("applyMode('event', false)")
+        assert page.locator('#webNo').is_checked()
+        assert page.locator('input[name=webMode]:disabled').count() == 0
         assert page.locator('#btnToEvent').is_visible()
         assert not page.locator('#btnToItemCode').is_visible()
         assert not page.locator('#btnToProduct').is_visible()
 
         page.evaluate("applyMode('itemcode', false)")
+        assert page.locator('#webNo').is_checked()
+        assert page.locator('input[name=webMode]:disabled').count() == 3
         assert page.locator('#btnToItemCode').is_visible()
         assert not page.locator('#btnToEvent').is_visible()
         assert not page.locator('#btnToProduct').is_visible()
 
         page.evaluate("applyMode('shop', false)")
+        assert page.locator('#webNo').is_checked()
+        assert page.locator('input[name=webMode]:disabled').count() == 0
         assert not page.locator('#btnToItemCode').is_visible()
         assert not page.locator('#btnToEvent').is_visible()
         assert page.locator('#btnToProduct').is_visible()

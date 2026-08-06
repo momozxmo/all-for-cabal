@@ -54,11 +54,6 @@
     .tag-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
     .warning-list{margin:0 0 14px;padding:10px 12px 10px 29px;border:1px solid rgba(242,182,75,.45);
       border-radius:9px;background:#302711;color:var(--yellow);font-size:12px}
-    .sticky-actions{position:sticky;z-index:20;bottom:0;border:1px solid var(--edge);
-      border-radius:12px;background:rgba(13,17,26,.96);box-shadow:0 -12px 32px rgba(0,0,0,.35);
-      padding:13px 15px;backdrop-filter:blur(10px)}
-    .run-row{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-    .run-modes,.run-buttons{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
     .sheet-row{display:flex;align-items:center;gap:9px}
     @media(max-width:1100px){
       .product-layout{grid-template-columns:1fr}
@@ -244,21 +239,17 @@
       </div>
     </section>
 
-    <section class="sticky-actions" aria-label="ส่ง Product">
-      <div class="run-row">
-        <div class="run-modes">
-          <b>โหมด</b>
-          <label><input id="runModePreview" name="runMode" type="radio" value="preview" checked> กรอกเพื่อตรวจสอบ</label>
-          <label><input id="runModeCreate" name="runMode" type="radio" value="create"> สร้างจริง</label>
-          <label><input id="selectForRun" type="checkbox"> เลือก Product นี้สำหรับสร้างจริง</label>
+    <section class="card" aria-label="ส่ง Product">
+      <div class="card-head"><h2>สร้างบนเว็บจริง</h2></div>
+      <div class="card-body">
+        <div class="result-actions">
+          <button id="btnPreview" class="primary" type="button" disabled>👁 เปิดหน้าเว็บดูก่อน (อันที่เลือก)</button>
+          <button id="btnCreateOne" class="success" type="button" disabled>🚀 สร้างจริง (อันที่เลือก)</button>
+          <button id="btnCreateAll" class="warn" type="button" disabled>⚡ สร้างทุกอันในคิว (0)</button>
         </div>
-        <div class="run-buttons">
-          <button id="btnPreview" class="primary" type="button">👁 กรอก Product นี้เพื่อตรวจสอบ</button>
-          <button id="btnCreateSelected" class="warn" type="button" hidden>🚀 สร้าง Product ที่เลือก</button>
-        </div>
+        <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
+        <div id="productResults"></div>
       </div>
-      <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
-      <div id="productResults"></div>
     </section>
 
     <section class="card">
@@ -292,6 +283,9 @@ const optionState = {
   currencies: {options: [], fetched_at: '', loading: false, warning: ''},
   categories: {options: [], fetched_at: '', loading: false, warning: ''},
 };
+const previewedProductKeys = new Set();
+const productEditRevisions = new Map();
+let productRunBusy = false;
 
 function normalizeOptionText(value) {
   return String(value || '')
@@ -568,6 +562,43 @@ function rememberImage(entryKey, slot, file) {
   renderImageNames();
 }
 
+function pendingProducts() {
+  return productQueue.items.filter(entry => !entry.product_id);
+}
+
+function paintRunActions() {
+  const entry = productQueue.current();
+  const pending = pendingProducts();
+  const liveKeys = new Set(pending.map(item => item.key));
+  for (const key of previewedProductKeys) {
+    if (!liveKeys.has(key)) previewedProductKeys.delete(key);
+  }
+  $('btnPreview').disabled = productRunBusy || !entry || !!entry.product_id;
+  $('btnCreateOne').disabled = productRunBusy || !entry
+    || !!entry.product_id || !previewedProductKeys.has(entry.key);
+  $('btnCreateAll').disabled = productRunBusy || !pending.length;
+  $('btnCreateAll').textContent =
+    `⚡ สร้างทุกอันในคิว (${pending.length})`;
+}
+
+function invalidateProductPreview(entry) {
+  if (entry) {
+    previewedProductKeys.delete(entry.key);
+    productEditRevisions.set(
+      entry.key, (productEditRevisions.get(entry.key) || 0) + 1);
+  }
+  paintRunActions();
+}
+
+function invalidateAllProductPreviews() {
+  previewedProductKeys.clear();
+  for (const entry of productQueue.items) {
+    productEditRevisions.set(
+      entry.key, (productEditRevisions.get(entry.key) || 0) + 1);
+  }
+  paintRunActions();
+}
+
 function renderQueue() {
   const pick = $('productQueue');
   pick.replaceChildren();
@@ -591,8 +622,6 @@ function renderQueue() {
   $('editor').hidden = !entry;
   $('btnQueueDel').disabled = !entry;
   $('btnQueueClear').disabled = !productQueue.items.length;
-  $('selectForRun').disabled = !entry;
-  $('selectForRun').checked = !!entry?.selected;
   activeWorkspaceId = entry?.workspace_id || activeWorkspaceId || '';
   $('btnDeleteWorkspace').disabled = !activeWorkspaceId;
   if (entry) {
@@ -625,6 +654,7 @@ function renderQueue() {
   renderImageNames();
   renderProductOptions(entry);
   renderOptionStatus();
+  paintRunActions();
 }
 
 function addLiveOptions(select, options, selectedId, placeholder) {
@@ -992,6 +1022,7 @@ function applyProductResults(data, doSave) {
       entry.status = 'created';
       entry.product_id = String(result.made_id);
       entry.selected = false;
+      previewedProductKeys.delete(entry.key);
     } else if (doSave) {
       entry.status = 'failed';
     } else {
@@ -1051,22 +1082,35 @@ function appendRunLogs(data) {
 
 async function runPreviewProduct() {
   const entry = productQueue.current();
+  const previewRevision = entry
+    ? (productEditRevisions.get(entry.key) || 0) : 0;
   const problem = runnableError(entry ? [entry] : []);
   if (problem) {
     $('runMsg').textContent = problem;
     return;
   }
-  $('btnPreview').disabled = true;
+  productRunBusy = true;
+  paintRunActions();
   $('runMsg').textContent = 'กำลังเปิดหน้า Product และกรอกข้อมูลเพื่อตรวจสอบ…';
   try {
     const data = await responseData(
       await submitProducts([entry], false));
     appendRunLogs(data);
     applyProductResults(data, false);
+    const stillCurrent = productQueue.items.some(
+      item => item.key === entry.key && !item.product_id);
+    if (stillCurrent
+        && (productEditRevisions.get(entry.key) || 0) === previewRevision) {
+      previewedProductKeys.add(entry.key);
+    } else {
+      previewedProductKeys.delete(entry.key);
+    }
+    paintRunActions();
     $('runMsg').textContent = data.results?.[0]?.missing?.length
       ? 'กรอกแล้ว แต่ยังมีช่องที่ต้องตรวจ'
       : 'กรอก Product แล้ว — ยังไม่ได้กดสร้าง';
   } catch (error) {
+    previewedProductKeys.delete(entry.key);
     entry.status = 'failed';
     entry.last_result = {saved: false, made_id: '', missing: [], error: error.message};
     productQueue.save();
@@ -1074,7 +1118,8 @@ async function runPreviewProduct() {
     $('runMsg').textContent = error.message;
     log(error.message, 'ERROR');
   } finally {
-    $('btnPreview').disabled = false;
+    productRunBusy = false;
+    paintRunActions();
   }
 }
 
@@ -1085,7 +1130,8 @@ async function runCreatedProducts(entries, message) {
     return;
   }
   if (!confirm(message)) return;
-  $('btnCreateSelected').disabled = true;
+  productRunBusy = true;
+  paintRunActions();
   $('runMsg').textContent = `กำลังสร้าง ${entries.length} Product…`;
   try {
     const data = await responseData(await submitProducts(entries, true));
@@ -1097,19 +1143,32 @@ async function runCreatedProducts(entries, message) {
     $('runMsg').textContent = error.message;
     log(error.message, 'ERROR');
   } finally {
-    $('btnCreateSelected').disabled = false;
+    productRunBusy = false;
+    paintRunActions();
   }
 }
 
-async function runSelectedProducts() {
-  const entries = productQueue.items.filter(
-    entry => entry.selected && !entry.product_id);
+function createConfirmation(entries, verb = 'สร้างจริงบน Aztek') {
   const names = entries.map(
     entry => entry.name_th || entry.name_en || 'Product').join('\n- ');
-  return runCreatedProducts(
-    entries,
-    `สร้างจริงบน Aztek ${entries.length} Product ใช่ไหม?`
-      + (names ? `\n\n- ${names}` : ''));
+  return `${verb} ${entries.length} Product ใช่ไหม?`
+    + (names ? `\n\n- ${names}` : '');
+}
+
+async function runActiveProduct() {
+  const entry = productQueue.current();
+  if (!entry || entry.product_id || !previewedProductKeys.has(entry.key)) {
+    $('runMsg').textContent =
+      'กรุณาเปิดหน้าเว็บดูก่อน แล้วจึงสร้าง Product อันที่เลือก';
+    paintRunActions();
+    return;
+  }
+  return runCreatedProducts([entry], createConfirmation([entry]));
+}
+
+async function runAllProducts() {
+  const entries = pendingProducts();
+  return runCreatedProducts(entries, createConfirmation(entries));
 }
 
 async function runRetryProducts() {
@@ -1117,12 +1176,6 @@ async function runRetryProducts() {
   return runCreatedProducts(
     entries,
     `ลองสร้างใหม่เฉพาะ ${entries.length} Product ที่ยังไม่มี Product ID ใช่ไหม?`);
-}
-
-function paintRunMode() {
-  const create = $('runModeCreate').checked;
-  $('btnPreview').hidden = create;
-  $('btnCreateSelected').hidden = !create;
 }
 
 function bindValue(id, field, checkbox = false) {
@@ -1135,6 +1188,12 @@ function bindValue(id, field, checkbox = false) {
     if (field === 'name_th' || field === 'name_en') updateQueueOption(entry);
   });
 }
+
+['input', 'change'].forEach(eventName => {
+  $('editor').addEventListener(eventName, () => {
+    invalidateProductPreview(productQueue.current());
+  });
+});
 
 $('productQueue').onchange = () => {
   productQueue.active = $('productQueue').value;
@@ -1204,6 +1263,7 @@ $('btnUseWorkbookBundle').onclick = () => {
   entry.bundle_source = 'workbook';
   delete entry.bundle_conflict;
   productQueue.save();
+  invalidateProductPreview(entry);
   renderBundle(entry);
 };
 $('btnUseCreatedBundle').onclick = () => {
@@ -1213,14 +1273,8 @@ $('btnUseCreatedBundle').onclick = () => {
   entry.bundle_source = 'created';
   delete entry.bundle_conflict;
   productQueue.save();
+  invalidateProductPreview(entry);
   renderBundle(entry);
-};
-$('selectForRun').onchange = () => {
-  const entry = productQueue.current();
-  if (entry) {
-    entry.selected = $('selectForRun').checked;
-    productQueue.save();
-  }
 };
 
 document.querySelectorAll('[data-product-tag]').forEach(box => {
@@ -1265,10 +1319,9 @@ $('btnApplySheets').onclick = () =>
 document.querySelectorAll('[data-close]').forEach(
   button => button.onclick = () => $(button.dataset.close).close());
 
-$('runModePreview').onchange = paintRunMode;
-$('runModeCreate').onchange = paintRunMode;
 $('btnPreview').onclick = runPreviewProduct;
-$('btnCreateSelected').onclick = runSelectedProducts;
+$('btnCreateOne').onclick = runActiveProduct;
+$('btnCreateAll').onclick = runAllProducts;
 $('btnRefreshCategories').onclick = () =>
   ensureOptions('categories', true).catch(
     error => log(error.message, 'ERROR'));
@@ -1282,6 +1335,7 @@ $('btnLogout').onclick = async () => {
 };
 
 $('game').addEventListener('change', async () => {
+  invalidateAllProductPreviews();
   try { localStorage.setItem(GAME_KEY, $('game').value); } catch (error) {}
   optionState.categories = {
     options: [], fetched_at: '', loading: false, warning: ''};
@@ -1295,7 +1349,6 @@ $('game').addEventListener('change', async () => {
 
 async function bootProductPage() {
   attachPickers();
-  paintRunMode();
   renderQueue();
   try {
     const [meResponse, gamesResponse, statusResponse] = await Promise.all([

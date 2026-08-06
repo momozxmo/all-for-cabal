@@ -18,7 +18,7 @@ import item_finder  # noqa: E402
 
 
 def test_mode_policy_matches_desktop():
-    assert svc.mode_policy('event') == {'web_mode': 'any', 'web_locked': False,
+    assert svc.mode_policy('event') == {'web_mode': 'no', 'web_locked': False,
                                         'read_desc': False}
     assert svc.mode_policy('itemcode') == {'web_mode': 'no', 'web_locked': True,
                                            'read_desc': False}
