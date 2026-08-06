@@ -58,9 +58,11 @@ class SuccessfulCapture:
     def __init__(self, state):
         self.state = state
         self.called = 0
+        self.seed_state = None
 
-    async def capture(self):
+    async def capture(self, seed_state=None):
         self.called += 1
+        self.seed_state = seed_state
         return self.state
 
 
@@ -68,7 +70,7 @@ class FailingCapture:
     def __init__(self):
         self.called = 0
 
-    async def capture(self):
+    async def capture(self, seed_state=None):
         self.called += 1
         raise LocalCaptureTimeout()
 
@@ -92,6 +94,26 @@ def test_local_capture_endpoint_saves_complete_state(
         assert security.decrypt_storage_state(
             session.encrypted_state, application.state.settings
         ) == storage_state()
+
+
+def test_local_capture_seeds_browser_with_expired_encrypted_session(
+        test_settings, test_database):
+    application = local_application(test_settings, test_database)
+    client = signed_in_local_client(application)
+    old_state = storage_state('old-sso-cookie')
+    with test_database.session() as db:
+        owner = db.scalar(select(User).where(User.username == 'local.owner'))
+        application.state.aztek_session_service.save_storage_state(
+            db, owner.id, old_state, 'old')
+        application.state.aztek_session_service.mark_expired(db, owner)
+
+    capture = SuccessfulCapture(storage_state('fresh-cookie'))
+    application.state.local_aztek_capture = capture
+
+    response = client.post('/api/aztek/local-capture')
+
+    assert response.status_code == 200
+    assert capture.seed_state == old_state
 
 
 def test_hosted_mode_rejects_local_capture_before_browser_runs(

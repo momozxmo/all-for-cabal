@@ -690,8 +690,12 @@ async def capture_local_aztek_session(
     await bundle_runner.close_kept(str(user.id))
 
     try:
-        storage_state = await request.app.state.local_aztek_capture.capture()
-        session = request.app.state.aztek_session_service.save_storage_state(
+        session_service = request.app.state.aztek_session_service
+        seed_state = session_service.load_storage_state_for_reconnect(
+            db, user)
+        storage_state = await request.app.state.local_aztek_capture.capture(
+            seed_state)
+        session = session_service.save_storage_state(
             db, user.id, storage_state, 'Local Chromium')
     except LocalCaptureClosed:
         detail = 'ปิดหน้าต่าง Aztek ก่อนเชื่อมต่อเสร็จ — session เดิมยังอยู่'
