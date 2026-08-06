@@ -6,11 +6,13 @@ from urllib.parse import urlsplit
 
 from playwright.async_api import async_playwright
 
-import item_finder
 from web import browser_launch, search_runner
 from web.aztek_sessions import validate_storage_state
 from web.browser_gate import BrowserOperationGate
 from web.settings import Settings
+
+
+_AZTEK_INIT_URL = 'https://aztek-tools-v2.combo-interactive.com/init'
 
 
 class LocalCaptureError(RuntimeError):
@@ -48,10 +50,9 @@ class LocalAztekCaptureService:
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.settle_milliseconds = max(0, int(settle_milliseconds))
         self.poll_milliseconds = max(0, int(poll_milliseconds))
-        self.target_url = search_runner.to_web_url(
-            item_finder.GAMES[item_finder.GAME_NAMES[0]])
+        self.target_url = _AZTEK_INIT_URL
 
-    async def capture(self) -> dict:
+    async def capture(self, seed_state: dict | None = None) -> dict:
         """Return validated state only after the same context passes a probe."""
         browser = None
         context = None
@@ -60,15 +61,23 @@ class LocalAztekCaptureService:
                 try:
                     browser = await playwright.chromium.launch(
                         **browser_launch.launch_kwargs(True))
+                    context_options = (
+                        {'storage_state': seed_state}
+                        if seed_state is not None else {}
+                    )
                     context = await browser.new_context(
-                        **browser_launch.context_kwargs(True))
+                        **browser_launch.context_kwargs(
+                            True, **context_options))
                     page = await context.new_page()
                     await page.goto(
                         self.target_url,
                         wait_until='domcontentloaded',
                         timeout=30000,
                     )
-                    await self._wait_for_authenticated_app(page)
+                    await self._wait_for_authenticated_app(
+                        page,
+                        allow_initial_authenticated=seed_state is not None,
+                    )
 
                     # A second navigation proves that SSO survives a fresh app
                     # request rather than accepting a transient pre-redirect URL.
@@ -92,15 +101,25 @@ class LocalAztekCaptureService:
                     if browser is not None:
                         await browser.close()
 
-    async def _wait_for_authenticated_app(self, page) -> None:
+    async def _wait_for_authenticated_app(
+        self,
+        page,
+        *,
+        allow_initial_authenticated: bool = False,
+    ) -> None:
         deadline = asyncio.get_running_loop().time() + self.timeout_seconds
         saw_login_page = False
+        if allow_initial_authenticated:
+            await page.wait_for_timeout(self.settle_milliseconds)
         while True:
             if page.is_closed():
                 raise LocalCaptureClosed()
             if await search_runner.is_login_page(page):
                 saw_login_page = True
-            elif saw_login_page and await self._is_authenticated_app(page):
+            elif (
+                (allow_initial_authenticated or saw_login_page)
+                and await self._is_authenticated_app(page)
+            ):
                 return
             if asyncio.get_running_loop().time() >= deadline:
                 raise LocalCaptureTimeout()

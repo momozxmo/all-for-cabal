@@ -15,6 +15,7 @@ from web.local_aztek_capture import (
 
 
 LOGIN_URL = 'https://dex.combo-interactive.com/auth/ldap/login?back=1'
+AZTEK_INIT_URL = 'https://aztek-tools-v2.combo-interactive.com/init'
 AZTEK_ITEMS_URL = (
     'https://aztek-tools-v2.combo-interactive.com/combo/cabal/items')
 
@@ -43,8 +44,10 @@ class FakePage:
         self._wait_urls = list(wait_urls)
         self._closed = closed
         self.url = ''
+        self.requested_urls = []
 
-    async def goto(self, _url, **_kwargs):
+    async def goto(self, url, **_kwargs):
+        self.requested_urls.append(url)
         if self._goto_urls:
             self.url = self._goto_urls.pop(0)
 
@@ -80,8 +83,10 @@ class FakeBrowser:
     def __init__(self, context):
         self.context = context
         self.closed = False
+        self.new_context_calls = []
 
-    async def new_context(self, **_kwargs):
+    async def new_context(self, **kwargs):
+        self.new_context_calls.append(kwargs)
         return self.context
 
     async def close(self):
@@ -119,7 +124,7 @@ def local_settings(test_settings):
     )
 
 
-def run_capture(test_settings, fake, *, timeout=300):
+def run_capture(test_settings, fake, *, timeout=300, seed_state=None):
     service = LocalAztekCaptureService(
         local_settings(test_settings),
         BrowserOperationGate(1),
@@ -128,7 +133,8 @@ def run_capture(test_settings, fake, *, timeout=300):
         settle_milliseconds=0,
         poll_milliseconds=0,
     )
-    return asyncio.run(service.capture())
+    capture = service.capture() if seed_state is None else service.capture(seed_state)
+    return asyncio.run(capture)
 
 
 def test_capture_returns_complete_http_only_state_after_live_app_check(
@@ -162,6 +168,46 @@ def test_capture_waits_through_transient_aztek_page_and_ipa_login(
     assert state == complete_storage_state()
     assert fake.context.closed is True
     assert fake.browser.closed is True
+
+
+def test_capture_uses_game_neutral_init_for_login_and_probe(test_settings):
+    page = FakePage(
+        [LOGIN_URL, AZTEK_INIT_URL],
+        wait_urls=[AZTEK_INIT_URL],
+    )
+    fake = FakePlaywright(page)
+
+    run_capture(test_settings, fake)
+
+    assert page.requested_urls == [AZTEK_INIT_URL, AZTEK_INIT_URL]
+
+
+def test_seeded_authenticated_context_skips_login_page(test_settings):
+    page = FakePage([AZTEK_INIT_URL, AZTEK_INIT_URL])
+    state = complete_storage_state()
+    fake = FakePlaywright(page, state)
+
+    result = run_capture(test_settings, fake, seed_state=state)
+
+    assert result == state
+    assert fake.browser.new_context_calls == [{
+        'no_viewport': True,
+        'storage_state': state,
+    }]
+
+
+def test_expired_seed_waits_for_login_in_the_same_browser(test_settings):
+    page = FakePage(
+        [AZTEK_INIT_URL, AZTEK_INIT_URL],
+        wait_urls=[LOGIN_URL, AZTEK_INIT_URL],
+    )
+    state = complete_storage_state()
+    fake = FakePlaywright(page, state)
+
+    result = run_capture(test_settings, fake, seed_state=state)
+
+    assert result == state
+    assert page.requested_urls == [AZTEK_INIT_URL, AZTEK_INIT_URL]
 
 
 def test_capture_reports_closed_window_and_cleans_up(test_settings):
