@@ -16,6 +16,10 @@ from web.local_aztek_capture import (
 
 LOGIN_URL = 'https://dex.combo-interactive.com/auth/ldap/login?back=1'
 AZTEK_INIT_URL = 'https://aztek-tools-v2.combo-interactive.com/init'
+AZTEK_OAUTH_CALLBACK_URL = (
+    'https://aztek-tools-v2.combo-interactive.com/oauth/callback?code=hidden')
+AZTEK_DASHBOARD_URL = (
+    'https://aztek-tools-v2.combo-interactive.com/combo/dashboard')
 AZTEK_ITEMS_URL = (
     'https://aztek-tools-v2.combo-interactive.com/combo/cabal/items')
 
@@ -61,6 +65,34 @@ class FakePage:
 
     async def evaluate(self, _script):
         return False
+
+
+class OAuthCallbackThenDashboardPage(FakePage):
+    """Model the live callback that must finish before probing /init again."""
+
+    def __init__(self):
+        super().__init__([])
+        self._goto_count = 0
+        self._reached_dashboard = False
+
+    async def goto(self, url, **_kwargs):
+        self.requested_urls.append(url)
+        self._goto_count += 1
+        if self._goto_count == 1:
+            self.url = LOGIN_URL
+        elif self._reached_dashboard:
+            self.url = AZTEK_DASHBOARD_URL
+        else:
+            self.url = LOGIN_URL
+
+    async def wait_for_timeout(self, _milliseconds):
+        if self._goto_count == 1:
+            if self.url == LOGIN_URL:
+                self.url = AZTEK_OAUTH_CALLBACK_URL
+            elif self.url == AZTEK_OAUTH_CALLBACK_URL:
+                self.url = AZTEK_DASHBOARD_URL
+                self._reached_dashboard = True
+        await asyncio.sleep(0)
 
 
 class FakeContext:
@@ -170,10 +202,22 @@ def test_capture_waits_through_transient_aztek_page_and_ipa_login(
     assert fake.browser.closed is True
 
 
+def test_capture_waits_for_oauth_callback_to_reach_dashboard(test_settings):
+    page = OAuthCallbackThenDashboardPage()
+    state = complete_storage_state()
+    fake = FakePlaywright(page, state)
+
+    result = run_capture(test_settings, fake, seed_state=state)
+
+    assert result == state
+    assert page.requested_urls == [AZTEK_INIT_URL, AZTEK_INIT_URL]
+    assert page._reached_dashboard is True
+
+
 def test_capture_uses_game_neutral_init_for_login_and_probe(test_settings):
     page = FakePage(
-        [LOGIN_URL, AZTEK_INIT_URL],
-        wait_urls=[AZTEK_INIT_URL],
+        [LOGIN_URL, AZTEK_DASHBOARD_URL],
+        wait_urls=[AZTEK_DASHBOARD_URL],
     )
     fake = FakePlaywright(page)
 
@@ -183,7 +227,7 @@ def test_capture_uses_game_neutral_init_for_login_and_probe(test_settings):
 
 
 def test_seeded_authenticated_context_skips_login_page(test_settings):
-    page = FakePage([AZTEK_INIT_URL, AZTEK_INIT_URL])
+    page = FakePage([AZTEK_DASHBOARD_URL, AZTEK_DASHBOARD_URL])
     state = complete_storage_state()
     fake = FakePlaywright(page, state)
 
@@ -198,8 +242,8 @@ def test_seeded_authenticated_context_skips_login_page(test_settings):
 
 def test_expired_seed_waits_for_login_in_the_same_browser(test_settings):
     page = FakePage(
-        [AZTEK_INIT_URL, AZTEK_INIT_URL],
-        wait_urls=[LOGIN_URL, AZTEK_INIT_URL],
+        [AZTEK_INIT_URL, AZTEK_DASHBOARD_URL],
+        wait_urls=[LOGIN_URL, AZTEK_DASHBOARD_URL],
     )
     state = complete_storage_state()
     fake = FakePlaywright(page, state)

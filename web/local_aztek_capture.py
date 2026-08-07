@@ -135,4 +135,7 @@ class LocalAztekCaptureService:
             or host == 'aztek-tools-v2.combo-interactive.com'
         ):
             return False
+        path = parts.path or '/'
+        if path != '/combo' and not path.startswith('/combo/'):
+            return False
         return not await search_runner.is_login_page(page)
