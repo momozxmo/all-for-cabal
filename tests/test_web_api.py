@@ -189,6 +189,23 @@ def test_workspace_results_export_and_bundle_preview(client, member, test_databa
     ]
 
 
+def test_workspace_restore_keeps_a_persisted_item_description(
+        client, member, test_database):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(member.id, 'event', 'plan.xlsx')
+        workspace.results = [{
+            'aztek_id': '10', 'item_name': 'Saved Prize',
+            'desc': 'description saved before this workspace was reopened',
+        }]
+        workspace_id = workspace.id
+
+    restored = client.get(f'/api/workspaces/{workspace_id}')
+
+    assert restored.status_code == 200
+    assert restored.json()['results'][0]['desc'] == (
+        'description saved before this workspace was reopened')
+
+
 def test_event_bundle_preview_carries_only_selected_event_drafts(
         client, member, test_database):
     with test_database.session() as db:
@@ -390,6 +407,152 @@ def test_a_search_outlives_the_page_that_started_it(
         assert job.status == 'done'
 
 
+def test_scoped_item_finder_search_excludes_sibling_product_group(
+        test_settings, test_database, member, monkeypatch):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'shop', 'direct-plan.xlsx')
+        workspace.criteria = [
+            {'kind': '11', 'name': 'A only', 'sources': ['Product A'],
+             'group_keys': ['group-a']},
+            {'kind': '12', 'name': 'Shared',
+             'sources': ['Product A', 'Product B'],
+             'group_keys': ['group-a', 'group-b']},
+            {'kind': '99', 'name': 'B only', 'sources': ['Product B'],
+             'group_keys': ['group-b']},
+        ]
+        workspace.occurrences = [dict(row) for row in workspace.criteria]
+        workspace_id = workspace.id
+
+    coordinator = _coordinator(test_settings, test_database)
+    ran_with = {}
+
+    async def fake_run(finder, data, storage_state):
+        ran_with['criteria'] = [
+            (row['kind'], row.get('sources'), row.get('group_keys'))
+            for row in data['multi']]
+        ran_with['occurrences'] = [
+            (row['kind'], row.get('sources'), row.get('group_keys'))
+            for row in finder._occurrences]
+
+    async def scenario():
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run', fake_run)
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any',
+             'source_group_key': 'group-a'},
+            lambda message: _noop())
+        await _settle(coordinator, workspace_id)
+
+    asyncio.run(scenario())
+    expected = [
+        ('11', ['Product A'], ['group-a']),
+        ('12', ['Product A'], ['group-a']),
+    ]
+    assert ran_with['criteria'] == expected
+    assert ran_with['occurrences'] == expected
+
+
+def test_sequential_scoped_searches_preserve_both_product_groups_in_api(
+        client, test_settings, test_database, member, monkeypatch):
+    """Searching Product B must not erase the Product A result persisted first."""
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'shop', 'two-products.xlsx')
+        workspace.criteria = [
+            {'kind': '11', 'opt': '', 'dur': '', 'name': 'A only',
+             'sources': ['Product A'], 'group_keys': ['group-a']},
+            {'kind': '12', 'opt': '', 'dur': '', 'name': 'Shared',
+             'sources': ['Product A', 'Product B'],
+             'group_keys': ['group-a', 'group-b']},
+            {'kind': '13', 'opt': '', 'dur': '', 'name': 'B only',
+             'sources': ['Product B'], 'group_keys': ['group-b']},
+        ]
+        workspace.occurrences = [dict(row) for row in workspace.criteria]
+        workspace.results = [{
+            'aztek_id': '404', 'item_name': 'Unscoped existing',
+            'item_kind': '77', 'item_option': '', 'duration_index': '',
+            'sources': [], 'group_keys': [], 'groups': ''}]
+        workspace_id = workspace.id
+
+    coordinator = _coordinator(test_settings, test_database)
+    ids = {'11': '101', '12': '202', '13': '303'}
+
+    async def fake_run(finder, data, storage_state):
+        finder._results = [
+            {'aztek_id': ids[row['kind']], 'item_name': row['name'] + ' web',
+             'item_kind': row['kind'], 'item_option': row.get('opt', ''),
+             'duration_index': row.get('dur', ''), 'game': data['game']}
+            for row in data['multi']]
+        finder._regroup_results()
+
+    async def scenario():
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run', fake_run)
+        for group_key in ('group-a', 'group-b'):
+            assert await coordinator.start(
+                member.id, workspace_id,
+                {'game': 'CabalM SEA', 'web_mode': 'any',
+                 'source_group_key': group_key},
+                lambda message: _noop())
+            await _settle(coordinator, workspace_id)
+
+    asyncio.run(scenario())
+    response = client.get('/api/workspaces/' + workspace_id)
+    assert response.status_code == 200
+    rows = response.json()['results']
+    assert [row['aztek_id'] for row in rows] == ['101', '202', '303', '404']
+    assert [row['group_keys'] for row in rows] == [
+        ['group-a'], ['group-a', 'group-b'], ['group-b'], []]
+    assert len([row for row in rows if row['aztek_id'] == '202']) == 1
+
+
+def test_sequential_shared_group_searches_keep_changed_ids_in_exact_scope(
+        client, test_settings, test_database, member, monkeypatch):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'shop', 'changed-shared-result.xlsx')
+        workspace.criteria = [{
+            'kind': '12', 'opt': '', 'dur': '', 'name': 'Shared',
+            'sources': ['Product A', 'Product B'],
+            'group_keys': ['group-a', 'group-b']}]
+        workspace.occurrences = [dict(workspace.criteria[0])]
+        workspace.results = [{
+            'aztek_id': '404', 'item_name': 'Unscoped existing',
+            'item_kind': '77', 'item_option': '', 'duration_index': '',
+            'sources': [], 'group_keys': [], 'groups': ''}]
+        workspace_id = workspace.id
+
+    coordinator = _coordinator(test_settings, test_database)
+
+    async def fake_run(finder, data, storage_state):
+        group_key = data['multi'][0]['group_keys'][0]
+        finder._results = [{
+            'aztek_id': '20' if group_key == 'group-a' else '21',
+            'item_name': 'Shared web', 'item_kind': '12',
+            'item_option': '', 'duration_index': '', 'game': data['game']}]
+        finder._regroup_results()
+
+    async def scenario():
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run', fake_run)
+        for group_key in ('group-a', 'group-b'):
+            assert await coordinator.start(
+                member.id, workspace_id,
+                {'game': 'CabalM SEA', 'web_mode': 'any',
+                 'source_group_key': group_key}, lambda message: _noop())
+            await _settle(coordinator, workspace_id)
+
+    asyncio.run(scenario())
+    response = client.get('/api/workspaces/' + workspace_id)
+    assert response.status_code == 200
+    by_id = {row['aztek_id']: row for row in response.json()['results']}
+    assert set(by_id) == {'20', '21', '404'}
+    assert (by_id['20']['sources'], by_id['20']['group_keys']) == (
+        ['Product A'], ['group-a'])
+    assert (by_id['21']['sources'], by_id['21']['group_keys']) == (
+        ['Product B'], ['group-b'])
+    assert (by_id['404']['sources'], by_id['404']['group_keys']) == ([], [])
+
+
 async def _noop():
     return None
 
@@ -430,6 +593,87 @@ def test_coming_back_replays_the_log_and_streams_the_rest(
     with test_database.session() as db:
         jobs = db.scalars(select(Job).where(Job.workspace_id == workspace_id)).all()
     assert len(jobs) == 1, 'reconnecting must not start a second search'
+
+
+def test_scoped_start_refuses_an_unscoped_live_search_and_exposes_its_scope(
+        client, test_settings, test_database, member, monkeypatch):
+    """A Product handoff cannot reuse a workspace-wide run's result stream."""
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+    refused = []
+
+    async def scenario():
+        release = asyncio.Event()
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run',
+                            _hold_then_find(release))
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'},
+            lambda message: _noop())
+        live = coordinator.live(workspace_id)
+        assert live.source_group_key == ''
+
+        async def emit(message):
+            refused.append(message)
+
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any',
+             'source_group_key': 'group-a'}, emit) is False
+        response = client.get('/api/workspaces/' + workspace_id)
+        assert response.json()['running_job']['source_group_key'] == ''
+        release.set()
+        await _settle(coordinator, workspace_id)
+
+    asyncio.run(scenario())
+    assert [message['type'] for message in refused] == ['error', 'done']
+    assert refused[0]['code'] == 'search_scope_mismatch'
+
+
+def test_attach_replays_only_when_the_requested_scope_matches(
+        test_settings, test_database, member, monkeypatch):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(member.id, 'shop', 'a.xlsx')
+        workspace.criteria = [{
+            'kind': '1', 'opt': '', 'dur': '', 'name': 'A',
+            'sources': ['Product A'], 'group_keys': ['group-a']}]
+        workspace.occurrences = [dict(workspace.criteria[0])]
+        workspace_id = workspace.id
+    coordinator = _coordinator(test_settings, test_database)
+    refused = []
+    matched = []
+
+    async def scenario():
+        release = asyncio.Event()
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run',
+                            _hold_then_find(release))
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any',
+             'source_group_key': 'group-a'}, lambda message: _noop())
+
+        async def refused_emit(message):
+            refused.append(message)
+
+        assert await coordinator.attach(
+            workspace_id, refused_emit, 'group-b') is False
+
+        async def matched_emit(message):
+            matched.append(message)
+
+        watcher = asyncio.ensure_future(coordinator.attach(
+            workspace_id, matched_emit, 'group-a'))
+        while not coordinator.live(workspace_id).subscribers:
+            await asyncio.sleep(0.01)
+        release.set()
+        await _settle(coordinator, workspace_id)
+        assert await watcher is True
+
+    asyncio.run(scenario())
+    assert [message['type'] for message in refused] == ['error', 'done']
+    assert refused[0]['code'] == 'search_scope_mismatch'
+    assert not any(message['type'] == 'result' for message in refused)
+    assert any(message['type'] == 'result' for message in matched)
 
 
 def test_stopping_is_a_request_of_its_own(
@@ -506,6 +750,81 @@ def test_searching_again_runs_only_the_misses_and_keeps_the_finds(
     with test_database.session() as db:
         saved = db.get(WorkspaceRecord, workspace_id)
     assert [row['aztek_id'] for row in saved.results] == ['10', '20']
+
+
+def test_scoped_retry_persists_every_scope_but_replays_only_its_product_group(
+        client, test_settings, test_database, member, monkeypatch):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'shop', 'scoped-retry.xlsx')
+        workspace.criteria = [
+            {'kind': '1', 'opt': '', 'dur': '', 'name': 'A found',
+             'sources': ['Product A'], 'group_keys': ['group-a']},
+            {'kind': '2', 'opt': '', 'dur': '', 'name': 'A missing',
+             'sources': ['Product A'], 'group_keys': ['group-a']},
+            {'kind': '3', 'opt': '', 'dur': '', 'name': 'B sibling',
+             'sources': ['Product B'], 'group_keys': ['group-b']},
+        ]
+        workspace.occurrences = [dict(row) for row in workspace.criteria]
+        workspace.results = [
+            {'aztek_id': '10', 'item_name': 'A found', 'item_kind': '1',
+             'item_option': '', 'duration_index': '',
+             'sources': ['Product A'], 'group_keys': ['group-a'],
+             'groups': 'Product A'},
+            {'aztek_id': '30', 'item_name': 'B sibling', 'item_kind': '3',
+             'item_option': '', 'duration_index': '',
+             'sources': ['Product B'], 'group_keys': ['group-b'],
+             'groups': 'Product B'},
+            {'aztek_id': '40', 'item_name': 'Unscoped', 'item_kind': '4',
+             'item_option': '', 'duration_index': '',
+             'sources': [], 'group_keys': [], 'groups': ''},
+        ]
+        workspace.not_found = [['#2 Kind=2', 'missing']]
+        workspace_id = workspace.id
+
+    coordinator = _coordinator(test_settings, test_database)
+    streamed = []
+
+    async def scenario():
+        release = asyncio.Event()
+
+        async def fake_run(finder, data, storage_state):
+            await release.wait()
+            row = {'aztek_id': '20', 'item_name': 'A recovered',
+                   'item_kind': '2', 'item_option': '',
+                   'duration_index': '', 'game': data['game']}
+            finder._results = [row]
+            finder.add_result_row(row)
+
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run', fake_run)
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any', 'only_missing': True,
+             'source_group_key': 'group-a'}, lambda message: _noop())
+
+        async def emit(message):
+            streamed.append(message)
+
+        watcher = asyncio.ensure_future(
+            coordinator.attach(workspace_id, emit, 'group-a'))
+        while not coordinator.live(workspace_id).subscribers:
+            await asyncio.sleep(0.01)
+        release.set()
+        await _settle(coordinator, workspace_id)
+        await watcher
+
+    asyncio.run(scenario())
+    reset_at = max(index for index, message in enumerate(streamed)
+                   if message['type'] == 'reset_results')
+    replayed_ids = [message['item']['aztek_id']
+                    for message in streamed[reset_at + 1:]
+                    if message['type'] == 'result']
+    assert replayed_ids == ['10', '20']
+
+    response = client.get('/api/workspaces/' + workspace_id)
+    assert response.status_code == 200
+    assert [row['aztek_id'] for row in response.json()['results']] == [
+        '10', '20', '30', '40']
 
 
 def test_searching_again_with_nothing_missing_does_not_start_a_browser(

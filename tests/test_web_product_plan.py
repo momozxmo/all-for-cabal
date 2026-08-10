@@ -54,16 +54,53 @@ def test_product_draft_uses_same_name_end_time_limits_and_tags():
 
 def test_product_draft_defaults_are_safe_and_bundle_origin_is_visible():
     draft = product_plan.build_products(
-        {'g1': _meta()}, 'CabalPC TH', now=NOW)[0]
+        {'g1': _meta(bundle_ids=['223553'])}, 'CabalPC TH', now=NOW)[0]
     assert draft['category_id'] == ''
     assert draft['category_label'] == ''
     assert draft['details_th'] == draft['details_en'] == ''
     assert draft['bundle_id'] == '223553'
+    assert draft['bundle_ids'] == ['223553']
+    assert draft['composite_required'] is False
     assert draft['bundle_source'] == 'workbook'
     assert draft['is_enabled'] is False
     assert draft['is_test_mode'] is True
     assert draft['is_hidden'] is False
     assert draft['position'] == '0'
+
+
+def test_multiple_source_bundles_require_one_reviewed_composite_bundle():
+    draft = product_plan.build_products({
+        'g1': _meta(
+            bundle_id='', bundle_ids=['223930', '223931'],
+            start_at='', reset_day='Friday', reset_time='09:15:00'),
+    }, 'CabalPC TH', now=NOW)[0]
+
+    assert draft['bundle_ids'] == ['223930', '223931']
+    assert draft['composite_required'] is True
+    assert draft['bundle_id'] == ''
+    assert draft['bundle_source'] == ''
+    assert draft['start_at'] == '2026-07-30 00:00:00'
+    assert draft['end_at'] == '2026-07-30 07:59:00'
+    assert draft['category_source'] == 'Highlight'
+    assert draft['price_candidates'][0]['source_label'] == 'Future Coin'
+    assert draft['limit_type'] == 'PLAYER'
+    assert draft['limit_quantity'] == '10'
+    assert draft['limit_reset_interval_days'] == '7'
+    assert draft['limit_reset_at'] == '2026-07-24 09:15:00'
+    assert any('Composite Bundle' in warning for warning in draft['warnings'])
+
+
+def test_product_draft_normalizes_numeric_and_delimited_source_bundle_ids():
+    draft = product_plan.build_products({
+        'g1': _meta(
+            bundle_id='',
+            bundle_ids=[223930.0, '223931,223932', '223,933']),
+    }, 'CabalPC TH', now=NOW)[0]
+
+    assert draft['bundle_ids'] == [
+        '223930', '223931', '223932', '223933']
+    assert draft['bundle_id'] == ''
+    assert draft['composite_required'] is True
 
 
 def test_no_limit_and_character_limit_are_not_confused():
@@ -96,7 +133,19 @@ def test_everyday_and_weekday_reset_start_one_interval_in_the_past():
     assert drafts[0]['limit_reset_interval_days'] == '1'
     assert drafts[0]['limit_reset_at'] == '2026-07-29 04:30:00'
     assert drafts[1]['limit_reset_interval_days'] == '7'
-    assert drafts[1]['limit_reset_at'] == '2026-07-23 09:15:00'
+    assert drafts[1]['limit_reset_at'] == '2026-07-24 09:15:00'
+
+
+def test_same_weekday_reset_uses_only_a_candidate_not_after_bangkok_now():
+    before_reset = product_plan.build_products({
+        'g1': _meta(reset_day='Friday', reset_time='09:15:00'),
+    }, 'CabalPC TH', now=dt.datetime(2026, 7, 31, 8, 0))[0]
+    after_reset = product_plan.build_products({
+        'g1': _meta(reset_day='Friday', reset_time='09:15:00'),
+    }, 'CabalPC TH', now=dt.datetime(2026, 7, 31, 10, 0))[0]
+
+    assert before_reset['limit_reset_at'] == '2026-07-24 09:15:00'
+    assert after_reset['limit_reset_at'] == '2026-07-31 09:15:00'
 
 
 def test_all_approved_tags_have_stable_order():
@@ -153,6 +202,8 @@ def test_workspace_products_are_owned_and_keep_the_selected_game(
     assert response.json()['game'] == 'CabalPC TH'
     assert response.json()['workspace_id'] == workspace_for_member.id
     assert response.json()['products'][0]['source_group_key'] == 'g1'
+    assert response.json()['products'][0]['bundle_ids'] == ['223553']
+    assert response.json()['products'][0]['composite_required'] is False
 
 
 def test_workspace_without_product_metadata_returns_an_empty_list(
@@ -161,6 +212,78 @@ def test_workspace_without_product_metadata_returns_an_empty_list(
         f'/api/workspaces/{workspace_for_member.id}/products')
     assert response.status_code == 200
     assert response.json()['products'] == []
+
+
+def test_composite_bundle_preview_keeps_only_the_exact_product_group(
+        client, test_database, workspace_for_member):
+    with test_database.session() as db:
+        record = db.get(WorkspaceRecord, workspace_for_member.id)
+        record.mode = 'shop'
+        record.game = 'CabalPC TH'
+        record.group_meta = {
+            'group-a': _meta(name='Product A'),
+            'group-b': _meta(name='Product B'),
+        }
+        record.results = [
+            {'aztek_id': '11', 'item_name': 'A only', 'amt': '2',
+             'sources': ['Product A'], 'group_keys': ['group-a']},
+            {'aztek_id': '12', 'item_name': 'Shared', 'amt': '3',
+             'sources': ['Product A', 'Product B'],
+             'group_keys': ['group-a', 'group-b']},
+            {'aztek_id': '99', 'item_name': 'B only', 'amt': '9',
+             'sources': ['Product B'], 'group_keys': ['group-b']},
+        ]
+
+    response = client.post(
+        f'/api/workspaces/{workspace_for_member.id}/bundles',
+        json={'source_group_key': 'group-a'},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [bundle['group_key'] for bundle in response.json()['bundles']] == [
+        'group-a']
+    assert [(item['id'], item['qty'])
+            for item in response.json()['bundles'][0]['items']] == [
+        ('11', '2'), ('12', '3')]
+
+
+def test_composite_preview_without_results_returns_exact_item_finder_handoff(
+        client, test_database, workspace_for_member):
+    """A direct Product import has criteria but no Item Finder results yet."""
+    with test_database.session() as db:
+        record = db.get(WorkspaceRecord, workspace_for_member.id)
+        record.mode = 'shop'
+        record.game = 'CabalPC TH'
+        record.group_meta = {
+            'group-a': _meta(name='Product A'),
+            'group-b': _meta(name='Product B'),
+        }
+        record.criteria = [
+            {'kind': '11', 'name': 'A only',
+             'sources': ['Product A'], 'group_keys': ['group-a']},
+            {'kind': '12', 'name': 'Shared',
+             'sources': ['Product A', 'Product B'],
+             'group_keys': ['group-a', 'group-b']},
+            {'kind': '99', 'name': 'B only',
+             'sources': ['Product B'], 'group_keys': ['group-b']},
+        ]
+        record.results = []
+
+    response = client.post(
+        f'/api/workspaces/{workspace_for_member.id}/bundles',
+        json={'source_group_key': 'group-a'},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['bundles'] == []
+    assert body['needs_search'] is True
+    assert body['search_handoff']['workspace_id'] == workspace_for_member.id
+    assert body['search_handoff']['source_group_key'] == 'group-a'
+    assert [row['kind'] for row in body['search_handoff']['criteria']] == [
+        '11', '12']
+    assert body['search_handoff']['criteria'][1]['group_keys'] == ['group-a']
+    assert body['search_handoff']['criteria'][1]['sources'] == ['Product A']
 
 
 def test_import_plan_reports_product_count_per_candidate_sheet(

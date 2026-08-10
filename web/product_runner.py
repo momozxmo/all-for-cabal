@@ -202,6 +202,7 @@ class ProductBuilder(ActivityBuilder):
     SAVE_LABEL = 'สร้าง Product'
     KIND = 'Product'
     WRITE_MARK = 'product'
+    READY_SELECTOR = 'input[name="th_name"]'
 
     def create_url(self, game):
         return product_create_url(game)

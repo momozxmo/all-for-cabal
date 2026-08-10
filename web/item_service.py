@@ -247,6 +247,62 @@ def merge_imported(criteria, occurrences, group_meta, items):
     return MergeResult(criteria, occurrences, group_meta, added, merged)
 
 
+def rows_for_source_group(rows, source_group_key):
+    """Copy and narrow rows to one exact imported group identity.
+
+    ``sources`` is the readable label while ``group_keys`` is the stable
+    worksheet/product identity. They are parallel arrays, so narrowing both
+    prevents a shared criterion from carrying a sibling Product into the
+    reviewed Item Finder/Bundle path.
+    """
+    wanted = str(source_group_key or '').strip()
+    if not wanted:
+        return []
+    scoped = []
+    for source in rows or []:
+        row = dict(source)
+        sources = list(row.get('sources') or [])
+        has_group_keys = 'group_keys' in row
+        identifiers = (list(row.get('group_keys') or [])
+                       if has_group_keys else sources)
+        positions = [index for index, value in enumerate(identifiers)
+                     if str(value or '').strip() == wanted]
+        if not positions:
+            continue
+        if has_group_keys:
+            row['group_keys'] = [identifiers[index] for index in positions]
+        row['sources'] = [sources[index] for index in positions
+                          if index < len(sources)]
+        scoped.append(row)
+    return scoped
+
+
+def _rows_without_source_group(rows, source_group_key):
+    """Copy rows after removing one exact source membership."""
+    wanted = str(source_group_key or '').strip()
+    remaining = []
+    for source in rows or []:
+        row = dict(source)
+        sources = list(row.get('sources') or [])
+        has_group_keys = 'group_keys' in row
+        identifiers = (list(row.get('group_keys') or [])
+                       if has_group_keys else sources)
+        if not identifiers:
+            remaining.append(row)
+            continue
+        positions = [index for index, value in enumerate(identifiers)
+                     if str(value or '').strip() != wanted]
+        if not positions:
+            continue
+        if has_group_keys:
+            row['group_keys'] = [identifiers[index] for index in positions]
+        row['sources'] = [sources[index] for index in positions
+                          if index < len(sources)]
+        row['groups'] = ' , '.join(str(value) for value in row['sources'])
+        remaining.append(row)
+    return remaining
+
+
 def _found_keys(results):
     """The (kind, opt, dur) triples that some result already covers."""
     return {(str(row.get('item_kind', '') or '').strip(),
@@ -301,6 +357,79 @@ def merge_found(previous, fresh, occurrences):
         # regroup rewrites 'sources'; the display column has to follow it.
         row['groups'] = ' , '.join(str(s) for s in (row.get('sources') or []))
     return ordered
+
+
+def replace_results_for_source_group(previous, fresh, source_group_key,
+                                     occurrences):
+    """Replace one Product group's result memberships, preserving siblings."""
+    remaining = _rows_without_source_group(previous, source_group_key)
+    combined = list(remaining) + list(fresh)
+
+    # Membership belongs to a resolved result identity, not merely to the
+    # criterion that found it. Equal IDs can rejoin A+B; a replacement ID for B
+    # must never inherit A just because both came from the same criterion.
+    identities = {}
+    memberships = {}
+    for source in combined:
+        identity = (str(source.get('aztek_id', '') or ''),
+                    str(source.get('item_kind', '') or ''),
+                    str(source.get('item_option', '') or ''),
+                    str(source.get('duration_index', '') or ''))
+        identities.setdefault(identity, dict(source))
+        pairs = memberships.setdefault(identity, [])
+        sources = list(source.get('sources') or [])
+        identifiers = list(source.get('group_keys') or sources)
+        for index, identifier in enumerate(identifiers):
+            key = str(identifier or '').strip()
+            if not key or any(old_key == key for old_key, _ in pairs):
+                continue
+            label = sources[index] if index < len(sources) else identifier
+            pairs.append((key, label))
+
+    merged = []
+    emitted = set()
+    for occurrence in occurrences or []:
+        criterion = (str(occurrence.get('kind', '') or '').strip(),
+                     str(occurrence.get('opt', '') or '').strip(),
+                     str(occurrence.get('dur', '') or '').strip())
+        occurrence_sources = list(occurrence.get('sources') or [])
+        has_group_keys = 'group_keys' in occurrence
+        occurrence_ids = (list(occurrence.get('group_keys') or [])
+                          if has_group_keys else occurrence_sources)
+        for identity, result in identities.items():
+            if identity[1:] != criterion:
+                continue
+            allowed = {key for key, _ in memberships[identity]}
+            positions = [
+                index for index, value in enumerate(occurrence_ids)
+                if str(value or '').strip() in allowed]
+            if not positions:
+                continue
+            narrowed = dict(occurrence)
+            if has_group_keys:
+                narrowed['group_keys'] = [
+                    occurrence_ids[index] for index in positions]
+            narrowed['sources'] = [
+                occurrence_sources[index] for index in positions
+                if index < len(occurrence_sources)]
+            row = regroup_results([result], [narrowed])[0]
+            row['groups'] = ' , '.join(
+                str(value) for value in (row.get('sources') or []))
+            merged.append(row)
+            emitted.add(identity)
+
+    for identity, row in identities.items():
+        if identity in emitted:
+            continue
+        copy = dict(row)
+        pairs = memberships[identity]
+        if pairs:
+            copy['group_keys'] = [key for key, _ in pairs]
+            copy['sources'] = [label for _, label in pairs]
+        copy['groups'] = ' , '.join(
+            str(value) for value in (copy.get('sources') or []))
+        merged.append(copy)
+    return merged
 
 
 def regroup_results(results, occurrences):

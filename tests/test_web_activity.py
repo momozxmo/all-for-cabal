@@ -17,7 +17,8 @@ sys.path.insert(0, ROOT)
 
 import pytest  # noqa: E402
 
-from web import activity_runner, aztek_form, event_runner, itemcode_runner  # noqa: E402
+from web import (activity_runner, aztek_form, event_runner, itemcode_runner,
+                 product_runner)  # noqa: E402
 from web.app import (EventRunRequest, ItemCodeRunRequest,  # noqa: E402
                      _clean_event_rewards, _clean_itemcode_rewards)
 
@@ -307,6 +308,11 @@ class FakePage:
     async def wait_for_timeout(self, ms):
         return None
 
+    def locator(self, selector):
+        return type('Ready', (), {
+            'wait_for': staticmethod(lambda **kwargs: _value(None)),
+        })()
+
 
 def _drive(builder, specs):
     """Run run_many with the browser stack stubbed out."""
@@ -349,6 +355,122 @@ async def _value(value):
 
 def _builder(cls=itemcode_runner.ItemCodeBuilder):
     return cls(lambda message, level='INFO': None)
+
+
+@pytest.mark.parametrize(('builder_class', 'selector'), [
+    (itemcode_runner.ItemCodeBuilder, 'input[name="name_th"]'),
+    (event_runner.EventBuilder, 'input[name="name_th"]'),
+    (product_runner.ProductBuilder, 'input[name="th_name"]'),
+])
+def test_open_waits_for_each_form_own_ready_field_after_dom_content_loaded(
+        builder_class, selector):
+    """DOMContentLoaded does not mean the client-rendered activity form is ready."""
+    builder = _builder(builder_class)
+
+    class Page:
+        url = 'https://x/itemcodes/create'
+
+        def __init__(self):
+            self.ready = False
+            self.waits = []
+
+        async def goto(self, url, **kwargs):
+            assert kwargs['wait_until'] == 'domcontentloaded'
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        def locator(self, selector):
+            page = self
+
+            class NameBox:
+                async def wait_for(self, **kwargs):
+                    page.waits.append((selector, kwargs))
+                    page.ready = True
+            return NameBox()
+
+    page = Page()
+    asyncio.run(builder._open(page, page.url))
+
+    assert page.ready is True
+    assert page.waits == [(selector, {
+        'state': 'visible', 'timeout': 20000})]
+
+
+def test_open_rejects_a_session_redirected_to_login_while_waiting_for_the_form():
+    builder = _builder()
+
+    class Page:
+        url = 'https://x/itemcodes/create'
+
+        async def goto(self, url, **kwargs):
+            return None
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+        def locator(self, selector):
+            page = self
+
+            class NameBox:
+                async def wait_for(self, **kwargs):
+                    page.url = 'https://x/login'
+                    raise TimeoutError('name box disappeared after redirect')
+            return NameBox()
+
+    with pytest.raises(RuntimeError, match='session'):
+        asyncio.run(builder._open(Page(), 'https://x/itemcodes/create'))
+
+
+def test_open_reraises_the_ready_field_failure_when_still_on_the_form():
+    builder = _builder()
+
+    class Page:
+        url = 'https://x/itemcodes/create'
+
+        async def goto(self, url, **kwargs):
+            return None
+
+        def locator(self, selector):
+            class NameBox:
+                async def wait_for(self, **kwargs):
+                    raise TimeoutError('name box did not become visible')
+            return NameBox()
+
+    with pytest.raises(TimeoutError, match='name box did not become visible'):
+        asyncio.run(builder._open(Page(), 'https://x/itemcodes/create'))
+
+
+def test_save_without_write_response_or_detail_id_is_not_reported_created():
+    builder = _builder()
+
+    class Button:
+        async def count(self):
+            return 1
+
+        async def click(self):
+            return None
+
+    class NoWrite:
+        async def __aenter__(self):
+            raise TimeoutError('write request never arrived')
+
+        async def __aexit__(self, *args):
+            return None
+
+    class Page:
+        url = 'https://x/itemcodes/create'
+
+        def locator(self, selector):
+            return type('Buttons', (), {'first': Button()})()
+
+        def expect_response(self, predicate, timeout):
+            return NoWrite()
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+    assert asyncio.run(builder._save(Page())) == (False, None)
 
 
 def test_a_form_that_is_missing_a_required_field_is_not_saved():

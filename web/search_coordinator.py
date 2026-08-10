@@ -38,9 +38,10 @@ class LiveSearch:
     going, and the job must be written down even if nobody is watching at all.
     """
 
-    def __init__(self, job_id: str, finder) -> None:
+    def __init__(self, job_id: str, finder, source_group_key: str = '') -> None:
         self.job_id = job_id
         self.finder = finder
+        self.source_group_key = str(source_group_key or '').strip()
         self.history: list[dict] = []
         self.subscribers: set[asyncio.Queue] = set()
         self.done = False
@@ -82,7 +83,8 @@ class SearchCoordinator:
         live.finder._cancel = True
         return True
 
-    async def attach(self, workspace_id: str, emit: Emit) -> bool:
+    async def attach(self, workspace_id: str, emit: Emit,
+                     source_group_key: str = '') -> bool:
         """Stream a running search to one more watcher, from the start.
 
         The log so far is replayed before live events, so a page that comes
@@ -90,6 +92,12 @@ class SearchCoordinator:
         """
         live = self._live.get(workspace_id)
         if live is None or live.done:
+            return False
+        requested_scope = str(source_group_key or '').strip()
+        if live.source_group_key != requested_scope:
+            await emit({'type': 'error', 'code': 'search_scope_mismatch',
+                        'msg': 'การค้นหาที่ค้างอยู่เป็นคนละกลุ่ม Product'})
+            await emit({'type': 'done', 'count': 0, 'not_found': []})
             return False
         queue: asyncio.Queue = asyncio.Queue()
         for message in list(live.history):
@@ -124,8 +132,15 @@ class SearchCoordinator:
         malformed request — is settled here and reported to the caller, so the
         detached task only ever contains work that is actually going to happen.
         """
+        source_group_key = str(
+            request_data.get('source_group_key') or '').strip()
         if workspace_id in self._live:
             # Already running; the caller attaches to it instead.
+            if self._live[workspace_id].source_group_key != source_group_key:
+                await emit({'type': 'error', 'code': 'search_scope_mismatch',
+                            'msg': 'การค้นหาที่ค้างอยู่เป็นคนละกลุ่ม Product'})
+                await emit({'type': 'done', 'count': 0, 'not_found': []})
+                return False
             return True
         game = str(request_data.get('game') or '')
         web_mode = request_data.get('web_mode')
@@ -145,6 +160,8 @@ class SearchCoordinator:
             criteria = list(workspace.criteria)
             occurrences = list(workspace.occurrences)
             kept = list(workspace.results)
+            all_occurrences = list(occurrences)
+            previous_results = list(kept)
             if not web_mode:
                 web_mode = None
             user = db.get(User, user_id)
@@ -152,6 +169,19 @@ class SearchCoordinator:
                 storage_state = self._aztek.load_storage_state(db, user)
             except InvalidEncryptedState:
                 storage_state = None
+
+        if source_group_key:
+            criteria = item_service.rows_for_source_group(
+                criteria, source_group_key)
+            occurrences = item_service.rows_for_source_group(
+                occurrences, source_group_key)
+            kept = item_service.rows_for_source_group(
+                kept, source_group_key)
+            if not criteria:
+                await emit({'type': 'error', 'code': 'source_group_not_found',
+                            'msg': 'ไม่พบรายการ Item Finder ของ Product กลุ่มนี้'})
+                await emit({'type': 'done', 'count': 0, 'not_found': []})
+                return False
 
         # 2. A connected Aztek session is required before any browser launch.
         if storage_state is None:
@@ -176,9 +206,14 @@ class SearchCoordinator:
                                % (len(criteria), len(kept))})
         else:
             kept = []
+            cleared_results = (
+                item_service.replace_results_for_source_group(
+                    previous_results, [], source_group_key, all_occurrences)
+                if source_group_key else [])
             with self._database.session() as db:
                 WorkspaceRepository(db).save_results(
-                    user_id, workspace_id, game=game, results=[], not_found=[])
+                    user_id, workspace_id, game=game,
+                    results=cleared_results, not_found=[])
 
         if wants_headed and not headed:
             await emit({'type': 'log', 'level': 'WARNING',
@@ -199,12 +234,13 @@ class SearchCoordinator:
                       tool='item_finder', status='queued',
                       config={'game': game, 'mode': mode,
                               'web_mode': web_mode or '', 'headed': headed,
-                              'only_missing': only_missing})
+                              'only_missing': only_missing,
+                              'source_group_key': source_group_key})
             db.add(job)
             db.flush()
             job_id = job.id
 
-        live = LiveSearch(job_id, None)
+        live = LiveSearch(job_id, None, source_group_key)
         live.finder = search_runner.HeadlessFinder(
             lambda msg, level='INFO': live.publish(
                 {'type': 'log', 'msg': msg, 'level': level}),
@@ -221,11 +257,14 @@ class SearchCoordinator:
         # attach to it like any other watcher.
         asyncio.ensure_future(
             self._drive(live, user_id, workspace_id, job_id, game, data,
-                        storage_state, kept, occurrences))
+                        storage_state, kept, occurrences, previous_results,
+                        all_occurrences, source_group_key))
         return True
 
     async def _drive(self, live: LiveSearch, user_id, workspace_id, job_id,
-                     game, data, storage_state, kept=(), occurrences=()) -> None:
+                     game, data, storage_state, kept=(), occurrences=(),
+                     previous_results=(), all_occurrences=(),
+                     source_group_key='') -> None:
         """Run one search to its end and write down what happened.
 
         Nothing in here depends on anyone watching: the job row and the results
@@ -254,16 +293,22 @@ class SearchCoordinator:
             # A retry only ran the rows that came back empty, so what the first
             # pass found has to be folded back in — and put back in document
             # order, or the newcomers would pile up at the bottom.
-            outcome['results'] = (
+            scoped_results = (
                 item_service.merge_found(kept, fresh, occurrences) if kept
                 else fresh)
+            outcome['results'] = (
+                item_service.replace_results_for_source_group(
+                    previous_results, scoped_results, source_group_key,
+                    all_occurrences)
+                if source_group_key else scoped_results)
             outcome['not_found'] = list(finder._not_found)
             outcome['status'] = 'cancelled' if finder._cancel else 'done'
+            streamed_results = scoped_results if source_group_key else outcome['results']
             if kept:
                 say({'type': 'reset_results'})
-                for row in outcome['results']:
+                for row in streamed_results:
                     say({'type': 'result', 'item': row})
-            say({'type': 'done', 'count': len(outcome['results']),
+            say({'type': 'done', 'count': len(streamed_results),
                  'not_found': outcome['not_found']})
         except search_runner.AztekSessionExpired as error:
             outcome['code'] = 'aztek_session_expired'

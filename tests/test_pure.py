@@ -165,6 +165,7 @@ def test_shop_parser_keeps_product_header_metadata_without_fixed_columns():
 
     assert meta['name'] == 'Limited Orb x30+5'
     assert meta['bundle_id'] == '223553'
+    assert meta['bundle_ids'] == ['223553']
     assert meta['category_label'] == 'Highlight'
     assert meta['shop_label'] == '20% Off'
     assert meta['start_at'] == '2026-07-30 00:00:00'
@@ -174,6 +175,30 @@ def test_shop_parser_keeps_product_header_metadata_without_fixed_columns():
         'sale_price': 390,
         'original_price': 390,
     }]
+
+
+def test_shop_parser_keeps_every_bundle_id_when_value_shares_item_header_row():
+    rows = [[] for _ in range(38)]
+    rows.extend([
+        ['Bundle ID'],
+        ['223930 223931', 'ItemKind', 'Item Name', 'Amt'],
+        ['', 100, 'Composite Reward', 1],
+    ])
+
+    items = item_finder._shop_sheet_items(
+        rows, 'Promotion composite', now=NOW)
+
+    assert items[0]['group_meta']['product_meta']['bundle_ids'] == [
+        '223930', '223931']
+
+
+def test_shop_bundle_id_tokens_handle_numeric_delimiters_and_thousands():
+    assert item_finder._shop_id_tokens(223930) == ['223930']
+    assert item_finder._shop_id_tokens(223930.0) == ['223930']
+    assert item_finder._shop_id_tokens(
+        '223930 223931\n223932,223933') == [
+            '223930', '223931', '223932', '223933']
+    assert item_finder._shop_id_tokens('223,930') == ['223930']
 
 
 def test_cash_shop_product_metadata_is_shared_by_every_item_in_the_table():

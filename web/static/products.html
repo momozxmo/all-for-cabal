@@ -176,6 +176,15 @@
             <section class="product-panel" data-product-section="bundle">
               <h3>Bundle</h3>
               <div id="bundlePicker" class="bundle-summary">
+                <div class="field">
+                  <span>Bundle IDs จากไฟล์ (อ่านอย่างเดียว)</span>
+                  <div id="bundleSourceIds" class="price-match-list"></div>
+                </div>
+                <div id="compositeNotice" class="bundle-conflict" hidden>
+                  <b>ต้องสร้าง Composite Bundle 1 อันก่อน</b>
+                  <div>นำแถว Item ที่ import ของ Product กลุ่มนี้ไปตรวจและสร้างในหน้า Bundle แล้วส่ง Bundle ID ที่สร้างกลับมาช่องด้านล่าง</div>
+                  <button id="btnReviewComposite" type="button">ตรวจ Composite Bundle ในคิว Bundle</button>
+                </div>
                 <label class="field">Bundle ID *<input id="bundleId" type="number" min="1" step="1" inputmode="numeric" placeholder="กรอกเลข Bundle"></label>
                 <span id="bundleSource" class="hint"></span>
                 <div id="bundleConflict" class="bundle-conflict" hidden>
@@ -286,6 +295,16 @@ const optionState = {
 const previewedProductKeys = new Set();
 const productEditRevisions = new Map();
 let productRunBusy = false;
+const PRODUCT_SOURCE_FIELDS = [
+  'source_sheet', 'game', 'name_th', 'name_en', 'category_source',
+  'start_at', 'end_at', 'bundle_ids', 'composite_required',
+  'bundle_id', 'bundle_source', 'price_candidates', 'limit_type',
+  'limit_quantity', 'limit_reset_interval_days', 'limit_reset_at',
+  'tags', 'warnings',
+];
+const PRODUCT_EXECUTION_SOURCE_FIELDS = new Set(
+  PRODUCT_SOURCE_FIELDS.filter(field =>
+    !['source_sheet', 'game', 'warnings'].includes(field)));
 
 function normalizeOptionText(value) {
   return String(value || '')
@@ -468,26 +487,103 @@ function identityOf(entry) {
   return `${entry.workspace_id || ''}:${entry.source_group_key || ''}`;
 }
 
+function sameProductValue(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function sourceSnapshot(entry, fields = entry?.source_fields) {
+  const present = Array.isArray(fields) ? fields : PRODUCT_SOURCE_FIELDS;
+  return Object.fromEntries(present
+    .filter(field => PRODUCT_SOURCE_FIELDS.includes(field))
+    .map(field => [field, structuredClone(entry?.[field])]));
+}
+
+function missingLegacySourceValue(value) {
+  return value === undefined || value === null || value === ''
+    || (Array.isArray(value) && value.length === 0);
+}
+
+function markSourceDirty(entry, field) {
+  if (!entry || !PRODUCT_SOURCE_FIELDS.includes(field)) return;
+  entry.source_dirty = entry.source_dirty
+    && typeof entry.source_dirty === 'object' ? entry.source_dirty : {};
+  entry.source_dirty[field] = true;
+}
+
+function mergeSourceDraft(entry, draft) {
+  if (!entry || entry.product_id) return false;
+  const hadSnapshot = entry.source_snapshot
+    && typeof entry.source_snapshot === 'object';
+  const incomingFields = Array.isArray(draft.source_fields)
+    ? draft.source_fields.filter(field => PRODUCT_SOURCE_FIELDS.includes(field))
+    : PRODUCT_SOURCE_FIELDS.filter(field => Object.hasOwn(draft, field));
+  const dirty = entry.source_dirty && typeof entry.source_dirty === 'object'
+    ? entry.source_dirty : {};
+  const nextSnapshot = hadSnapshot
+    ? structuredClone(entry.source_snapshot) : {};
+  let executionChanged = false;
+  for (const field of incomingFields) {
+    const incoming = structuredClone(draft[field]);
+    nextSnapshot[field] = structuredClone(incoming);
+    if (hadSnapshot) {
+      if (dirty[field]) continue;
+    } else if (!missingLegacySourceValue(entry[field])) {
+      if (!sameProductValue(entry[field], incoming)) dirty[field] = true;
+      continue;
+    }
+    if (!sameProductValue(entry[field], incoming)) {
+      entry[field] = incoming;
+      if (PRODUCT_EXECUTION_SOURCE_FIELDS.has(field)) {
+        executionChanged = true;
+      }
+    }
+  }
+  entry.source_snapshot = nextSnapshot;
+  entry.source_fields = [...new Set([
+    ...(Array.isArray(entry.source_fields)
+      ? entry.source_fields : Object.keys(nextSnapshot)),
+    ...incomingFields,
+  ])];
+  entry.source_dirty = dirty;
+  if (executionChanged) invalidateProductPreview(entry);
+  return executionChanged;
+}
+
 function withDefaults(source) {
+  const raw = structuredClone(source || {});
+  const suppliedSourceFields = PRODUCT_SOURCE_FIELDS.filter(field =>
+    Object.hasOwn(raw, field) && raw[field] !== null
+      && raw[field] !== undefined);
   const entry = Object.assign({
     key: nextKey('p'), workspace_id: '', source_group_key: '',
     source_sheet: '', name_th: '', name_en: '',
     category_source: '', category_id: '', category_label: '',
     category_slug: '', details_th: '', details_en: '',
     start_at: '', end_at: '', bundle_id: '', bundle_source: '',
+    bundle_ids: [], composite_required: false,
     price_candidates: [], prices: [], limit_type: 'UNLIMITED',
     limit_quantity: '', limit_reset_interval_days: '',
     limit_reset_at: '', tags: [], is_enabled: false,
     is_test_mode: true, is_hidden: false, position: '0',
     warnings: [], selected: false, image_names: {},
-  }, structuredClone(source || {}));
+  }, raw);
   entry.price_candidates = Array.isArray(entry.price_candidates)
     ? entry.price_candidates : [];
+  entry.bundle_ids = Array.isArray(entry.bundle_ids) ? entry.bundle_ids : [];
   entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
   entry.tags = Array.isArray(entry.tags) ? entry.tags : [];
   entry.warnings = Array.isArray(entry.warnings) ? entry.warnings : [];
   entry.image_names = entry.image_names && typeof entry.image_names === 'object'
     ? entry.image_names : {};
+  if (entry.source_snapshot && typeof entry.source_snapshot !== 'object') {
+    delete entry.source_snapshot;
+  }
+  entry.source_dirty = entry.source_dirty
+    && typeof entry.source_dirty === 'object' ? entry.source_dirty : {};
+  entry.source_fields = [...new Set([
+    ...(Array.isArray(entry.source_fields) ? entry.source_fields : []),
+    ...suppliedSourceFields,
+  ])];
   return entry;
 }
 
@@ -517,6 +613,23 @@ function renderWarnings(entry) {
 
 function renderBundle(entry) {
   setField('bundleId', entry?.bundle_id || '');
+  const sourceIds = $('bundleSourceIds');
+  sourceIds.replaceChildren();
+  for (const id of entry?.bundle_ids || []) {
+    const chip = document.createElement('span');
+    chip.className = 'source-chip';
+    chip.textContent = `#${id}`;
+    sourceIds.appendChild(chip);
+  }
+  if (!sourceIds.children.length) {
+    const empty = document.createElement('span');
+    empty.className = 'empty-note';
+    empty.textContent = '—';
+    sourceIds.appendChild(empty);
+  }
+  const compositePending = !!entry?.composite_required
+    && !String(entry?.bundle_id || '').trim();
+  $('compositeNotice').hidden = !compositePending;
   const source = entry?.bundle_source || '';
   $('bundleSource').textContent = source
     ? `ที่มา: ${source === 'workbook' ? 'ไฟล์แผน' : source === 'created' ? 'Bundle ที่เพิ่งสร้าง' : source}`
@@ -607,6 +720,8 @@ function renderQueue() {
     option.value = entry.key;
     const state = entry.product_id
       ? ` · Product #${entry.product_id}`
+      : entry.composite_required && !String(entry.bundle_id || '').trim()
+        ? ' · รอ Composite Bundle'
       : entry.status ? ` · ${entry.status}` : '';
     option.textContent =
       (entry.name_th || entry.name_en || 'Product ใหม่') + state;
@@ -709,6 +824,7 @@ function renderProductOptions(entry) {
       candidate.original_price = original.value;
       const price = resolvedPrice(entry, candidate.source_label);
       if (price) price.original_price = original.value;
+      markSourceDirty(entry, 'price_candidates');
       productQueue.save();
     };
     const sale = document.createElement('input');
@@ -720,6 +836,7 @@ function renderProductOptions(entry) {
       candidate.sale_price = sale.value;
       const price = resolvedPrice(entry, candidate.source_label);
       if (price) price.price = sale.value;
+      markSourceDirty(entry, 'price_candidates');
       productQueue.save();
     };
     row.append(chip, select, original, sale);
@@ -735,8 +852,12 @@ function addDrafts(drafts, workspaceId) {
     draft.workspace_id = workspaceId || draft.workspace_id || '';
     const old = existing.get(identityOf(draft));
     if (!old) {
+      draft.source_snapshot = sourceSnapshot(draft, draft.source_fields);
+      draft.source_dirty = {};
       productQueue.add(draft);
       existing.set(identityOf(draft), draft);
+    } else {
+      mergeSourceDraft(old, draft);
     }
   }
   if (workspaceId) {
@@ -835,21 +956,72 @@ async function applySelectedSheets() {
     `นำเข้า ${selected.length} Sheet แล้ว — ตรวจ Product ก่อนส่ง`;
 }
 
+async function reviewCompositeBundle() {
+  const entry = productQueue.current();
+  const workspaceId = String(entry?.workspace_id || '').trim();
+  const sourceKey = String(entry?.source_group_key || '').trim();
+  if (!entry?.composite_required || entry.bundle_id) return;
+  if (!workspaceId || !sourceKey) {
+    throw new Error('Composite Bundle ต้องมี workspace และ source group ที่ชัดเจน');
+  }
+  const response = await apiFetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/bundles`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({source_group_key: sourceKey}),
+    });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || 'เตรียม Composite Bundle ไม่สำเร็จ');
+  }
+  if (data.needs_search) {
+    const handoff = data.search_handoff || {};
+    const handoffWorkspace = String(handoff.workspace_id || '').trim();
+    const handoffSource = String(handoff.source_group_key || '').trim();
+    if (handoffWorkspace !== workspaceId || handoffSource !== sourceKey) {
+      throw new Error('ข้อมูลส่งต่อ Item Finder ไม่ตรงกับ Product กลุ่มนี้');
+    }
+    sessionStorage.setItem(
+      'afc.itemFinderHandoff', JSON.stringify(handoff));
+    window.location.href = '/?workspace_id=' +
+      encodeURIComponent(workspaceId) + '&source_group_key=' +
+      encodeURIComponent(sourceKey);
+    return;
+  }
+  const bundles = (data.bundles || []).filter(bundle =>
+    String(bundle.group_key || '').trim() === sourceKey);
+  if (bundles.length !== 1) {
+    throw new Error('ไม่พบ Composite Bundle ที่ตรงกับ Product กลุ่มนี้เพียงกลุ่มเดียว');
+  }
+  sessionStorage.setItem('afc.bundleHandoff', JSON.stringify({
+    ...data,
+    workspace_id: workspaceId,
+    bundles,
+  }));
+  window.location.href = '/bundles';
+}
+
 function applyBundleHandoff(payload) {
   if (!payload || !Array.isArray(payload.rows)) return;
-  const workspaceId = String(payload.workspace_id || '');
+  const workspaceId = String(payload.workspace_id || '').trim();
+  if (!workspaceId) return;
   for (const row of payload.rows) {
     const sourceKey = String(row.source_group_key || '').trim();
     const createdId = String(row.bundle_id || '').trim();
     if (!sourceKey || !createdId) continue;
-    const entry = productQueue.items.find(item =>
-      String(item.source_group_key || '') === sourceKey
-      && (!workspaceId || String(item.workspace_id || '') === workspaceId));
+    const entry = productQueue.items.find(item => {
+      const entryWorkspace = String(item.workspace_id || '').trim();
+      const entrySource = String(item.source_group_key || '').trim();
+      return entryWorkspace && entrySource
+        && entrySource === sourceKey && entryWorkspace === workspaceId;
+    });
     if (!entry) continue;
     const workbookId = String(entry.bundle_id || '').trim();
     if (!workbookId) {
       entry.bundle_id = createdId;
       entry.bundle_source = 'created';
+      markSourceDirty(entry, 'bundle_id');
+      markSourceDirty(entry, 'bundle_source');
       delete entry.bundle_conflict;
     } else if (workbookId === createdId) {
       delete entry.bundle_conflict;
@@ -859,6 +1031,7 @@ function applyBundleHandoff(payload) {
         created_id: createdId,
       };
     }
+    invalidateProductPreview(entry);
   }
   productQueue.save();
   renderQueue();
@@ -1043,6 +1216,12 @@ function retryableProducts() {
 
 function runnableError(entries) {
   if (!entries.length) return 'ยังไม่ได้เลือก Product';
+  const composite = entries.find(entry => entry.composite_required
+    && !String(entry.bundle_id || '').trim());
+  if (composite) {
+    return `${composite.name_th || composite.name_en || 'Product'}: `
+      + 'ต้องสร้างและตรวจ Composite Bundle 1 อัน แล้วใส่ Bundle ID สุดท้ายก่อน';
+  }
   const conflict = entries.find(entry => entry.bundle_conflict);
   if (conflict) {
     return `${conflict.name_th || conflict.name_en || 'Product'}: `
@@ -1184,6 +1363,7 @@ function bindValue(id, field, checkbox = false) {
     const entry = productQueue.current();
     if (!entry) return;
     entry[field] = checkbox ? $(id).checked : $(id).value;
+    markSourceDirty(entry, field);
     productQueue.save();
     if (field === 'name_th' || field === 'name_en') updateQueueOption(entry);
   });
@@ -1252,6 +1432,8 @@ $('bundleId').oninput = () => {
   if (!entry) return;
   entry.bundle_id = $('bundleId').value;
   entry.bundle_source = entry.bundle_id ? 'manual' : '';
+  markSourceDirty(entry, 'bundle_id');
+  markSourceDirty(entry, 'bundle_source');
   delete entry.bundle_conflict;
   productQueue.save();
   renderBundle(entry);
@@ -1261,6 +1443,8 @@ $('btnUseWorkbookBundle').onclick = () => {
   if (!entry?.bundle_conflict) return;
   entry.bundle_id = entry.bundle_conflict.workbook_id;
   entry.bundle_source = 'workbook';
+  markSourceDirty(entry, 'bundle_id');
+  markSourceDirty(entry, 'bundle_source');
   delete entry.bundle_conflict;
   productQueue.save();
   invalidateProductPreview(entry);
@@ -1271,6 +1455,8 @@ $('btnUseCreatedBundle').onclick = () => {
   if (!entry?.bundle_conflict) return;
   entry.bundle_id = entry.bundle_conflict.created_id;
   entry.bundle_source = 'created';
+  markSourceDirty(entry, 'bundle_id');
+  markSourceDirty(entry, 'bundle_source');
   delete entry.bundle_conflict;
   productQueue.save();
   invalidateProductPreview(entry);
@@ -1283,6 +1469,7 @@ document.querySelectorAll('[data-product-tag]').forEach(box => {
     if (!entry) return;
     entry.tags = [...document.querySelectorAll('[data-product-tag]:checked')]
       .map(node => node.dataset.productTag);
+    markSourceDirty(entry, 'tags');
     productQueue.save();
   };
 });
@@ -1313,6 +1500,11 @@ $('productPlanFile').onchange = async () => {
 };
 $('btnApplySheets').onclick = () =>
   applySelectedSheets().catch(error => {
+    $('runMsg').textContent = error.message;
+    log(error.message, 'ERROR');
+  });
+$('btnReviewComposite').onclick = () =>
+  reviewCompositeBundle().catch(error => {
     $('runMsg').textContent = error.message;
     log(error.message, 'ERROR');
   });

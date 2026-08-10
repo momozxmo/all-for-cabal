@@ -303,6 +303,7 @@
           <input id="templateFile" class="hidden" type="file" accept=".xlsx,.xlsm,.csv">
           <input id="planFile" class="hidden" type="file" accept=".xlsx,.xlsm">
           <div id="workspaceSummary" class="summary">ยังไม่ได้ import</div>
+          <div id="searchHandoffNotice" class="summary warning" hidden></div>
         </div>
         <div class="table-wrap"><table id="criteriaTable"><thead><tr><th>#</th><th>ItemKind</th><th>itemOption</th><th>durationIndex</th><th>ชื่อในไฟล์</th><th>พารามิเตอร์ที่เช็ค</th><th>กลุ่ม / ตาราง</th></tr></thead><tbody></tbody></table></div>
       </section>
@@ -365,7 +366,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false };
+const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'' };
 
 // Same-origin API calls funnel through here so an expired web session always
 // bounces to /login instead of silently failing.
@@ -459,33 +460,76 @@ function renderCriteria(){ const body=$('criteriaTable').tBodies[0]; body.replac
 // The workspace lives on the server, so leaving this page need not throw the
 // search away: remember which one it was and pick it up again on the way back.
 const WORKSPACE_KEY='afc.workspaceId', GAME_KEY='afc.game';
+const ITEM_FINDER_HANDOFF_KEY='afc.itemFinderHandoff';
 function rememberWorkspace(id){try{id?localStorage.setItem(WORKSPACE_KEY,id):localStorage.removeItem(WORKSPACE_KEY);}catch(e){}}
 function rememberGame(){try{localStorage.setItem(GAME_KEY,$('game').value);}catch(e){}}
 $('game').addEventListener('change',rememberGame);
-async function restoreWorkspace(){
-  let id='';try{id=localStorage.getItem(WORKSPACE_KEY)||'';}catch(e){}
-  if(!id)return false;
+function sourceGroupRows(rows,sourceGroupKey){
+  const wanted=String(sourceGroupKey||'').trim();if(!wanted)return rows||[];
+  return (rows||[]).flatMap(source=>{
+    const row=structuredClone(source||{}),sources=Array.isArray(row.sources)?row.sources:[];
+    const hasKeys=Object.hasOwn(row,'group_keys'),identifiers=hasKeys&&Array.isArray(row.group_keys)?row.group_keys:sources;
+    const positions=identifiers.map((value,index)=>String(value||'').trim()===wanted?index:-1).filter(index=>index>=0);
+    if(!positions.length)return [];
+    if(hasKeys)row.group_keys=positions.map(index=>identifiers[index]);
+    row.sources=positions.filter(index=>index<sources.length).map(index=>sources[index]);
+    return [row];
+  });
+}
+function consumeItemFinderHandoff(){
+  const query=new URLSearchParams(location.search),hasQueryIdentity=query.has('workspace_id')||query.has('source_group_key');
+  const queryWorkspace=String(query.get('workspace_id')||'').trim(),querySource=String(query.get('source_group_key')||'').trim();
+  let local={};try{local=JSON.parse(sessionStorage.getItem(ITEM_FINDER_HANDOFF_KEY)||'{}')||{};}catch(e){}
+  try{sessionStorage.removeItem(ITEM_FINDER_HANDOFF_KEY);}catch(e){}
+  if(hasQueryIdentity){
+    const clean=new URL(location.href);clean.searchParams.delete('workspace_id');clean.searchParams.delete('source_group_key');
+    history.replaceState(history.state,'',clean.pathname+clean.search+clean.hash);
+  }
+  const workspaceId=hasQueryIdentity?queryWorkspace:String(local.workspace_id||'').trim();
+  const sourceGroupKey=hasQueryIdentity?querySource:String(local.source_group_key||'').trim();
+  return workspaceId&&sourceGroupKey?{workspace_id:workspaceId,source_group_key:sourceGroupKey}:null;
+}
+async function loadRememberedWorkspace(id,sourceGroupKey=''){
   try{const r=await apiFetch('/api/workspaces/'+id);
-    if(!r.ok){rememberWorkspace('');return false;}
-    const d=await r.json();useWorkspace(d);
+    if(!r.ok)return false;
+    const d=await r.json();useWorkspace(d,sourceGroupKey);
     if(d.game)$('game').value=d.game;
     log(`เปิดรายการเดิมคืน (${d.count} รายการ · ผล ${d.result_count})`,'INFO');
     // A search outlives the page that started it, so one may still be going.
     // Reconnecting subscribes to it again: the log replays from the start and
     // the rest arrives live, as though the page had never left.
     if(d.running_job){
-      log('ยังค้นหาค้างอยู่จากตอนก่อนหน้า — ต่อกลับให้แล้ว','WARNING');
-      startSearch(true);}
+      const runningScope=String(d.running_job.source_group_key||'').trim();
+      const requestedScope=String(sourceGroupKey||'').trim();
+      if(runningScope===requestedScope){
+        log('ยังค้นหาค้างอยู่จากตอนก่อนหน้า — ต่อกลับให้แล้ว','WARNING');
+        startSearch(true);
+      }else{
+        log('ไม่ต่อการค้นหาที่ค้างอยู่ เพราะเป็นคนละขอบเขต Product','WARNING');
+      }}
     return true;
   }catch(e){return false;}}
-function useWorkspace(data){ state.workspaceId=data.workspace_id; rememberWorkspace(data.workspace_id); state.mode=data.mode; state.criteria=data.items||[];
+async function restoreWorkspace(){
+  let rememberedId='';try{rememberedId=localStorage.getItem(WORKSPACE_KEY)||'';}catch(e){}
+  const handoff=consumeItemFinderHandoff();
+  if(handoff&&await loadRememberedWorkspace(
+      handoff.workspace_id,handoff.source_group_key))return true;
+  if(rememberedId&&rememberedId!==handoff?.workspace_id){
+    if(await loadRememberedWorkspace(rememberedId))return true;
+    rememberWorkspace('');
+  }
+  return false;
+}
+function useWorkspace(data){ const sourceGroupKey=arguments.length>1?arguments[1]:''; state.workspaceId=data.workspace_id; rememberWorkspace(data.workspace_id); state.mode=data.mode; state.searchSourceGroupKey=String(sourceGroupKey||'').trim(); state.criteria=sourceGroupRows(data.items||[],state.searchSourceGroupKey);
   document.querySelector(`input[name=mode][value="${state.mode}"]`).checked=true; applyMode(state.mode,false); renderCriteria();resetResults();renderNotFound(data.not_found||[]);
-  const summary=$('workspaceSummary'), strong=document.createElement('strong');strong.textContent=`✓ ${data.count} รายการ`;summary.replaceChildren(strong,document.createTextNode(` จาก ${data.filename||''} · occurrence ${data.occurrence_count||0}`));
+  const summary=$('workspaceSummary'), strong=document.createElement('strong');strong.textContent=`✓ ${state.criteria.length} รายการ`;summary.replaceChildren(strong,document.createTextNode(` จาก ${data.filename||''} · occurrence ${data.occurrence_count||0}`));
+  const handoffNotice=$('searchHandoffNotice');handoffNotice.hidden=!state.searchSourceGroupKey;
+  handoffNotice.textContent=state.searchSourceGroupKey?'ค้นหา Item Finder กลุ่มนี้ก่อน แล้วจึงกลับไปตรวจ Composite Bundle (ระบบจะไม่เริ่มค้นหาให้อัตโนมัติ)':'';
   if(data.skipped?.length){const warning=document.createElement('span');warning.className='warning';warning.textContent=` · ข้าม ${data.skipped.length}`;summary.appendChild(warning);}
   $('btnToItemCode').disabled=data.mode!=='itemcode';
   $('btnToEvent').disabled=data.mode!=='event';
   $('btnToProduct').disabled=data.mode!=='shop';
-  setBusy(false); if(data.results?.length){state.results=data.results;renderResults();} }
+  setBusy(false); const visibleResults=sourceGroupRows(data.results||[],state.searchSourceGroupKey);if(visibleResults.length){state.results=visibleResults;renderResults();} }
 async function upload(kind,file){ if(!file)return; const form=new FormData(); form.append('file',file);form.append('mode',state.mode);if(state.workspaceId)form.append('workspace_id',state.workspaceId);
   setBusy(true); try{const response=await apiFetch(kind==='template'?'/api/import-template':'/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
     if(data.needs_sheet_selection){state.pendingId=data.pending_id;openSheetPicker(data.sheets);}else useWorkspace(data);
@@ -500,7 +544,7 @@ $('btnApplySheets').onclick=async()=>{const selected=[...document.querySelectorA
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 
 async function clearWorkspace(){ if(state.socket)state.socket.close();if(state.workspaceId)await apiFetch('/api/workspaces/'+state.workspaceId,{method:'DELETE'});
-  state.workspaceId='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;$('btnToProduct').disabled=true;setBusy(false);}
+  state.workspaceId='';state.searchSourceGroupKey='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('searchHandoffNotice').hidden=true;$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;$('btnToProduct').disabled=true;setBusy(false);}
 $('btnClearWorkspace').onclick=clearWorkspace;
 
 function setRowSelected(index,tr,select,on){select.checked=on;on?state.selected.add(index):state.selected.delete(index);tr.classList.toggle('row-selected',on);resultActions();}
@@ -527,9 +571,9 @@ function startSearch(attach,onlyMissing){if(!state.workspaceId)return;
   if(!attach&&!onlyMissing){resetResults();renderNotFound([]);}
   $('progress').value=0;$('progressText').textContent=attach?'ต่อกลับเข้ากับการค้นหาที่ค้างอยู่…':(onlyMissing?'ค้นซ้ำเฉพาะที่ไม่เจอ…':'กำลังเชื่อมต่อ…');setBusy(true);
   const protocol=location.protocol==='https:'?'wss:':'ws:';const socket=new WebSocket(`${protocol}//${location.host}/ws/search`);state.socket=socket;
-  socket.onopen=()=>socket.send(JSON.stringify({workspace_id:state.workspaceId,game:$('game').value,web_mode:document.querySelector('input[name=webMode]:checked').value,headed:state.allowHeaded&&$('runHeaded').checked,only_missing:!!onlyMissing}));
+  socket.onopen=()=>socket.send(JSON.stringify({workspace_id:state.workspaceId,source_group_key:state.searchSourceGroupKey,game:$('game').value,web_mode:document.querySelector('input[name=webMode]:checked').value,headed:state.allowHeaded&&$('runHeaded').checked,only_missing:!!onlyMissing}));
   socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.type==='log')log(message.msg,message.level);else if(message.type==='progress'){const percent=message.total?message.cur/message.total*100:0;$('progress').value=Math.min(100,percent);$('progressText').textContent=`${message.cur}/${message.total} ${message.name||''}`;}
-    else if(message.type==='reset_results')resetResults();else if(message.type==='result')addResult(message.item);
+    else if(message.type==='reset_results')resetResults();else if(message.type==='result')sourceGroupRows([message.item],state.searchSourceGroupKey).forEach(addResult);
     else if(message.type==='error'){ if(message.code==='aztek_session_required'||message.code==='aztek_session_expired'){ paintAztek(message.code==='aztek_session_expired'?'expired':'disconnected'); log((message.msg||'ต้องเชื่อมเซสชัน Aztek ก่อน')+' — เปิดหน้า “บัญชี / เชื่อม Aztek”','ERROR'); } else { log(message.msg||'เกิดข้อผิดพลาด','ERROR'); } }
     else if(message.type==='done'){$('progress').value=100;const review=state.results.filter(r=>r.name_mismatch).length;$('progressText').textContent=`เสร็จ · พบ ${message.count}`+(review?` · ⚠ ตรวจเอง ${review}`:'');renderNotFound(message.not_found||[]);setBusy(false);if(review)log(`⚠ มี ${review} รายการชื่อไม่ตรงกับไฟล์ (ไฮไลต์สีเหลือง) — ตรวจเอง`,'WARNING');}};
   socket.onerror=()=>log('WebSocket ขัดข้อง','ERROR');socket.onclose=event=>{state.socket=null;setBusy(false); if(event&&event.code===4401){window.location.replace('/login');}};}

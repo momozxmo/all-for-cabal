@@ -604,6 +604,30 @@ def _shop_number(value):
     return int(number) if number.is_integer() else number
 
 
+_SHOP_ID_TOKEN = re.compile(
+    r'(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])')
+
+
+def _shop_id_tokens(value):
+    """Return integral IDs in source order with explicit comma handling."""
+    if isinstance(value, bool) or value is None:
+        return []
+    if isinstance(value, int):
+        return [str(value)] if value >= 0 else []
+    if isinstance(value, float):
+        return ([str(int(value))]
+                if math.isfinite(value) and value >= 0 and value.is_integer()
+                else [])
+    output = []
+    for match in _SHOP_ID_TOKEN.finditer(str(value)):
+        token = match.group(0).replace(',', '')
+        whole, dot, fraction = token.partition('.')
+        if dot and (not fraction or set(fraction) != {'0'}):
+            continue
+        output.append(str(int(whole)))
+    return output
+
+
 def _shop_date_text(value):
     if isinstance(value, dt.datetime):
         return value.strftime('%Y-%m-%d')
@@ -721,10 +745,12 @@ def _shop_product_meta(header_rows, sheet_title, group, now=None):
     if (values.get('end_date') not in (None, '')
             or values.get('end_time') not in (None, '')) and not end_at:
         warnings.append('อ่าน End Date/End Time ไม่ครบ')
+    bundle_ids = _shop_id_tokens(values.get('bundle_id'))
     return {
         'source_sheet': sheet_title,
         'name': str(values.get('name') or group).strip(),
-        'bundle_id': _event_num(values.get('bundle_id')),
+        'bundle_ids': bundle_ids,
+        'bundle_id': bundle_ids[0] if len(bundle_ids) == 1 else '',
         'category_label': str(values.get('category_label') or '').strip(),
         'shop_label': str(values.get('shop_label') or '').strip(),
         'start_at': now.strftime('%Y-%m-%d 00:00:00'),
@@ -806,7 +832,7 @@ def _shop_sheet_items(rows, sheet_title, skipped=None, now=None):
             if not group:
                 group = '%s · ตาราง %d' % (sheet_title, tbl)
             product_meta = _shop_product_meta(
-                buf[-16:], sheet_title, group, now=now)
+                (buf + [row])[-16:], sheet_title, group, now=now)
             buf.append(row)
             buf[:] = buf[-16:]
             continue

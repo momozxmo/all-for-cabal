@@ -7,14 +7,20 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTS = ROOT / 'web' / 'static' / 'products.html'
+BUNDLES = ROOT / 'web' / 'static' / 'bundles.html'
+ITEM_FINDER = ROOT / 'web' / 'static' / 'index.html'
 CONSOLE_JS = ROOT / 'web' / 'static' / 'console.js'
 
 
-def _tool_page(browser):
-    html = PRODUCTS.read_text(encoding='utf-8').replace(
+def _page_html(path):
+    return path.read_text(encoding='utf-8').replace(
         '<script src="/static/console.js"></script>',
         '<script>%s</script>' % CONSOLE_JS.read_text(encoding='utf-8'),
     )
+
+
+def _tool_page(browser):
+    html = _page_html(PRODUCTS)
     context = browser.new_context()
     page = context.new_page()
     page.route(
@@ -54,6 +60,208 @@ def test_product_queue_loads_workspace_drafts_once_and_survives_reload():
            name_th:'Orb Pack', name_en:'Orb Pack'}
         ], 'workspace-1')""")
         assert page.evaluate("productQueue.items.length") == 1
+        browser.close()
+
+
+def test_product_source_refresh_merges_pristine_fields_and_keeps_local_edits():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          addDrafts([{
+            source_group_key:'g1',source_sheet:'Old Sheet',name_th:'Old Name',
+            name_en:'Old Name',category_source:'Old Category',
+            start_at:'2026-08-01 00:00:00',end_at:'2026-08-02 07:59:00',
+            bundle_ids:['223930','223931'],composite_required:true,
+            bundle_id:'',bundle_source:'',
+            price_candidates:[{source_label:'Wallet Point',original_price:10,sale_price:10}],
+            limit_type:'PLAYER',limit_quantity:'1',
+            limit_reset_interval_days:'1',limit_reset_at:'2026-07-31 04:30:00',
+            tags:['NEW'],warnings:['old warning']
+          }], 'workspace-1');
+          const entry = productQueue.current();
+          entry.selected = true;
+          entry.image_names = {thumbnail_th:'kept.png'};
+          entry.category_id = '77';
+          entry.category_label = 'Manual Category';
+          entry.category_slug = 'manual-category';
+          entry.prices = [{source_label:'Wallet Point',currency_id:'91',
+            currency_label:'Wallet Point',original_price:8,price:7}];
+          applyBundleHandoff({workspace_id:'workspace-1',rows:[
+            {source_group_key:'g1',bundle_id:'900001',name:'Old Name'}]});
+          previewedProductKeys.add(entry.key);
+          const name = document.querySelector('#nameTh');
+          name.value = 'Operator Name';
+          name.dispatchEvent(new Event('input', {bubbles:true}));
+          addDrafts([{
+            source_group_key:'g1',source_sheet:'New Sheet',name_th:'New Source Name',
+            name_en:'New Source English',category_source:'New Category',
+            start_at:'2026-08-03 00:00:00',end_at:'2026-08-31 07:59:00',
+            bundle_ids:['223930','223931','223932'],composite_required:true,
+            bundle_id:'',bundle_source:'',
+            price_candidates:[{source_label:'Wallet Point',original_price:20,sale_price:15}],
+            limit_type:'CHARACTER',limit_quantity:'5',
+            limit_reset_interval_days:'7',limit_reset_at:'2026-07-31 09:15:00',
+            tags:['SALE'],warnings:['new warning']
+          }], 'workspace-1');
+          const merged = productQueue.current();
+          return {
+            key:merged.key,name_th:merged.name_th,name_en:merged.name_en,
+            source_sheet:merged.source_sheet,category_source:merged.category_source,
+            start_at:merged.start_at,end_at:merged.end_at,
+            bundle_ids:merged.bundle_ids,composite_required:merged.composite_required,
+            bundle_id:merged.bundle_id,bundle_source:merged.bundle_source,
+            price_candidates:merged.price_candidates,prices:merged.prices,
+            limit_type:merged.limit_type,limit_quantity:merged.limit_quantity,
+            reset_interval:merged.limit_reset_interval_days,
+            reset_at:merged.limit_reset_at,tags:merged.tags,warnings:merged.warnings,
+            selected:merged.selected,image_names:merged.image_names,
+            category:[merged.category_id,merged.category_label,merged.category_slug],
+            dirty:merged.source_dirty || {},
+            snapshotName:merged.source_snapshot?.name_th || '',
+            previewed:previewedProductKeys.has(merged.key)
+          };
+        }""")
+
+        assert result['name_th'] == 'Operator Name'
+        assert result['name_en'] == 'New Source English'
+        assert result['source_sheet'] == 'New Sheet'
+        assert result['category_source'] == 'New Category'
+        assert result['start_at'] == '2026-08-03 00:00:00'
+        assert result['end_at'] == '2026-08-31 07:59:00'
+        assert result['bundle_ids'] == ['223930', '223931', '223932']
+        assert result['composite_required'] is True
+        assert (result['bundle_id'], result['bundle_source']) == (
+            '900001', 'created')
+        assert result['price_candidates'][0]['sale_price'] == 15
+        assert result['prices'][0]['currency_id'] == '91'
+        assert (result['limit_type'], result['limit_quantity']) == (
+            'CHARACTER', '5')
+        assert (result['reset_interval'], result['reset_at']) == (
+            '7', '2026-07-31 09:15:00')
+        assert result['tags'] == ['SALE']
+        assert result['warnings'] == ['new warning']
+        assert result['selected'] is True
+        assert result['image_names'] == {'thumbnail_th': 'kept.png'}
+        assert result['category'] == ['77', 'Manual Category', 'manual-category']
+        assert result['dirty']['name_th'] is True
+        assert result['snapshotName'] == 'New Source Name'
+        assert result['previewed'] is False
+        browser.close()
+
+
+def test_legacy_product_refresh_fills_only_missing_source_values():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          const legacy = withDefaults({
+            workspace_id:'workspace-1',source_group_key:'g1',
+            name_th:'Legacy Name',name_en:'',start_at:'',
+            end_at:'2026-08-15 07:59:00',price_candidates:[],
+            bundle_ids:[],bundle_id:'777',bundle_source:'manual'
+          });
+          productQueue.add(legacy);
+          productQueue.save();
+          renderQueue();
+          addDrafts([{
+            source_group_key:'g1',name_th:'Source Name',name_en:'Source English',
+            start_at:'2026-08-09 00:00:00',end_at:'2026-08-31 07:59:00',
+            bundle_ids:['223930','223931'],composite_required:true,
+            bundle_id:'',price_candidates:[{source_label:'Wallet Point',
+              original_price:20,sale_price:20}]
+          }], 'workspace-1');
+          return productQueue.current();
+        }""")
+
+        assert result['name_th'] == 'Legacy Name'
+        assert result['name_en'] == 'Source English'
+        assert result['start_at'] == '2026-08-09 00:00:00'
+        assert result['end_at'] == '2026-08-15 07:59:00'
+        assert result['bundle_ids'] == ['223930', '223931']
+        assert result['bundle_id'] == '777'
+        assert result['bundle_source'] == 'manual'
+        assert result['price_candidates'][0]['sale_price'] == 20
+        assert result['source_snapshot']['end_at'] == '2026-08-31 07:59:00'
+        browser.close()
+
+
+def test_partial_source_refresh_ignores_missing_and_null_but_applies_empty_clear():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          addDrafts([{
+            source_group_key:'g1',name_th:'Old Thai',name_en:'Old English',
+            category_source:'Highlight',start_at:'2026-08-01 00:00:00',
+            end_at:'2026-08-31 07:59:00',bundle_ids:['11','12'],
+            composite_required:true,bundle_id:'',bundle_source:'',
+            price_candidates:[{source_label:'Wallet Point',
+              original_price:100,sale_price:90}],
+            limit_type:'PLAYER',limit_quantity:'5',
+            limit_reset_interval_days:'7',limit_reset_at:'2026-07-31 09:15:00',
+            tags:['SALE'],warnings:['old warning']
+          }], 'workspace-1');
+          const entry = productQueue.current();
+          entry.selected = true;
+          entry.category_id = '77';
+          entry.category_label = 'Manual Category';
+          entry.prices = [{source_label:'Wallet Point',currency_id:'91',
+            original_price:100,price:90}];
+          applyBundleHandoff({workspace_id:'workspace-1',rows:[{
+            source_group_key:'g1',bundle_id:'900001'}]});
+          const name = document.querySelector('#nameTh');
+          name.value = 'Operator Thai';
+          name.dispatchEvent(new Event('input', {bubbles:true}));
+          previewedProductKeys.add(entry.key);
+
+          addDrafts([{
+            source_group_key:'g1',name_th:'New source Thai',name_en:null,
+            end_at:'',price_candidates:null,limit_quantity:'',
+            tags:undefined,warnings:null
+          }], 'workspace-1');
+          const merged = productQueue.current();
+          return {
+            name_th:merged.name_th,name_en:merged.name_en,
+            category_source:merged.category_source,start_at:merged.start_at,
+            end_at:merged.end_at,bundle_ids:merged.bundle_ids,
+            composite_required:merged.composite_required,
+            bundle_id:merged.bundle_id,bundle_source:merged.bundle_source,
+            price_candidates:merged.price_candidates,
+            limit_type:merged.limit_type,limit_quantity:merged.limit_quantity,
+            reset_interval:merged.limit_reset_interval_days,
+            reset_at:merged.limit_reset_at,tags:merged.tags,
+            warnings:merged.warnings,selected:merged.selected,
+            category_id:merged.category_id,prices:merged.prices,
+            snapshot:merged.source_snapshot,
+            previewed:previewedProductKeys.has(merged.key)
+          };
+        }""")
+
+        assert result['name_th'] == 'Operator Thai'
+        assert result['name_en'] == 'Old English'
+        assert result['category_source'] == 'Highlight'
+        assert result['start_at'] == '2026-08-01 00:00:00'
+        assert result['end_at'] == ''
+        assert result['bundle_ids'] == ['11', '12']
+        assert result['composite_required'] is True
+        assert (result['bundle_id'], result['bundle_source']) == (
+            '900001', 'created')
+        assert result['price_candidates'][0]['sale_price'] == 90
+        assert result['limit_type'] == 'PLAYER'
+        assert result['limit_quantity'] == ''
+        assert (result['reset_interval'], result['reset_at']) == (
+            '7', '2026-07-31 09:15:00')
+        assert result['tags'] == ['SALE']
+        assert result['warnings'] == ['old warning']
+        assert result['selected'] is True
+        assert result['category_id'] == '77'
+        assert result['prices'][0]['currency_id'] == '91'
+        assert result['snapshot']['name_th'] == 'New source Thai'
+        assert result['snapshot']['name_en'] == 'Old English'
+        assert result['snapshot']['end_at'] == ''
+        assert result['snapshot']['price_candidates'][0]['sale_price'] == 90
+        assert result['previewed'] is False
         browser.close()
 
 
@@ -547,6 +755,498 @@ def test_bundle_handoff_matches_exact_keys_and_exposes_conflicts():
             'created_id': '300',
         }
         assert by_key['other']['bundle_id'] == ''
+        browser.close()
+
+
+def test_composite_sources_are_read_only_and_exact_handoff_clears_pending_state():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        before = page.evaluate("""() => {
+          addDrafts([{
+            source_group_key:'group-1',name_th:'Composite Product',
+            name_en:'Composite Product',bundle_ids:['223930','223931'],
+            composite_required:true,bundle_id:'',bundle_source:'',
+            price_candidates:[],prices:[]
+          }], 'workspace-1');
+          const entry = productQueue.current();
+          previewedProductKeys.add(entry.key);
+          const sources = document.querySelector('#bundleSourceIds');
+          const notice = document.querySelector('#compositeNotice');
+          return {
+            sourceText:sources?.textContent || '',
+            sourceInputs:sources?.querySelectorAll('input').length || 0,
+            notice:notice?.textContent || '',
+            noticeHidden:notice?.hidden ?? true,
+            finalReadOnly:document.querySelector('#bundleId').readOnly,
+            queueText:document.querySelector('#productQueue').selectedOptions[0].textContent,
+            runError:runnableError([entry]),
+            previewed:previewedProductKeys.has(entry.key)
+          };
+        }""")
+
+        assert '223930' in before['sourceText']
+        assert '223931' in before['sourceText']
+        assert before['sourceInputs'] == 0
+        assert 'Composite Bundle' in before['notice']
+        assert before['noticeHidden'] is False
+        assert before['finalReadOnly'] is False
+        assert 'Composite Bundle' in before['queueText']
+        assert 'Composite Bundle' in before['runError']
+
+        after_wrong_key = page.evaluate("""() => {
+          applyBundleHandoff({workspace_id:'workspace-1',rows:[{
+            source_group_key:'group-10',bundle_id:'900000',name:'Wrong'}]});
+          return productQueue.current().bundle_id;
+        }""")
+        assert after_wrong_key == ''
+
+        without_workspace = page.evaluate("""() => {
+          applyBundleHandoff({rows:[{
+            source_group_key:'group-1',bundle_id:'900000',name:'Ambiguous'}]});
+          return productQueue.current().bundle_id;
+        }""")
+        assert without_workspace == ''
+
+        after = page.evaluate("""() => {
+          applyBundleHandoff({workspace_id:'workspace-1',rows:[{
+            source_group_key:'group-1',bundle_id:'900001',name:'Composite'}]});
+          const entry = productQueue.current();
+          const notice = document.querySelector('#compositeNotice');
+          return {
+            bundle_id:entry.bundle_id,bundle_source:entry.bundle_source,
+            bundle_ids:entry.bundle_ids,composite_required:entry.composite_required,
+            noticeHidden:notice?.hidden ?? true,
+            queueText:document.querySelector('#productQueue').selectedOptions[0].textContent,
+            runError:runnableError([entry]),
+            previewed:previewedProductKeys.has(entry.key)
+          };
+        }""")
+
+        assert after['bundle_id'] == '900001'
+        assert after['bundle_source'] == 'created'
+        assert after['bundle_ids'] == ['223930', '223931']
+        assert after['composite_required'] is True
+        assert after['noticeHidden'] is True
+        assert 'รอ Composite Bundle' not in after['queueText']
+        assert 'Composite Bundle' not in after['runError']
+        assert after['previewed'] is False
+        browser.close()
+
+
+def test_bundle_handoff_rejects_legacy_empty_workspace_identity():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        bundle_id = page.evaluate("""() => {
+          addDrafts([{
+            source_group_key:'legacy-group',name_th:'Legacy Product',
+            bundle_ids:['11','12'],composite_required:true,bundle_id:'',
+            price_candidates:[],prices:[]
+          }], '');
+          applyBundleHandoff({rows:[{
+            source_group_key:'legacy-group',bundle_id:'900001'}]});
+          return productQueue.current().bundle_id;
+        }""")
+
+        assert bundle_id == ''
+        browser.close()
+
+
+def test_pending_composite_action_hands_only_exact_group_bundle_to_review_queue():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => addDrafts([{
+          source_group_key:'group-a',name_th:'Product A',name_en:'Product A',
+          bundle_ids:['223930','223931'],composite_required:true,
+          bundle_id:'',price_candidates:[],prices:[]
+        }], 'workspace-1')""")
+
+        assert page.locator('#btnReviewComposite').count() == 1
+
+        requests = []
+
+        def preview(route):
+            requests.append(route.request.post_data_json)
+            route.fulfill(
+                status=200, content_type='application/json',
+                body='{"bundles":[{"name":"Product A Composite",'
+                     '"group":"Product A","group_key":"group-a","items":['
+                     '{"id":"11","name":"A only","qty":"2"},'
+                     '{"id":"12","name":"Shared","qty":"3"}]}],'
+                     '"mode":"shop","game":"CabalPC TH",'
+                     '"event_drafts":[],"itemcode_drafts":[],"not_found":[]}')
+
+        page.route('**/api/workspaces/workspace-1/bundles', preview)
+        page.context.route(
+            'http://tool.test/bundles',
+            lambda route: route.fulfill(
+                status=200, content_type='text/html; charset=utf-8',
+                body=_page_html(BUNDLES)),
+        )
+
+        page.locator('#btnReviewComposite').click()
+        page.wait_for_url('http://tool.test/bundles')
+        page.wait_for_function(
+            "typeof state === 'object' && state.queue.length === 1")
+
+        assert requests == [{'source_group_key': 'group-a'}]
+        assert page.evaluate("""() => state.queue.map(bundle => ({
+          workspace_id:bundle.workspace_id,group_key:bundle.group_key,
+          ids:bundle.items.map(item => item.id)
+        }))""") == [{
+            'workspace_id': 'workspace-1',
+            'group_key': 'group-a',
+            'ids': ['11', '12'],
+        }]
+        assert page.locator('#btnCreateOne').is_disabled()
+        browser.close()
+
+
+def test_direct_product_import_hands_exact_group_to_item_finder_before_bundle():
+    """No search is auto-started and no create runner is called by the fallback."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => addDrafts([{
+          source_group_key:'group-a',name_th:'Product A',name_en:'Product A',
+          bundle_ids:['223930','223931'],composite_required:true,
+          bundle_id:'',price_candidates:[],prices:[]
+        }], 'workspace-1')""")
+
+        calls = []
+
+        def preview(route):
+            calls.append((route.request.method, route.request.url))
+            route.fulfill(
+                status=200, content_type='application/json', body='''{
+                  "bundles":[],"needs_search":true,
+                  "mode":"shop","game":"CabalPC TH",
+                  "search_handoff":{
+                    "workspace_id":"workspace-1",
+                    "source_group_key":"group-a",
+                    "criteria":[
+                      {"kind":"11","name":"A only",
+                       "sources":["Product A"],"group_keys":["group-a"]},
+                      {"kind":"12","name":"Shared",
+                       "sources":["Product A"],"group_keys":["group-a"]}
+                    ]
+                  }
+                }''')
+
+        def item_finder_app(route):
+            url = route.request.url
+            calls.append((route.request.method, url))
+            if url.startswith('http://tool.test/?'):
+                route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8',
+                    body=_page_html(ITEM_FINDER))
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'tester', 'role': 'member',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalPC TH']})
+            elif url.endswith('/api/modes'):
+                route.fulfill(json={
+                    'shop': {'web_mode': 'any', 'web_locked': False,
+                             'read_desc': True},
+                    'event': {'web_mode': 'no', 'web_locked': False,
+                              'read_desc': False},
+                    'itemcode': {'web_mode': 'no', 'web_locked': True,
+                                 'read_desc': False},
+                })
+            elif url.endswith('/api/capabilities'):
+                route.fulfill(json={'allow_headed': False})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            elif url.endswith('/api/workspaces/workspace-1'):
+                route.fulfill(json={
+                    'workspace_id': 'workspace-1', 'mode': 'shop',
+                    'game': 'CabalPC TH', 'filename': 'direct-plan.xlsx',
+                    'count': 3, 'occurrence_count': 3, 'result_count': 0,
+                    'items': [
+                        {'kind': '11', 'name': 'A only',
+                         'sources': ['Product A'],
+                         'group_keys': ['group-a']},
+                        {'kind': '12', 'name': 'Shared',
+                         'sources': ['Product A', 'Product B'],
+                         'group_keys': ['group-a', 'group-b']},
+                        {'kind': '99', 'name': 'B only',
+                         'sources': ['Product B'],
+                         'group_keys': ['group-b']},
+                    ],
+                    'results': [], 'not_found': [],
+                })
+            else:
+                route.abort()
+
+        page.route('**/api/workspaces/workspace-1/bundles', preview)
+        page.context.route('http://tool.test/**', item_finder_app)
+
+        page.locator('#btnReviewComposite').click()
+        page.wait_for_url(
+            'http://tool.test/?workspace_id=workspace-1&source_group_key=group-a')
+        page.wait_for_function(
+            "typeof state === 'object' && state.criteria.length === 2")
+
+        assert page.evaluate(
+            "state.criteria.map(row => [row.kind,row.sources,row.group_keys])"
+        ) == [
+            ['11', ['Product A'], ['group-a']],
+            ['12', ['Product A'], ['group-a']],
+        ]
+        notice = page.locator('#searchHandoffNotice')
+        assert notice.is_visible()
+        assert 'Item Finder' in notice.inner_text()
+        assert 'Bundle' in notice.inner_text()
+        assert page.evaluate("state.searchSourceGroupKey") == 'group-a'
+        assert not any('/api/bundles/run' in url or '/api/products/run' in url
+                       for _, url in calls)
+        assert not any('/ws/search' in url for _, url in calls)
+        browser.close()
+
+
+def test_stale_item_finder_handoff_is_consumed_and_normal_workspace_restores():
+    """A missing scoped workspace cannot replay or erase a valid normal one."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        workspace_requests = []
+
+        def item_finder_app(route):
+            url = route.request.url
+            if url == 'http://tool.test/seed':
+                route.fulfill(status=200, content_type='text/html',
+                              body='<html></html>')
+            elif (route.request.resource_type == 'document'
+                  and url.startswith('http://tool.test/')):
+                route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8',
+                    body=_page_html(ITEM_FINDER))
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'tester', 'role': 'member',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalPC TH']})
+            elif url.endswith('/api/modes'):
+                route.fulfill(json={
+                    'shop': {'web_mode': 'any', 'web_locked': False,
+                             'read_desc': True},
+                    'event': {'web_mode': 'no', 'web_locked': False,
+                              'read_desc': False},
+                    'itemcode': {'web_mode': 'no', 'web_locked': True,
+                                 'read_desc': False},
+                })
+            elif url.endswith('/api/capabilities'):
+                route.fulfill(json={'allow_headed': False})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            elif '/api/workspaces/' in url:
+                workspace_id = url.rsplit('/', 1)[-1]
+                workspace_requests.append(workspace_id)
+                if workspace_id.startswith('missing'):
+                    route.fulfill(status=403, json={'detail': 'forbidden'})
+                elif workspace_id == 'normal-workspace':
+                    route.fulfill(json={
+                        'workspace_id': 'normal-workspace', 'mode': 'shop',
+                        'game': 'CabalPC TH', 'filename': 'normal.xlsx',
+                        'count': 1, 'occurrence_count': 1, 'result_count': 0,
+                        'items': [{'kind': '77', 'name': 'Normal item',
+                                   'sources': ['Normal']}],
+                        'results': [], 'not_found': [],
+                    })
+                else:
+                    route.abort()
+            else:
+                route.abort()
+
+        context.route('http://tool.test/**', item_finder_app)
+        page.goto('http://tool.test/seed')
+        page.evaluate("""() => {
+          localStorage.setItem('afc.workspaceId', 'normal-workspace');
+          sessionStorage.setItem('afc.itemFinderHandoff', JSON.stringify({
+            workspace_id:'missing-workspace',source_group_key:'group-a'
+          }));
+        }""")
+
+        page.goto(
+            'http://tool.test/?workspace_id=missing-workspace&source_group_key=group-a')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'normal-workspace'")
+
+        assert workspace_requests == ['missing-workspace', 'normal-workspace']
+        assert page.url == 'http://tool.test/'
+        assert page.evaluate(
+            "sessionStorage.getItem('afc.itemFinderHandoff')") is None
+        assert page.evaluate(
+            "localStorage.getItem('afc.workspaceId')") == 'normal-workspace'
+        assert page.evaluate(
+            "state.criteria.map(row => row.name)") == ['Normal item']
+        assert page.locator('#searchHandoffNotice').is_hidden()
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'normal-workspace'")
+        assert workspace_requests == [
+            'missing-workspace', 'normal-workspace', 'normal-workspace']
+
+        # A partial query identity must not borrow its missing half from a stale
+        # session payload. Both are consumed and the normal workspace wins.
+        page.evaluate("""() => sessionStorage.setItem(
+          'afc.itemFinderHandoff', JSON.stringify({
+            workspace_id:'missing-second',source_group_key:'group-b'
+          }))""")
+        page.goto('http://tool.test/?workspace_id=missing-partial')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'normal-workspace'")
+        assert 'missing-partial' not in workspace_requests
+        assert page.url == 'http://tool.test/'
+        assert page.evaluate(
+            "sessionStorage.getItem('afc.itemFinderHandoff')") is None
+        assert page.evaluate(
+            "localStorage.getItem('afc.workspaceId')") == 'normal-workspace'
+        browser.close()
+
+
+def test_scoped_handoff_does_not_attach_to_an_unscoped_running_search():
+    """Restore must not open a websocket that could replay sibling rows."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        context.add_init_script("""
+          window.createdSearchSockets = [];
+          window.WebSocket = class {
+            constructor(url) { this.url = url; window.createdSearchSockets.push(url); }
+            send() {}
+            close() {}
+          };
+        """)
+        page = context.new_page()
+
+        def item_finder_app(route):
+            url = route.request.url
+            if (route.request.resource_type == 'document'
+                    and url.startswith('http://tool.test/')):
+                route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8',
+                    body=_page_html(ITEM_FINDER))
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'tester', 'role': 'member',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalPC TH']})
+            elif url.endswith('/api/modes'):
+                route.fulfill(json={
+                    'shop': {'web_mode': 'any', 'web_locked': False,
+                             'read_desc': True}})
+            elif url.endswith('/api/capabilities'):
+                route.fulfill(json={'allow_headed': False})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            elif url.endswith('/api/workspaces/workspace-1'):
+                route.fulfill(json={
+                    'workspace_id': 'workspace-1', 'mode': 'shop',
+                    'game': 'CabalPC TH', 'filename': 'products.xlsx',
+                    'count': 1, 'occurrence_count': 1, 'result_count': 0,
+                    'items': [{'kind': '11', 'name': 'A',
+                               'sources': ['Product A'],
+                               'group_keys': ['group-a']}],
+                    'results': [], 'not_found': [],
+                    'running_job': {'job_id': 'job-1', 'status': 'running',
+                                    'source_group_key': ''},
+                })
+            else:
+                route.abort()
+
+        context.route('http://tool.test/**', item_finder_app)
+        page.goto(
+            'http://tool.test/?workspace_id=workspace-1&source_group_key=group-a')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'workspace-1'")
+        page.wait_for_timeout(100)
+
+        assert page.evaluate('window.createdSearchSockets') == []
+        assert page.evaluate('state.searchSourceGroupKey') == 'group-a'
+        assert 'คนละ' in page.locator('#log').inner_text()
+        browser.close()
+
+
+def test_scoped_retry_renders_only_target_group_live_results():
+    """A reset/replay must not make sibling or group-less rows selectable."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        context.add_init_script("""
+          window.WebSocket = class {
+            constructor(url) { this.url = url; window.lastSearchSocket = this; }
+            send() {}
+            close() {}
+          };
+        """)
+        page = context.new_page()
+
+        def item_finder_app(route):
+            url = route.request.url
+            if (route.request.resource_type == 'document'
+                    and url.startswith('http://tool.test/')):
+                route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8',
+                    body=_page_html(ITEM_FINDER))
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'tester', 'role': 'member',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalPC TH']})
+            elif url.endswith('/api/modes'):
+                route.fulfill(json={
+                    'shop': {'web_mode': 'any', 'web_locked': False,
+                             'read_desc': True}})
+            elif url.endswith('/api/capabilities'):
+                route.fulfill(json={'allow_headed': False})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            elif url.endswith('/api/workspaces/workspace-1'):
+                route.fulfill(json={
+                    'workspace_id': 'workspace-1', 'mode': 'shop',
+                    'game': 'CabalPC TH', 'filename': 'products.xlsx',
+                    'count': 1, 'occurrence_count': 1, 'result_count': 1,
+                    'items': [{'kind': '2', 'name': 'A recovered',
+                               'sources': ['Product A'],
+                               'group_keys': ['group-a']}],
+                    'results': [{'aztek_id': '10', 'item_name': 'A old',
+                                 'sources': ['Product A'],
+                                 'group_keys': ['group-a']}],
+                    'not_found': [['#1 Kind=2', 'missing']],
+                    'running_job': None,
+                })
+            else:
+                route.abort()
+
+        context.route('http://tool.test/**', item_finder_app)
+        page.goto(
+            'http://tool.test/?workspace_id=workspace-1&source_group_key=group-a')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'workspace-1'")
+        page.evaluate('startSearch(false,true)')
+        page.evaluate("""() => {
+          const send = message => window.lastSearchSocket.onmessage({
+            data: JSON.stringify(message)});
+          send({type:'reset_results'});
+          send({type:'result',item:{aztek_id:'20',item_name:'A recovered',
+            sources:['Product A'],group_keys:['group-a']}});
+          send({type:'result',item:{aztek_id:'30',item_name:'B sibling',
+            sources:['Product B'],group_keys:['group-b']}});
+          send({type:'result',item:{aztek_id:'40',item_name:'Unscoped',
+            sources:[],group_keys:[]}});
+          send({type:'done',count:4,not_found:[]});
+        }""")
+
+        assert page.evaluate('state.results.map(row => row.aztek_id)') == ['20']
+        assert page.locator('#resultsTable tbody tr').count() == 1
+        assert page.locator('#resultsTable tbody').inner_text().count('B sibling') == 0
+        assert page.locator('#resultsTable tbody').inner_text().count('Unscoped') == 0
         browser.close()
 
 

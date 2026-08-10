@@ -62,6 +62,7 @@ class ApplyPlanRequest(BaseModel):
 
 class BundleRequest(BaseModel):
     selected_indexes: list[int] = Field(default_factory=list)
+    source_group_key: str = Field(default='', max_length=240)
 
 
 class BundleSpec(BaseModel):
@@ -322,7 +323,11 @@ def _running_job(db, workspace) -> dict | None:
         .order_by(Job.created_at.desc()))
     if job is None:
         return None
-    return {'job_id': job.id, 'status': job.status}
+    return {
+        'job_id': job.id,
+        'status': job.status,
+        'source_group_key': str((job.config or {}).get('source_group_key') or '').strip(),
+    }
 
 
 def _workspace_view(workspace, db=None):
@@ -1140,15 +1145,42 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
     from web import event_plan, itemcode_plan
 
     workspace = _get_workspace(WorkspaceRepository(db), user.id, workspace_id)
+    source_group_key = payload.source_group_key.strip()
     indexes = payload.selected_indexes
-    if indexes:
+    if source_group_key:
+        rows = item_service.rows_for_source_group(
+            workspace.results, source_group_key)
+    elif indexes:
         rows = [workspace.results[index] for index in sorted(set(indexes))
                 if isinstance(index, int) and 0 <= index < len(workspace.results)]
     else:
         rows = workspace.results
+    if not rows and source_group_key:
+        criteria = item_service.rows_for_source_group(
+            workspace.criteria, source_group_key)
+        if criteria:
+            return {
+                'bundles': [], 'needs_search': True,
+                'mode': workspace.mode, 'game': workspace.game or '',
+                'event_drafts': [], 'itemcode_drafts': [],
+                'not_found': workspace.not_found or [],
+                'search_handoff': {
+                    'workspace_id': workspace_id,
+                    'source_group_key': source_group_key,
+                    'criteria': criteria,
+                },
+            }
     if not rows:
         raise HTTPException(status_code=400, detail='ไม่มีไอเทมให้รวมเป็นบันเดิล')
     bundles = item_service.build_bundles(rows, workspace.group_meta)
+    if source_group_key:
+        bundles = [bundle for bundle in bundles
+                   if str(bundle.get('group_key') or '').strip()
+                   == source_group_key]
+        if not bundles:
+            raise HTTPException(
+                status_code=400,
+                detail='ไม่พบแถว Item ของ Product กลุ่มที่เลือก')
     group_keys = [bundle.get('group_key') for bundle in bundles
                   if bundle.get('group_key')]
     event_drafts = event_plan.build_workspace_events(
@@ -1962,7 +1994,8 @@ async def ws_search(ws: WebSocket):
         # to another page attaches to it and replays the log so far.
         started = await coordinator.start(user_id, workspace_id, request, send)
         if started:
-            await coordinator.attach(workspace_id, send)
+            await coordinator.attach(
+                workspace_id, send, request.get('source_group_key') or '')
     except WebSocketDisconnect:
         pass
     finally:

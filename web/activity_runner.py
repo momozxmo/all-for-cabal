@@ -36,6 +36,8 @@ class ActivityBuilder:
     KIND = ''
     #: Substring that marks the write request among the page's traffic.
     WRITE_MARK = ''
+    #: A visible field proving this subclass's client-rendered form is ready.
+    READY_SELECTOR = 'input[name="name_th"]'
 
     def __init__(self, on_log):
         self._log = on_log
@@ -105,7 +107,6 @@ class ActivityBuilder:
             response = await info.value
         except Exception:
             response = None
-        self.log('กดยืนยันการสร้าง%sแล้ว' % self.KIND, 'SUCCESS')
         await page.wait_for_timeout(1500)
 
         if response is not None and not response.ok:
@@ -123,6 +124,11 @@ class ActivityBuilder:
             match = re.search(r'/%s/(\d+)' % self.PATH, page.url)
             if match:
                 made_id = match.group(1)
+        if response is None and not made_id:
+            self.log('ยืนยันการสร้าง%sไม่ได้ — ไม่พบคำตอบที่สำเร็จหรือเลขใน URL'
+                     % self.KIND, 'ERROR')
+            return False, None
+        self.log('กดยืนยันการสร้าง%sแล้ว' % self.KIND, 'SUCCESS')
         if made_id:
             self.log('สร้าง%sสำเร็จ — เลข: %s' % (self.KIND, made_id), 'SUCCESS')
         else:
@@ -133,7 +139,15 @@ class ActivityBuilder:
 
     async def _open(self, page, url):
         await page.goto(url, wait_until='domcontentloaded', timeout=40000)
-        await page.wait_for_timeout(3500)
+        if any(part in page.url.lower() for part in ('/login', '/signin')):
+            raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
+        try:
+            await page.locator(self.READY_SELECTOR).wait_for(
+                state='visible', timeout=20000)
+        except Exception:
+            if not any(part in page.url.lower() for part in ('/login', '/signin')):
+                raise
+            raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
         if any(part in page.url.lower() for part in ('/login', '/signin')):
             raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
 

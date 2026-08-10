@@ -35,6 +35,37 @@ def _digits(value) -> str:
     return match.group(0) if match else ''
 
 
+_ID_TOKEN = re.compile(
+    r'(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])')
+
+
+def _one_id_value(value) -> list[str]:
+    if isinstance(value, bool) or value is None:
+        return []
+    if isinstance(value, int):
+        return [str(value)] if value >= 0 else []
+    if isinstance(value, float):
+        return ([str(int(value))]
+                if math.isfinite(value) and value >= 0 and value.is_integer()
+                else [])
+    output = []
+    for match in _ID_TOKEN.finditer(_text(value)):
+        token = match.group(0).replace(',', '')
+        whole, dot, fraction = token.partition('.')
+        if dot and (not fraction or set(fraction) != {'0'}):
+            continue
+        output.append(str(int(whole)))
+    return output
+
+
+def _id_tokens(value) -> list[str]:
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    output = []
+    for raw in values:
+        output.extend(_one_id_value(raw))
+    return output
+
+
 def _bangkok_now(now=None) -> dt.datetime:
     if now is None:
         return dt.datetime.now(BANGKOK)
@@ -73,11 +104,14 @@ def _reset_at(reset_day, reset_time, now) -> str:
     weekday = _WEEKDAYS.get(day)
     if weekday is None:
         return ''
+    days_since = (current.weekday() - weekday) % 7
     candidate = dt.datetime.combine(
-        current.date() - dt.timedelta(days=7),
+        current.date() - dt.timedelta(days=days_since),
         clock,
         tzinfo=BANGKOK,
     )
+    if candidate > current:
+        candidate -= dt.timedelta(days=7)
     return candidate.strftime('%Y-%m-%d %H:%M:%S')
 
 
@@ -199,12 +233,19 @@ def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
     if not start_at:
         start_at = current.strftime('%Y-%m-%d 00:00:00')
     end_at = _text(product.get('end_at'))
-    bundle_id = _digits(product.get('bundle_id'))
+    bundle_ids = _id_tokens(product.get('bundle_ids'))
+    if not bundle_ids:
+        bundle_ids = _id_tokens(product.get('bundle_id'))
+    composite_required = len(bundle_ids) > 1
+    bundle_id = bundle_ids[0] if len(bundle_ids) == 1 else ''
     limit = _limit_fields(product, now=current)
     warnings = list(product.get('warnings') or ())
     warnings.extend(limit.pop('warnings'))
     if not end_at:
         warnings.append('ไม่พบ End Date/End Time ของ Product')
+    if composite_required:
+        warnings.append(
+            'ต้องสร้าง Composite Bundle 1 อันจากแถว Item ที่นำเข้าของ Product กลุ่มนี้ แล้วส่ง Bundle ID ที่ตรวจแล้วกลับมา')
 
     draft = {
         'source_group_key': str(group_key),
@@ -219,6 +260,8 @@ def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
         'details_en': '',
         'start_at': start_at,
         'end_at': end_at,
+        'bundle_ids': bundle_ids,
+        'composite_required': composite_required,
         'bundle_id': bundle_id,
         'bundle_source': 'workbook' if bundle_id else '',
         'price_candidates': _clean_prices(product.get('price_candidates')),

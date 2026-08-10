@@ -80,6 +80,50 @@ def _bundle_page(context):
     return page
 
 
+def _itemcode_page(context, submitted):
+    """Serve the real Item Code page with only its local API fixture."""
+    page = context.new_page()
+
+    def fulfill(route):
+        url = route.request.url
+        if url == 'http://tool.test/itemcodes':
+            route.fulfill(body=ITEMCODES.read_text(encoding='utf-8'),
+                          content_type='text/html')
+        elif url.endswith('/static/console.css'):
+            route.fulfill(body=CSS.read_text(encoding='utf-8'),
+                          content_type='text/css')
+        elif url.endswith('/static/console.js'):
+            route.fulfill(body=JS.read_text(encoding='utf-8'),
+                          content_type='text/javascript')
+        elif url.endswith('/api/auth/me'):
+            route.fulfill(json={'username': 'local.owner', 'local_mode': True})
+        elif url.endswith('/api/games'):
+            route.fulfill(json={'games': ['CabalM TH']})
+        elif url.endswith('/api/aztek/status'):
+            route.fulfill(json={'status': 'active'})
+        elif url.endswith('/api/itemcodes/run'):
+            payload = route.request.post_data_json
+            submitted.append(payload)
+            route.fulfill(json={
+                'results': [
+                    {'name': 'First Code', 'slug': payload['itemcodes'][0]['slug'],
+                     'saved': True, 'made_id': '101', 'missing': [],
+                     'error': None},
+                    {'name': 'Second Code', 'slug': payload['itemcodes'][1]['slug'],
+                     'saved': False, 'made_id': None, 'missing': [],
+                     'error': 'bundle rejected'},
+                ],
+                'created': 1, 'planned': 2,
+            })
+        else:
+            route.fulfill(status=404, body='not found')
+
+    page.route('**/*', fulfill)
+    page.goto('http://tool.test/itemcodes', wait_until='domcontentloaded')
+    page.wait_for_function("typeof createThese === 'function'")
+    return page
+
+
 def test_local_mode_hides_hosted_auth_in_every_tool_header():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -193,6 +237,69 @@ def test_bundle_quantity_accepts_more_than_one_typed_digit():
 
         assert quantity.input_value() == '42'
         assert page.evaluate("current().items[0].qty") == '42'
+        context.close()
+        browser.close()
+
+
+def test_bundle_random_tier_and_rate_are_reachable_in_an_800px_shop_table():
+    """Shop/document columns must scroll instead of clipping the live controls."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={'width': 800, 'height': 1000})
+        page = _bundle_page(context)
+        page.evaluate('''() => {
+          state.queue = [{key: 'shop-random', name: 'Shop RANDOM',
+            type: 'RANDOM', deliver: true, rewards: [], items: [{
+              id: '101', name: 'A very long Shop item name that cannot fit',
+              qty: '51', tier: 'Rare', rate: '12.5', shared: false,
+              file_name: 'Shop Plan.xlsx', doc_qty: '51',
+              params: 'PLAYER_EXPERIENCE',
+              desc: 'A long source description for the document column'
+            }]}];
+          state.active = 'shop-random';
+          select('shop-random');
+        }''')
+
+        layout = page.evaluate('''() => {
+          const wrapper = document.querySelector('#itemsTable').closest('.table-wrap');
+          const tier = document.querySelector('#itemsTable tbody select');
+          const rate = document.querySelector('#itemsTable tbody .rate-col input');
+          const reveal = node => {
+            const wrap = wrapper.getBoundingClientRect();
+            let box = node.getBoundingClientRect();
+            if (box.left < wrap.left) wrapper.scrollLeft += box.left - wrap.left;
+            if (box.right > wrap.right) wrapper.scrollLeft += box.right - wrap.right;
+            box = node.getBoundingClientRect();
+            const point = document.elementFromPoint(
+              box.left + Math.min(3, box.width / 2), box.top + box.height / 2);
+            return box.left >= wrap.left - 1 && box.right <= wrap.right + 1
+              && !!point && (point === node || node.contains(point));
+          };
+          return {
+            hasHorizontalOverflow: wrapper.scrollWidth > wrapper.clientWidth,
+            tierReachable: reveal(tier),
+            rateReachable: reveal(rate)
+          };
+        }''')
+
+        assert layout == {
+            'hasHorizontalOverflow': True,
+            'tierReachable': True,
+            'rateReachable': True,
+        }
+
+        tier = page.locator('#itemsTable tbody select')
+        rate = page.locator('#itemsTable tbody .rate-col input')
+        tier.scroll_into_view_if_needed()
+        tier.select_option('Epic')
+        rate.scroll_into_view_if_needed()
+        rate.fill('33.5')
+
+        assert tier.input_value() == 'Epic'
+        assert rate.input_value() == '33.5'
+        assert page.evaluate(
+            "[current().items[0].tier, current().items[0].rate]"
+        ) == ['Epic', '33.5']
         context.close()
         browser.close()
 
@@ -602,6 +709,45 @@ def test_itemcode_editor_uses_aztek_columns_and_collapses_on_small_screens():
         assert abs(mobile['generalLeft'] - mobile['settingsLeft']) < 1
         assert abs(mobile['generalLeft'] - mobile['rewardsLeft']) < 1
         assert mobile['generalTop'] < mobile['settingsTop'] < mobile['rewardsTop']
+        browser.close()
+
+
+def test_itemcode_create_all_keeps_failed_entries_selected_and_retryable():
+    """The real create-all button only removes results the API saved."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        submitted = []
+        page = _itemcode_page(context, submitted)
+        page.evaluate("""
+          addDrafts([
+            {name_th: 'First Code', name_en: 'First Code', slug: 'first-code',
+             start_time: '2026-08-01 00:00:00',
+             end_time: '2026-08-31 23:59:59',
+             rewards: [{name_th: 'First Reward', name_en: 'First Reward',
+                        bundle_id: '101', code_type: '1', code_list: 'ONE'}]},
+            {name_th: 'Second Code', name_en: 'Second Code', slug: 'second-code',
+             start_time: '2026-08-01 00:00:00',
+             end_time: '2026-08-31 23:59:59',
+             rewards: [{name_th: 'Second Reward', name_en: 'Second Reward',
+                        bundle_id: '202', code_type: '1', code_list: 'TWO'}]}
+          ], 'test', 'CabalM TH')
+        """)
+        page.once('dialog', lambda dialog: dialog.accept())
+        page.locator('#btnCreateAll').click()
+        page.wait_for_function("document.querySelectorAll('#results tbody tr').length === 2")
+
+        assert [job['name_th'] for job in submitted[0]['itemcodes']] == [
+            'First Code', 'Second Code']
+        assert submitted[0]['do_save'] is True
+        assert page.locator('#results tbody tr').all_inner_texts() == [
+            'First Code\t101\tสร้างแล้ว',
+            'Second Code\t-\tbundle rejected',
+        ]
+        assert page.evaluate("queue.items.map(entry => entry.slug)") == ['second-code-mth']
+        assert page.evaluate("queue.current().slug") == 'second-code-mth'
+        assert page.locator('#queuePick').input_value() == page.evaluate(
+            "queue.current().key")
         browser.close()
 
 

@@ -58,6 +58,27 @@ tier => [...document.querySelectorAll('select')]
   .map(([i]) => i)
 """
 
+_COLLAPSED_CARD_CHEVRONS = (
+    '[data-rfd-draggable-id] button[aria-expanded="false"], '
+    '[data-rbd-draggable-id] button[aria-expanded="false"], '
+    '[draggable="true"] button[aria-expanded="false"], '
+    'button[aria-expanded="false"][aria-label*="Expand"], '
+    'button[aria-expanded="false"][title*="Expand"]')
+
+
+class FillOutcome(tuple):
+    """Two-count fill result with an internal required-field completion flag.
+
+    It remains a two-item tuple for callers that already unpack
+    ``(items_added, rewards_added)``. Batch runners additionally use
+    :attr:`fields_complete` to fail closed.
+    """
+
+    def __new__(cls, added, rewards_added, fields_complete):
+        result = super().__new__(cls, (added, rewards_added))
+        result.fields_complete = fields_complete
+        return result
+
 
 def bundle_create_url(game):
     """v2 'create bundle' page URL for a game (desktop targets the v1 host)."""
@@ -70,17 +91,25 @@ class BundleBuilder:
     def __init__(self, on_log):
         self._log = on_log
         self._cancel = False
+        self._blank_tiers_complete = True
 
     def log(self, message, level='INFO'):
         self._log(message, level)
 
     async def _fill_header(self, page, name, btype, deliver):
+        name_complete = False
+        type_complete = False
+        delivery_complete = False
         # Name — stable id on v2.
         try:
             box = page.locator('#bundle-name, input[name="name"]').first
             await box.wait_for(state='visible', timeout=8000)
             await box.fill(name)
-            self.log('ใส่ชื่อ Bundle: %s' % name, 'INFO')
+            name_complete = (await box.input_value()) == name
+            if name_complete:
+                self.log('ใส่ชื่อ Bundle: %s' % name, 'INFO')
+            else:
+                self.log('กรอกชื่อ Bundle แล้วแต่ค่าในฟอร์มไม่ตรง', 'WARNING')
         except Exception as exc:
             self.log('กรอกชื่อ Bundle ไม่สำเร็จ: %s' % exc, 'WARNING')
         # Type — the only <select> in the header.
@@ -93,10 +122,13 @@ class BundleBuilder:
                             await sel.select_option(label=btype)
                         else:
                             await sel.select_option(value=btype)
+                        type_complete = True
                         self.log('เลือกประเภท Bundle: %s' % btype, 'INFO')
                         break
                     except Exception:
                         continue
+            if not type_complete:
+                self.log('ไม่เจอตัวเลือกประเภท Bundle ที่กำหนด', 'WARNING')
         except Exception as exc:
             self.log('เลือกประเภท Bundle ไม่สำเร็จ: %s' % exc, 'WARNING')
         # Immediate-send toggle. v2 draws it as a radix switch; the
@@ -109,11 +141,18 @@ class BundleBuilder:
                 on = (await switch.get_attribute('aria-checked')) == 'true'
                 if on != deliver:
                     await switch.click(timeout=6000)
-                self.log('ตั้งส่งทันที: %s' % ('เปิด' if deliver else 'ปิด'), 'INFO')
+                delivery_complete = (
+                    (await switch.get_attribute('aria-checked')) == 'true'
+                ) == deliver
+                if delivery_complete:
+                    self.log('ตั้งส่งทันที: %s' % ('เปิด' if deliver else 'ปิด'), 'INFO')
+                else:
+                    self.log('ตั้งส่งทันทีแล้วแต่สถานะในฟอร์มไม่ตรง', 'WARNING')
             else:
                 self.log('ไม่เจอสวิตช์ "ส่งทันที"', 'WARNING')
         except Exception as exc:
             self.log('ตั้งส่งทันทีไม่สำเร็จ: %s' % exc, 'WARNING')
+        return name_complete and type_complete and delivery_complete
 
     async def _add_item(self, page, item_id):
         """Search the item id in the 'เพิ่มของเข้า Bundle' panel and click เพิ่ม."""
@@ -253,41 +292,103 @@ class BundleBuilder:
 
     # ------------------------ per-item fields ------------------------
 
+    async def _expand_item_cards(self, page):
+        """Reveal lazy item cards before addressing their controls.
+
+        The site can mount Qty/Tier only after a card opens.  Prefer its
+        one-shot control; otherwise use the expanded-state chevrons on the
+        draggable cards.  This remains safe for pages that already show every
+        card because neither locator is required.
+        """
+        chevrons = page.locator(_COLLAPSED_CARD_CHEVRONS)
+        try:
+            collapsed = await chevrons.count()
+        except Exception as exc:
+            self.log('ตรวจการ์ดที่ยังปิดไม่สำเร็จ: %s' % exc, 'WARNING')
+            return False
+        if not collapsed:
+            return True
+        try:
+            expand_all = page.locator('button:text-is("Expand All")').first
+            if collapsed and await expand_all.count() and await expand_all.is_visible():
+                await expand_all.click(timeout=5000)
+                await page.wait_for_timeout(300)
+                if not await chevrons.count():
+                    return True
+        except Exception:
+            pass
+        try:
+            attempts = 0
+            limit = max(collapsed * 2, 4)
+            while await chevrons.count():
+                if attempts >= limit:
+                    self.log('เปิดการ์ดไม่ครบภายในจำนวนครั้งที่ปลอดภัย', 'WARNING')
+                    return False
+                before = await chevrons.count()
+                chevron = chevrons.first
+                if not await chevron.is_visible():
+                    self.log('พบการ์ดที่ยังปิดแต่กดเปิดไม่ได้', 'WARNING')
+                    return False
+                await chevron.click(timeout=5000)
+                await page.wait_for_timeout(300)
+                after = await chevrons.count()
+                if after >= before:
+                    self.log('การ์ดไม่เปลี่ยนเป็นสถานะเปิด', 'WARNING')
+                    return False
+                attempts += 1
+            return True
+        except Exception as exc:
+            self.log('เปิดการ์ดไอเท็มเพื่อกรอก Tier ไม่สำเร็จ: %s' % exc,
+                     'WARNING')
+            return False
+
     async def _fill_qty_tier(self, page, items):
         """Set quantity and tier on each item card. v2 exposes a stable
         ``items.<n>.quantity`` number input and a hidden <select> for the tier.
         """
+        expansion_complete = await self._expand_item_cards(page)
         cards = page.locator('input[name^="items."][name$=".quantity"]')
         # Rewards join the same items.<n> numbering, so any row past the item
         # list is a reward — filling it would overwrite the amount the operator
         # asked for with a 1.
-        count = min(await cards.count(), len(items))
+        card_count = await cards.count()
+        count = min(card_count, len(items))
+        complete = expansion_complete and card_count >= len(items)
         for idx in range(count):
             it = items[idx] if idx < len(items) else {}
             qty = str(it.get('qty') or it.get('quantity') or '1')
             tier = it.get('tier') or 'Common'
+            qty_filled = False
             try:
                 await cards.nth(idx).fill(qty)
+                qty_filled = True
             except Exception as exc:
                 self.log('ตั้งจำนวนไอเทม #%d ไม่สำเร็จ: %s' % (idx + 1, exc), 'WARNING')
-            # The tier control is a radix combobox backed by a native <select>;
-            # the nth select on the page maps to the nth item card.
+            # Bundle Type is also a page-level <select>, so choose only inside
+            # this quantity field's own card instead of counting page selects.
+            tier_selected = False
             try:
-                selects = page.locator('select')
-                if await selects.count() > idx:
+                card = cards.nth(idx).locator(
+                    'xpath=ancestor::*[.//select][1]').first
+                selects = card.locator('select')
+                if await selects.count():
                     for how in ('label', 'value'):
                         try:
                             if how == 'label':
-                                await selects.nth(idx).select_option(label=tier)
+                                await selects.first.select_option(label=tier)
                             else:
-                                await selects.nth(idx).select_option(value=tier)
+                                await selects.first.select_option(value=tier)
+                            tier_selected = True
                             break
                         except Exception:
                             continue
             except Exception as exc:
                 self.log('ตั้ง Tier ไอเทม #%d ไม่สำเร็จ: %s' % (idx + 1, exc), 'WARNING')
+            complete = complete and qty_filled and tier_selected
         if count:
             self.log('ตั้งจำนวน/Tier ให้ %d ไอเทม' % count, 'INFO')
+
+        return complete
 
     async def _fill_blank_tiers(self, page):
         """Give every Tier still showing its placeholder the default rank.
@@ -296,10 +397,12 @@ class BundleBuilder:
         leaving it blank blocks the create button. Rather than ask the operator
         for a rank on a currency, fill whatever is still empty with Common.
         """
+        self._blank_tiers_complete = await self._expand_item_cards(page)
         try:
             blanks = await page.evaluate(_BLANK_TIERS, TIER_DEFAULT)
         except Exception as exc:
             self.log('หาช่อง Tier ที่ยังว่างไม่สำเร็จ: %s' % exc, 'WARNING')
+            self._blank_tiers_complete = False
             return 0
         done = 0
         for idx in blanks:
@@ -308,6 +411,7 @@ class BundleBuilder:
                     label=TIER_DEFAULT, timeout=5000)
                 done += 1
             except Exception as exc:
+                self._blank_tiers_complete = False
                 self.log('ตั้ง Tier ช่องที่ %d ไม่สำเร็จ: %s' % (idx + 1, exc),
                          'WARNING')
         if done:
@@ -329,7 +433,7 @@ class BundleBuilder:
                 'els => els.map(e => ({name: e.name, required: e.required}))')
         except Exception as exc:
             self.log('หาช่องเรทสุ่มไม่สำเร็จ: %s' % exc, 'WARNING')
-            return
+            return False
         done = 0
         for idx, it in enumerate(items):
             rate = str(it.get('rate') or '').strip()
@@ -356,6 +460,8 @@ class BundleBuilder:
                          % (idx + 1, exc), 'WARNING')
         if done:
             self.log('ตั้งเรทสุ่มให้ %d ไอเทม' % done, 'INFO')
+
+        return done == len(items)
 
     # ------------------------------ save ------------------------------
 
@@ -386,7 +492,7 @@ class BundleBuilder:
             response = await info.value
         except Exception:
             response = None
-        self.log('กดยืนยันการสร้างบันเดิลแล้ว', 'SUCCESS')
+        self.log('กดยืนยันการสร้างบันเดิลแล้ว กำลังตรวจผล', 'INFO')
         await page.wait_for_timeout(1500)
 
         if response is not None and not response.ok:
@@ -405,10 +511,15 @@ class BundleBuilder:
             match = re.search(r'/bundles?/(\d+)', page.url)
             if match:
                 bundle_id = match.group(1)
+        if response is None and not bundle_id:
+            self.log('ไม่พบคำตอบการบันทึกหรือเลข Bundle ใน URL — ถือว่ายังไม่สร้าง',
+                     'ERROR')
+            return False, None
         if bundle_id:
             self.log('สร้างบันเดิลสำเร็จ — เลข Bundle: %s' % bundle_id, 'SUCCESS')
         else:
-            self.log('สร้างแล้วแต่อ่านเลข Bundle ไม่ได้ — ตรวจบนเว็บอีกที', 'WARNING')
+            self.log('เว็บตอบรับการสร้างแล้ว แต่อ่านเลข Bundle ไม่ได้ — ตรวจบนเว็บอีกที',
+                     'WARNING')
         return True, bundle_id
 
     # ------------------------------ run ------------------------------
@@ -420,18 +531,26 @@ class BundleBuilder:
         the same values in the same order.
         """
         added = 0
+        successful_items = []
         rewards_added = 0
-        await self._fill_header(page, name, btype, deliver)
+        header_complete = await self._fill_header(page, name, btype, deliver)
+        # Older tests/integrations monkeypatch this method with a coroutine that
+        # returns None; only an explicit False from the real completion-aware
+        # header path closes the save gate.
+        fields_complete = header_complete is not False
         for it in items:
             if self._cancel:
                 break
             if await self._add_item(page, it.get('id') or it.get('aztek_id')):
                 added += 1
-        if added:
+                successful_items.append(it)
+        if successful_items:
             await page.wait_for_timeout(500)
-            await self._fill_qty_tier(page, items)
+            fields_complete = ((await self._fill_qty_tier(
+                page, successful_items)) is not False) and fields_complete
             if btype == 'RANDOM':
-                await self._fill_rates(page, items)
+                fields_complete = ((await self._fill_rates(page, successful_items))
+                                   is not False) and fields_complete
         # Rewards land last: they share the items.<n> numbering, so adding
         # them earlier would shift the quantity and rate fields above.
         for reward in rewards:
@@ -445,7 +564,8 @@ class BundleBuilder:
         # arrives with its required Tier unset.
         if added or rewards_added:
             await self._fill_blank_tiers(page)
-        return added, rewards_added
+            fields_complete = self._blank_tiers_complete and fields_complete
+        return FillOutcome(added, rewards_added, fields_complete)
 
     async def run_many(self, game, bundles, storage_state, *, headed=False):
         """Create every bundle in one browser session, and report each id.
@@ -479,7 +599,7 @@ class BundleBuilder:
                          'saved': False, 'bundle_id': None, 'added': 0,
                          'total': len(bundle['items']), 'rewards_added': 0,
                          'rewards_total': len(bundle.get('rewards') or ()),
-                         'error': None}
+                         'fields_complete': True, 'error': None}
                 try:
                     # A fresh create page per bundle: the previous one still
                     # holds the last bundle's items.
@@ -488,13 +608,28 @@ class BundleBuilder:
                     await page.wait_for_timeout(3000)
                     if any(p in page.url.lower() for p in ('/login', '/signin')):
                         raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
-                    entry['added'], entry['rewards_added'] = await self._fill_form(
+                    fill_outcome = await self._fill_form(
                         page, name, bundle.get('type', 'FIXED'),
                         bundle.get('deliver', True), bundle['items'],
                         bundle.get('rewards') or ())
+                    entry['added'], entry['rewards_added'] = fill_outcome
+                    fields_complete = getattr(fill_outcome, 'fields_complete', True)
+                    entry['fields_complete'] = fields_complete
                     if self._cancel:
                         raise RuntimeError('ถูกยกเลิกก่อนกดสร้าง')
-                    entry['saved'], entry['bundle_id'] = await self._save(page)
+                    if (entry['added'] != entry['total']
+                            or entry['rewards_added'] != entry['rewards_total']
+                            or not fields_complete):
+                        entry['error'] = (
+                            'form incomplete: items %d/%d, rewards %d/%d' % (
+                                entry['added'], entry['total'],
+                                entry['rewards_added'], entry['rewards_total']))
+                        if not fields_complete:
+                            entry['error'] += ', required field fill failed'
+                        self.log('ไม่กดสร้าง "%s" เพราะกรอกฟอร์มไม่ครบ (%s)'
+                                 % (name, entry['error']), 'ERROR')
+                    else:
+                        entry['saved'], entry['bundle_id'] = await self._save(page)
                 except Exception as exc:
                     entry['error'] = str(exc)[:200]
                     self.log('บันเดิล "%s" ไม่สำเร็จ: %s' % (name, exc), 'ERROR')
@@ -530,6 +665,7 @@ class BundleBuilder:
         final_url = None
         added = 0
         rewards_added = 0
+        fields_complete = True
         saved = False
         bundle_id = None
         keep = False
@@ -539,8 +675,10 @@ class BundleBuilder:
             low = page.url.lower()
             if any(p in low for p in ('/login', '/signin')):
                 raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
-            added, rewards_added = await self._fill_form(
+            fill_outcome = await self._fill_form(
                 page, name, btype, deliver, items, rewards)
+            added, rewards_added = fill_outcome
+            fields_complete = getattr(fill_outcome, 'fields_complete', True)
             final_url = page.url
             # A window that stays open needs no screenshot — the operator is
             # looking at the page itself.
@@ -551,7 +689,13 @@ class BundleBuilder:
                 except Exception:
                     shot = None
             if do_save and not self._cancel:
-                saved, bundle_id = await self._save(page)
+                if (added != len(items) or rewards_added != len(rewards)
+                        or not fields_complete):
+                    self.log('ไม่กดสร้าง เพราะกรอกฟอร์มไม่ครบ: items %d/%d, rewards %d/%d'
+                             % (added, len(items), rewards_added, len(rewards)),
+                             'ERROR')
+                else:
+                    saved, bundle_id = await self._save(page)
                 final_url = page.url
                 await page.wait_for_timeout(2000 if headed else 0)
             else:
@@ -566,7 +710,8 @@ class BundleBuilder:
                 await _shutdown(pw, browser, context)
         return {'url': final_url, 'screenshot': shot, 'added': added,
                 'total': len(items), 'rewards_added': rewards_added,
-                'rewards_total': len(rewards), 'kept_open': keep,
+                'rewards_total': len(rewards), 'fields_complete': fields_complete,
+                'kept_open': keep,
                 'saved': saved, 'bundle_id': bundle_id}
 
 

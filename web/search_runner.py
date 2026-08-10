@@ -237,6 +237,8 @@ def result_view(item):
         'amt': str(item.get('amt', '') or '').strip(),
         # Draw rate from a random box's plan table, already a percentage.
         'rate': str(item.get('rate', '') or '').strip(),
-        'desc': item.get('_desc', '') or '',
+        # Live search rows carry the private collection key, while rows loaded
+        # back from a workspace are already in this public shape.
+        'desc': item.get('_desc') or item.get('desc', '') or '',
         'name_mismatch': name_mismatch,
     }

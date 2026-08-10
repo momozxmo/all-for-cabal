@@ -13,6 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from web import item_service as svc  # noqa: E402
+from web.search_runner import result_view  # noqa: E402
 import event_tool  # noqa: E402
 import item_finder  # noqa: E402
 
@@ -24,6 +25,18 @@ def test_mode_policy_matches_desktop():
                                            'read_desc': False}
     assert svc.mode_policy('shop') == {'web_mode': 'no', 'web_locked': False,
                                            'read_desc': True}
+
+
+def test_result_view_keeps_a_persisted_public_description():
+    """A result read back from a workspace is already public-shaped.
+
+    The live finder uses ``_desc`` while collecting a result, but reopening a
+    workspace sends its persisted ``desc`` back through this projection.
+    """
+    row = result_view({'aztek_id': '10', 'item_name': 'Prize',
+                       'desc': 'description saved with the result'})
+
+    assert row['desc'] == 'description saved with the result'
 
 
 def test_parser_for_mode_matches_desktop_import_paths():
@@ -181,6 +194,83 @@ def test_a_retry_does_not_duplicate_what_it_finds_again():
     row = {'aztek_id': '10', 'item_kind': '1', 'item_option': '',
            'duration_index': ''}
     assert len(svc.merge_found([row], [dict(row)], occurrences)) == 1
+
+
+def test_replacing_one_source_group_preserves_siblings_and_rejoins_shared_rows():
+    """A scoped Product search owns only that group's memberships.
+
+    Re-searching B may replace B's old rows, but it must retain A's rows and
+    reconstruct one shared result with both memberships instead of leaking an
+    old B membership or persisting two copies of the same shared item.
+    """
+    previous = [
+        {'aztek_id': '10', 'item_kind': '1', 'item_option': '',
+         'duration_index': '', 'sources': ['Product A'],
+         'group_keys': ['group-a']},
+        {'aztek_id': '20', 'item_kind': '2', 'item_option': '',
+         'duration_index': '', 'sources': ['Product A', 'Product B'],
+         'group_keys': ['group-a', 'group-b']},
+        {'aztek_id': '30', 'item_kind': '3', 'item_option': '',
+         'duration_index': '', 'sources': ['Product B'],
+         'group_keys': ['group-b']},
+        {'aztek_id': '40', 'item_kind': '4', 'item_option': '',
+         'duration_index': '', 'sources': [], 'group_keys': []},
+    ]
+    fresh = [
+        {'aztek_id': '20', 'item_kind': '2', 'item_option': '',
+         'duration_index': '', 'sources': ['Product B'],
+         'group_keys': ['group-b']},
+        {'aztek_id': '31', 'item_kind': '3', 'item_option': '',
+         'duration_index': '', 'sources': ['Product B'],
+         'group_keys': ['group-b']},
+    ]
+    occurrences = [
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'A only',
+         'sources': ['Product A'], 'group_keys': ['group-a']},
+        {'kind': '2', 'opt': '', 'dur': '', 'name': 'Shared',
+         'sources': ['Product A', 'Product B'],
+         'group_keys': ['group-a', 'group-b']},
+        {'kind': '3', 'opt': '', 'dur': '', 'name': 'B only',
+         'sources': ['Product B'], 'group_keys': ['group-b']},
+    ]
+
+    replaced = svc.replace_results_for_source_group(
+        previous, fresh, 'group-b', occurrences)
+
+    assert [row['aztek_id'] for row in replaced] == ['10', '20', '31', '40']
+    assert [row['group_keys'] for row in replaced] == [
+        ['group-a'], ['group-a', 'group-b'], ['group-b'], []]
+    assert [row['groups'] for row in replaced] == [
+        'Product A', 'Product A , Product B', 'Product B', '']
+
+
+def test_scoped_replacement_keeps_distinct_result_ids_in_their_own_groups():
+    """A changed resolved ID must not inherit its shared criterion's siblings."""
+    previous = [
+        {'aztek_id': '20', 'item_kind': '2', 'item_option': '',
+         'duration_index': '', 'sources': ['Product A', 'Product B'],
+         'group_keys': ['group-a', 'group-b']},
+        {'aztek_id': '40', 'item_kind': '4', 'item_option': '',
+         'duration_index': '', 'sources': [], 'group_keys': []},
+    ]
+    fresh = [{
+        'aztek_id': '21', 'item_kind': '2', 'item_option': '',
+        'duration_index': '', 'sources': ['Product B'],
+        'group_keys': ['group-b']}]
+    occurrences = [{
+        'kind': '2', 'opt': '', 'dur': '', 'name': 'Shared criterion',
+        'sources': ['Product A', 'Product B'],
+        'group_keys': ['group-a', 'group-b']}]
+
+    replaced = svc.replace_results_for_source_group(
+        previous, fresh, 'group-b', occurrences)
+
+    assert [(row['aztek_id'], row['sources'], row['group_keys'])
+            for row in replaced] == [
+        ('20', ['Product A'], ['group-a']),
+        ('21', ['Product B'], ['group-b']),
+        ('40', [], []),
+    ]
 
 
 def test_bundle_items_carry_what_the_document_said():
