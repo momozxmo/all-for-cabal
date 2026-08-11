@@ -286,7 +286,11 @@ async def pick_bundle(page, scope, bundle_id, log=None):
         'button:has-text("เลือก bundle"), button:has-text("เปลี่ยน")').first
     try:
         await trigger.click(timeout=8000)
-        box = page.locator('input[placeholder="ค้นหาด้วยชื่อหรือ id"]').first
+        dialog = page.locator('[role="dialog"]').last
+        await dialog.wait_for(state='visible', timeout=8000)
+        box = dialog.locator(
+            'input[placeholder="ค้นหาด้วยชื่อหรือ id"],'
+            'input[placeholder*="ค้นหา"],input[type="search"]').first
         await box.wait_for(state='visible', timeout=8000)
         await box.fill(wanted)
         await page.wait_for_timeout(2000)
@@ -295,7 +299,7 @@ async def pick_bundle(page, scope, bundle_id, log=None):
             log('เปิดตัวเลือก bundle ไม่ได้: %s' % exc, 'WARNING')
         return False
     # Anchored at the end of the row: "…ID: 2081" must not match id 20810.
-    hit = page.locator('button').filter(
+    hit = dialog.locator('button').filter(
         has_text=re.compile(r'ID:\s*%s\s*$' % re.escape(wanted)))
     try:
         if await hit.count() == 0:

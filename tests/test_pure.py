@@ -261,6 +261,34 @@ def test_shop_product_uses_only_wallet_point_as_the_price_currency():
     }]
 
 
+def test_shop_product_name_does_not_fall_through_to_wallet_point_label():
+    """Some shop sheets put the Product Name value below its label.
+
+    Wallet Point is another field boundary, not a candidate Product Name.
+    """
+    rows = [
+        ['Product Name', '', 'Wallet Point', 75],
+        ['Time Reducer - Platinum Insignia', '', '', ''],
+        ['Category', 'กล่องสุ่ม', 'End Date', dt.date(2026, 8, 27),
+         'End Time', dt.time(22, 59)],
+        ['ItemKind', 'Item Name', 'Amt'],
+        [100, 'Time Reducer (7D) - Platinum Insignia', 1],
+    ]
+
+    items = item_finder._shop_sheet_items(
+        rows, 'Main Shop - Promotion', now=NOW)
+    meta = items[0]['group_meta']['product_meta']
+
+    assert items[0]['group_meta']['product'] == \
+        'Time Reducer - Platinum Insignia'
+    assert meta['name'] == 'Time Reducer - Platinum Insignia'
+    assert meta['price_candidates'] == [{
+        'source_label': 'Wallet Point',
+        'sale_price': 75,
+        'original_price': 75,
+    }]
+
+
 def test_shop_product_does_not_inherit_wallet_point_from_previous_block():
     rows = [
         ['Product Name', 'First Product', 'Wallet Point', 100],

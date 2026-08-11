@@ -212,6 +212,48 @@ def test_product_builder_selects_custom_category_and_currency_ids():
     assert missing == []
 
 
+def test_product_bundle_picker_accepts_current_popover_search_placeholder():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content(r'''
+                  <section>
+                    <header><h2>Bundle</h2>
+                      <button data-slot="popover-trigger" type="button">
+                        เลือก bundle
+                      </button>
+                    </header>
+                    <p>ยังไม่มี Bundle — คลิก “เพิ่ม Bundle”</p>
+                  </section>
+                  <script>
+                  document.querySelector('button').onclick = () => {
+                    const dialog = document.createElement('div');
+                    dialog.setAttribute('role', 'dialog');
+                    dialog.innerHTML = `
+                      <input placeholder="ค้นหา Bundle...">
+                      <button>Time Reducer Bundle ID: 223553</button>`;
+                    dialog.querySelectorAll('button')[0].onclick = () => {
+                      document.querySelector('section p').textContent =
+                        'Time Reducer Bundle · ID: 223553';
+                      dialog.remove();
+                    };
+                    document.body.appendChild(dialog);
+                  };
+                  </script>
+                ''')
+                selected = await aztek_form.pick_bundle(
+                    page, page.locator('section'), '223553')
+                return selected, await page.locator('section p').inner_text()
+            finally:
+                await browser.close()
+
+    selected, summary = asyncio.run(scenario())
+    assert selected is True
+    assert '223553' in summary
+
+
 def test_product_options_requires_authentication(anonymous_client):
     response = anonymous_client.post('/api/products/options', json={
         'game': GAME, 'kinds': ['currencies']})

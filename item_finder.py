@@ -703,7 +703,9 @@ def _shop_label_value(header_rows, row_index, column_index):
     row = header_rows[row_index]
     for index in range(column_index + 1, len(row)):
         raw = row[index]
-        if _event_norm(raw) in _PRODUCT_LABELS:
+        normalized = _event_norm(raw)
+        if (normalized in _PRODUCT_LABELS
+                or normalized == _PRODUCT_PRICE_LABEL):
             break
         if raw not in (None, '') and str(raw).strip():
             return raw
@@ -833,6 +835,12 @@ def _shop_sheet_items(rows, sheet_title, skipped=None, now=None):
                 group = '%s · ตาราง %d' % (sheet_title, tbl)
             product_meta = _shop_product_meta(
                 (buf + [row])[-16:], sheet_title, group, now=now)
+            # The metadata reader understands both horizontal and vertical
+            # Product Name layouts.  Use that exact field as the group label;
+            # the older "first non-empty cell to the right" heuristic can
+            # otherwise mistake Wallet Point for the Product name.
+            group = str(product_meta.get('name') or group).strip()
+            product_meta['name'] = group
             buf.append(row)
             buf[:] = buf[-16:]
             continue

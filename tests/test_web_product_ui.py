@@ -727,6 +727,74 @@ def test_candidate_sheets_show_product_counts_and_apply_existing_endpoints():
         browser.close()
 
 
+def test_product_sheet_picker_can_clear_and_select_every_sheet():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""openProductSheetPicker({
+          pending_id:'pending-1', workspace_id:'workspace-1',
+          sheets:[
+            {name:'Promotion',count:6,product_count:2},
+            {name:'Cash Shop',count:3,product_count:1}]
+        })""")
+
+        assert page.locator('#sheetList input:checked').count() == 2
+        page.locator('#btnClearSheets').click()
+        assert page.locator('#sheetList input:checked').count() == 0
+        page.locator('#btnSelectAllSheets').click()
+        assert page.locator('#sheetList input:checked').count() == 2
+        browser.close()
+
+
+def test_product_bundle_id_is_plain_numeric_text_without_spinner():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        field_type = page.locator('#bundleId').get_attribute('type')
+        assert field_type == 'text'
+        assert page.locator('#bundleId').get_attribute('inputmode') == 'numeric'
+        browser.close()
+
+
+def test_wallet_point_price_is_editable_and_manual_price_can_be_added():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          optionState.currencies.options = [
+            {id:'91',slug:'wallet-point',label:'Wallet Point'},
+            {id:'92',slug:'force-gem',label:'Force Gem'}];
+          addDrafts([{
+            source_group_key:'g1',name_th:'Time Reducer - Platinum Insignia',
+            name_en:'Time Reducer - Platinum Insignia',
+            price_candidates:[{source_label:'Wallet Point',
+              original_price:75,sale_price:75}],prices:[]
+          }], 'workspace-1');
+        }""")
+
+        inputs = page.locator('#priceMatches input')
+        assert inputs.count() == 2
+        assert inputs.nth(0).input_value() == '75'
+        assert inputs.nth(1).input_value() == '75'
+        inputs.nth(1).fill('70')
+        assert page.evaluate(
+            "productQueue.current().prices[0].price") == '70'
+
+        page.locator('#btnAddManualPrice').click()
+        assert page.locator('#priceMatches .price-match-row').count() == 2
+        page.locator('#priceMatches .price-match-row').nth(1).locator(
+            'select').select_option('92')
+        manual_inputs = page.locator(
+            '#priceMatches .price-match-row').nth(1).locator('input')
+        manual_inputs.nth(0).fill('30')
+        manual_inputs.nth(1).fill('25')
+        manual = page.evaluate("""() => productQueue.current().prices.find(
+          price => price.currency_id === '92')""")
+        assert manual['original_price'] == '30'
+        assert manual['price'] == '25'
+        browser.close()
+
+
 def test_bundle_handoff_matches_exact_keys_and_exposes_conflicts():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -1305,7 +1373,8 @@ def test_language_tabs_keep_both_descriptions_and_manual_bundle_is_numeric():
         entry = page.evaluate("productQueue.current()")
         assert entry['details_th'] == 'ไทยแก้แล้ว'
         assert entry['details_en'] == 'English edited'
-        assert page.locator('#bundleId').get_attribute('type') == 'number'
+        assert page.locator('#bundleId').get_attribute('type') == 'text'
+        assert page.locator('#bundleId').get_attribute('inputmode') == 'numeric'
         assert page.locator('#bundleId').is_visible()
         browser.close()
 

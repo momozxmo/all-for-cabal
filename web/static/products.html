@@ -168,7 +168,10 @@
             </section>
 
             <section class="product-panel" data-product-section="currency">
-              <h3>สกุลเงินและราคา</h3>
+              <div class="card-head" style="padding:0 0 13px;border:0">
+                <h3 style="margin:0">สกุลเงินและราคา</h3>
+                <button id="btnAddManualPrice" type="button">+ เพิ่มราคาเอง</button>
+              </div>
               <div class="price-head"><span>ค่าจากไฟล์</span><span>Currency บน Aztek</span><span>ราคาปกติ</span><span>ราคาขาย</span></div>
               <div id="priceMatches" class="price-match-list"></div>
             </section>
@@ -185,7 +188,7 @@
                   <div>นำแถว Item ที่ import ของ Product กลุ่มนี้ไปตรวจและสร้างในหน้า Bundle แล้วส่ง Bundle ID ที่สร้างกลับมาช่องด้านล่าง</div>
                   <button id="btnReviewComposite" type="button">ตรวจ Composite Bundle ในคิว Bundle</button>
                 </div>
-                <label class="field">Bundle ID *<input id="bundleId" type="number" min="1" step="1" inputmode="numeric" placeholder="กรอกเลข Bundle"></label>
+                <label class="field">Bundle ID *<input id="bundleId" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="กรอกเลข Bundle"></label>
                 <span id="bundleSource" class="hint"></span>
                 <div id="bundleConflict" class="bundle-conflict" hidden>
                   <b>เลข Bundle จากไฟล์ไม่ตรงกับเลขที่เพิ่งสร้าง</b>
@@ -271,6 +274,10 @@
 <dialog id="sheetDialog">
   <h3>เลือก Sheet ที่จะ Import</h3>
   <p class="hint">เลือกได้หลาย Sheet และจะแสดงเฉพาะจำนวน Product ที่ตรวจพบ</p>
+  <div class="actions">
+    <button id="btnSelectAllSheets" type="button">เลือกทั้งหมด</button>
+    <button id="btnClearSheets" type="button">ล้างที่เลือกทั้งหมด</button>
+  </div>
   <div id="sheetList" class="sheet-list"></div>
   <div class="actions">
     <button id="btnApplySheets" class="success" type="button">Import ที่เลือก</button>
@@ -842,6 +849,29 @@ function renderProductOptions(entry) {
     row.append(chip, select, original, sale);
     list.appendChild(row);
   }
+}
+
+function addManualPrice(entry) {
+  if (!entry) return;
+  entry.price_candidates = Array.isArray(entry.price_candidates)
+    ? entry.price_candidates : [];
+  let number = 1;
+  let sourceLabel = `กำหนดเอง ${number}`;
+  const used = new Set(entry.price_candidates.map(candidate =>
+    normalizeOptionText(candidate.source_label)));
+  while (used.has(normalizeOptionText(sourceLabel))) {
+    number += 1;
+    sourceLabel = `กำหนดเอง ${number}`;
+  }
+  entry.price_candidates.push({
+    source_label: sourceLabel,
+    original_price: '',
+    sale_price: '',
+  });
+  markSourceDirty(entry, 'price_candidates');
+  invalidateProductPreview(entry);
+  productQueue.save();
+  renderProductOptions(entry);
 }
 
 function addDrafts(drafts, workspaceId) {
@@ -1437,6 +1467,18 @@ $('bundleId').oninput = () => {
   delete entry.bundle_conflict;
   productQueue.save();
   renderBundle(entry);
+};
+$('btnAddManualPrice').onclick = () =>
+  addManualPrice(productQueue.current());
+$('btnSelectAllSheets').onclick = () => {
+  $('sheetList').querySelectorAll('input[type="checkbox"]').forEach(box => {
+    box.checked = true;
+  });
+};
+$('btnClearSheets').onclick = () => {
+  $('sheetList').querySelectorAll('input[type="checkbox"]').forEach(box => {
+    box.checked = false;
+  });
 };
 $('btnUseWorkbookBundle').onclick = () => {
   const entry = productQueue.current();
