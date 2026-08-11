@@ -398,6 +398,7 @@ def test_finder_handoff_keeps_a_later_headerless_item_code(client):
     ).json()
     assert started['sheets'] == [{
         'name': 'PH July- STM - Apple, Orange, E',
+        'display_name': 'Apple, Orange, Ensaymada?',
         'count': 2,
     }]
     applied = client.post('/api/import-plan/apply', json={
@@ -414,6 +415,49 @@ def test_finder_handoff_keeps_a_later_headerless_item_code(client):
         'Apple, Orange, Ensaymada? - GIVEAWAY',
     ]
     assert len(drafts[1]['rewards']) == 16
+
+
+def test_event_mode_recovers_full_pride_title_for_sheet_picker(client):
+    """Pride-style files keep the full activity in A1 after Excel truncates the tab."""
+    import io
+
+    import openpyxl
+
+    full_name = 'Cabal Community Quiz ! "Where am i now?"'
+    truncated = 'ID COM Cabal Community Quiz ! "'
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = truncated
+    sheet['A1'] = full_name
+    sheet['H2'] = 'Code No. 33'
+    sheet['H3'] = 'CONDITIONS'
+    sheet['H4'] = 'UNIQUE CODE'
+    for column, value in enumerate([
+            'Item Kind', 'Item Index', 'ItemOption', 'DurationIndex',
+            'Stackable', 'Display Name', 'Duration', 'Amt'], 8):
+        sheet.cell(row=5, column=column, value=value)
+    for column, value in {
+            8: 111, 9: 1, 10: 0, 11: 10, 12: 'No',
+            13: 'Prize', 15: 1}.items():
+        sheet.cell(row=6, column=column, value=value)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    payload = buffer.getvalue()
+
+    response = client.post(
+        '/api/import-plan', data={'mode': 'event'},
+        files={'file': (
+            'plan.xlsx', payload,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()['sheets'] == [{
+        'name': truncated,
+        'display_name': full_name,
+        'count': 1,
+    }]
 
 
 def test_importing_a_plan_on_this_page_needs_a_session(anonymous_client):
@@ -433,7 +477,11 @@ def test_import_reports_the_tabs_and_stamps_each_draft_with_its_own(client):
                         '.spreadsheetml.sheet')})
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body['sheets'] == [{'name': 'ID COM Quiz', 'count': 2}]
+    assert body['sheets'] == [{
+        'name': 'ID COM Quiz',
+        'display_name': 'Quiz Night',
+        'count': 2,
+    }]
     assert [d['sheet'] for d in body['itemcodes']] == ['ID COM Quiz'] * 2
     assert [d['name_th'] for d in body['itemcodes']] == [
         'Quiz Night - WINNER REWARDS', 'Quiz Night - Participation']

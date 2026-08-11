@@ -357,6 +357,19 @@ def read_pride_codes(path):
                 if event_name:
                     break
 
+            if not event_name and grid and grid[0]:
+                # Excel caps worksheet tabs at 31 characters, while monthly
+                # plans keep the complete activity title in A1. Pride layouts
+                # do not always include an explicit "Event Name" label.
+                first = grid[0][0]
+                text = str(first or '').strip().replace('\n', ' ')
+                generic = {
+                    'eventname', 'deliverystatus', 'conditions', 'itemkind',
+                    'no', 'no.',
+                }
+                if text and _pn(first) not in generic:
+                    event_name = text
+
             # ทุกจุดที่เจอ 'Item Kind' = 1 บล็อก
             for r in range(1, nrows + 1):
                 row = grid[r - 1]

@@ -10,6 +10,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 CSS = ROOT / 'web' / 'static' / 'console.css'
 JS = ROOT / 'web' / 'static' / 'console.js'
+SHEET_PICKER_JS = ROOT / 'web' / 'static' / 'sheet_picker.js'
 ITEMCODES = ROOT / 'web' / 'static' / 'itemcodes.html'
 EVENTS = ROOT / 'web' / 'static' / 'events.html'
 INDEX = ROOT / 'web' / 'static' / 'index.html'
@@ -24,6 +25,10 @@ def _tool_page(browser, path):
     html = html.replace(
         '<script src="/static/console.js"></script>',
         '<script>%s</script>' % shared,
+    )
+    html = html.replace(
+        '<script src="/static/sheet_picker.js"></script>',
+        '<script>%s</script>' % SHEET_PICKER_JS.read_text(encoding='utf-8'),
     )
     page = browser.new_page()
     page.set_content(html, wait_until='domcontentloaded')
@@ -94,6 +99,9 @@ def _itemcode_page(context, submitted):
                           content_type='text/css')
         elif url.endswith('/static/console.js'):
             route.fulfill(body=JS.read_text(encoding='utf-8'),
+                          content_type='text/javascript')
+        elif url.endswith('/static/sheet_picker.js'):
+            route.fulfill(body=SHEET_PICKER_JS.read_text(encoding='utf-8'),
                           content_type='text/javascript')
         elif url.endswith('/api/auth/me'):
             route.fulfill(json={'username': 'local.owner', 'local_mode': True})

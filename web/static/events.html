@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>All for Cabal — สร้าง Event</title>
   <link rel="stylesheet" href="/static/console.css">
+  <link rel="stylesheet" href="/static/sheet_picker.css">
   <style>
     /* ---- หน้านี้โดยเฉพาะ ---- */
     .topline{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
@@ -177,6 +178,11 @@
 <dialog id="sheetDialog">
   <h3>เลือกแท็บที่จะเอา <span id="sheetTotal" class="hint"></span></h3>
   <p class="hint">หนึ่งแท็บ/กิจกรรม = หนึ่ง Event และตารางรางวัลในแท็บนั้นจะเป็นหลายชุดรางวัล</p>
+  <div class="sheet-search-tools">
+    <input id="sheetSearch" type="search" placeholder="ค้นหาชื่อ Sheet..." autocomplete="off">
+    <span id="sheetSearchCount" class="sheet-search-status" aria-live="polite"></span>
+  </div>
+  <div id="sheetSearchEmpty" class="sheet-empty" hidden>ไม่พบ Sheet ที่ค้นหา</div>
   <div class="actions">
     <button id="btnSheetAll" type="button">เลือกทั้งหมด</button>
     <button id="btnSheetNone" type="button">ล้างที่เลือก</button>
@@ -189,10 +195,16 @@
 </dialog>
 
 <script src="/static/console.js"></script>
+<script src="/static/sheet_picker.js"></script>
 <script>
 const queue = new Queue('afc.eventQueue');
 let pendingGame = '';
 let activeRewardIndex = 0;
+const sheetPickerSearch = createSheetPickerSearch({
+  list: $('sheetList'), input: $('sheetSearch'), count: $('sheetSearchCount'),
+  empty: $('sheetSearchEmpty'), selectAllButton: $('btnSheetAll'),
+  clearButton: $('btnSheetNone')
+});
 
 function blankReward(bundleId, name) {
   return {name_th: name || '', name_en: name || '', uses_per_user: '1',
@@ -434,20 +446,20 @@ function showSheets(sheets) {
   const list = $('sheetList'); list.replaceChildren();
   $('sheetTotal').textContent = `${sheets.length} แท็บ`;
   sheets.forEach(sheet => {
+    const displayName = sheet.display_name || sheet.name;
     const row = document.createElement('label');
     row.className = 'sheet-row';
+    row.dataset.sheetName = displayName;
     const tick = document.createElement('input');
     tick.type = 'checkbox'; tick.value = sheet.name; tick.checked = true;
     const text = document.createElement('span');
-    text.textContent = ` ${sheet.name} — ${sheet.count} ชุดรางวัล`;
+    text.className = 'sheet-name';
+    text.textContent = ` ${displayName} — ${sheet.count} ชุดรางวัล`;
     row.append(tick, text); list.appendChild(row);
   });
+  sheetPickerSearch.refresh(true);
   $('sheetDialog').showModal();
 }
-$('btnSheetAll').onclick = () =>
-  $('sheetList').querySelectorAll('input').forEach(box => box.checked = true);
-$('btnSheetNone').onclick = () =>
-  $('sheetList').querySelectorAll('input').forEach(box => box.checked = false);
 $('btnSheetTake').onclick = () => {
   const wanted = new Set([...$('sheetList').querySelectorAll('input')]
     .filter(box => box.checked).map(box => box.value));

@@ -154,6 +154,25 @@ def mode_policy(mode):
     return dict(policies[mode])
 
 
+def sheet_display_name(sheet_name, rows):
+    """Return the full plan title when Excel truncated the worksheet tab.
+
+    Excel worksheet names stop at 31 characters, while the imported plan title
+    is retained in the parsed metadata.  The tab name remains the stable key
+    used when applying a selection; this value is presentation-only.
+    """
+    for row in rows or ():
+        meta = (row or {}).get('group_meta') or {}
+        product = meta.get('product_meta') or {}
+        for value in (
+                product.get('name'), meta.get('activity'),
+                meta.get('product'), meta.get('event_name')):
+            title = str(value or '').strip().replace('\n', ' ')
+            if title:
+                return title
+    return str(sheet_name or '').strip()
+
+
 def _criteria_key(row):
     return (str(row.get('kind', '') or ''), str(row.get('opt', '') or ''),
             str(row.get('dur', '') or ''), str(row.get('name', '') or '').strip())

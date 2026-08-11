@@ -19,6 +19,19 @@ CONSOLE_JS = open(os.path.join(ROOT, 'web', 'static', 'console.js'),
                   encoding='utf-8').read()
 
 
+def test_shared_sheet_picker_assets_are_served_by_the_real_app(client):
+    """Removing either explicit route must reproduce the live blank UI."""
+    script = client.get('/static/sheet_picker.js')
+    style = client.get('/static/sheet_picker.css')
+
+    assert script.status_code == 200
+    assert script.headers['content-type'].startswith('application/javascript')
+    assert 'createSheetPickerSearch' in script.text
+    assert style.status_code == 200
+    assert style.headers['content-type'].startswith('text/css')
+    assert '.sheet-row[hidden]' in style.text
+
+
 def test_product_page_is_in_the_pipeline_and_shop_handoff():
     assert 'id="btnToProduct"' in HTML
     assert 'afc.productQueue.v1' in PRODUCTS

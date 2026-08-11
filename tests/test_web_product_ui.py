@@ -10,12 +10,16 @@ PRODUCTS = ROOT / 'web' / 'static' / 'products.html'
 BUNDLES = ROOT / 'web' / 'static' / 'bundles.html'
 ITEM_FINDER = ROOT / 'web' / 'static' / 'index.html'
 CONSOLE_JS = ROOT / 'web' / 'static' / 'console.js'
+SHEET_PICKER_JS = ROOT / 'web' / 'static' / 'sheet_picker.js'
 
 
 def _page_html(path):
     return path.read_text(encoding='utf-8').replace(
         '<script src="/static/console.js"></script>',
         '<script>%s</script>' % CONSOLE_JS.read_text(encoding='utf-8'),
+    ).replace(
+        '<script src="/static/sheet_picker.js"></script>',
+        '<script>%s</script>' % SHEET_PICKER_JS.read_text(encoding='utf-8'),
     )
 
 

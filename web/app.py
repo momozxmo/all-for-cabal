@@ -452,6 +452,20 @@ def console_js():
                         media_type='application/javascript')
 
 
+@router.get('/static/sheet_picker.css')
+def sheet_picker_css():
+    """Shared search and long-name layout for workbook sheet pickers."""
+    return FileResponse(os.path.join(STATIC_DIR, 'sheet_picker.css'),
+                        media_type='text/css')
+
+
+@router.get('/static/sheet_picker.js')
+def sheet_picker_js():
+    """Client-side filtering used by every workbook sheet picker."""
+    return FileResponse(os.path.join(STATIC_DIR, 'sheet_picker.js'),
+                        media_type='application/javascript')
+
+
 @router.get('/bundles', response_class=HTMLResponse)
 def bundles_page(
     request: Request,
@@ -961,6 +975,7 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
         'sheets': [
             {
                 'name': name,
+                'display_name': item_service.sheet_display_name(name, rows),
                 'count': len(rows),
                 **({
                     'product_count': product_plan.count_products(rows),
@@ -1829,7 +1844,11 @@ async def itemcodes_import(request: Request, file: UploadFile = File(...),
         for draft in made:
             draft['sheet'] = name
         drafts.extend(made)
-        counts.append({'name': name, 'count': len(made)})
+        counts.append({
+            'name': name,
+            'display_name': item_service.sheet_display_name(name, rows),
+            'count': len(made),
+        })
 
     write_audit(
         db, user_id=user.id, action='itemcode.imported', status='success',
@@ -1905,7 +1924,11 @@ async def events_import(request: Request, file: UploadFile = File(...),
 
     drafts = event_plan.build_event_drafts(parsed, game)
     counts = [
-        {'name': sheet, 'count': len((event or {}).get('rewards') or [])}
+        {
+            'name': sheet,
+            'display_name': str((event or {}).get('name') or sheet).strip(),
+            'count': len((event or {}).get('rewards') or []),
+        }
         for sheet, event in parsed
         if (event or {}).get('rewards')
     ]

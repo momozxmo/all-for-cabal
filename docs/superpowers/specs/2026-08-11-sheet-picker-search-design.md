@@ -13,7 +13,10 @@ fully readable.
 - Each sheet picker shows a search field above the sheet list.
 - Filtering runs on every `input` event; there is no Search button.
 - Matching is case-insensitive and ignores leading or trailing query spaces.
-- A sheet remains visible when its full displayed name contains the query.
+- A sheet remains visible when its full displayed plan title contains the query.
+- When Excel truncates a worksheet tab at 31 characters, the picker displays
+  the full activity, Event, Item Code, or Product title recovered from the
+  parsed sheet metadata. The real worksheet tab name remains the selection key.
 - The picker shows `displayed / total` counts while filtering.
 - Select All and Clear affect only rows currently visible after filtering.
 - Hidden rows keep their previous checkbox state.
@@ -34,12 +37,15 @@ buttons. The helper owns only presentation behavior: query normalization, row
 visibility, visible-row bulk selection, and count/empty-state rendering.
 
 The existing page-specific import functions remain responsible for building
-rows and applying the final selected sheet names. No API payload, parser,
-workspace, queue, or Aztek creation behavior changes.
+rows and applying the final selected sheet names. Import responses add an
+optional `display_name`; `name` remains the exact worksheet key submitted to
+the apply endpoint. Parser, workspace, queue, and Aztek creation behavior do
+not change.
 
-Every generated sheet row carries a normalized searchable value in a data
-attribute. The helper reads this value instead of parsing visible count labels,
-so Product/Event/Item Code suffix text cannot affect the sheet identity.
+Every generated sheet row carries `display_name` (falling back to `name`) as a
+normalized searchable value in a data attribute. The checkbox value remains
+`name`, so Product/Event/Item Code suffix text and recovered display titles
+cannot affect the sheet identity.
 
 ## Styling
 
@@ -75,7 +81,9 @@ Browser regressions will cover all four pages and assert visible behavior:
 4. hidden selections survive filtering and are included when applying;
 5. clearing the query restores all rows;
 6. a no-match message and correct count appear; and
-7. a long sheet name wraps and its full text remains visible.
+7. a long sheet name wraps and its full text remains visible; and
+8. a 31-character Excel tab can display/search the recovered full title while
+   applying the unchanged worksheet key.
 
 Run the focused browser tests first, then the complete test suite. This change
 does not authorize creating live Aztek records, building Setup, committing the

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>All for Cabal — สร้าง Product</title>
   <link rel="stylesheet" href="/static/console.css">
+  <link rel="stylesheet" href="/static/sheet_picker.css">
   <style>
     .product-page [hidden]{display:none!important}
     .topline{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
@@ -274,6 +275,11 @@
 <dialog id="sheetDialog">
   <h3>เลือก Sheet ที่จะ Import</h3>
   <p class="hint">เลือกได้หลาย Sheet และจะแสดงเฉพาะจำนวน Product ที่ตรวจพบ</p>
+  <div class="sheet-search-tools">
+    <input id="sheetSearch" type="search" placeholder="ค้นหาชื่อ Sheet..." autocomplete="off">
+    <span id="sheetSearchCount" class="sheet-search-status" aria-live="polite"></span>
+  </div>
+  <div id="sheetSearchEmpty" class="sheet-empty" hidden>ไม่พบ Sheet ที่ค้นหา</div>
   <div class="actions">
     <button id="btnSelectAllSheets" type="button">เลือกทั้งหมด</button>
     <button id="btnClearSheets" type="button">ล้างที่เลือกทั้งหมด</button>
@@ -286,6 +292,7 @@
 </dialog>
 
 <script src="/static/console.js"></script>
+<script src="/static/sheet_picker.js"></script>
 <script>
 const PRODUCT_QUEUE_KEY = 'afc.productQueue.v1';
 const PRODUCT_WORKSPACE_KEY = 'afc.productWorkspace';
@@ -293,6 +300,11 @@ const productQueue = new Queue(PRODUCT_QUEUE_KEY);
 const productFiles = new Map();
 let activeWorkspaceId = '';
 let pendingProductImport = null;
+const sheetPickerSearch = createSheetPickerSearch({
+  list: $('sheetList'), input: $('sheetSearch'), count: $('sheetSearchCount'),
+  empty: $('sheetSearchEmpty'), selectAllButton: $('btnSelectAllSheets'),
+  clearButton: $('btnClearSheets')
+});
 productQueue.load();
 productQueue.active = productQueue.items[0]?.key || '';
 const optionState = {
@@ -929,18 +941,22 @@ function openProductSheetPicker(pending) {
   const list = $('sheetList');
   list.replaceChildren();
   for (const sheet of pending.sheets || []) {
+    const displayName = sheet.display_name || sheet.name;
     const label = document.createElement('label');
     label.className = 'sheet-row';
+    label.dataset.sheetName = displayName;
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = sheet.name;
     input.checked = Number(sheet.product_count || 0) > 0;
     const text = document.createElement('span');
+    text.className = 'sheet-name';
     text.textContent =
-      `${sheet.name} · ${sheet.product_count || 0} Product · ${sheet.count || 0} แถว`;
+      `${displayName} · ${sheet.product_count || 0} Product · ${sheet.count || 0} แถว`;
     label.append(input, text);
     list.appendChild(label);
   }
+  sheetPickerSearch.refresh(true);
   $('sheetDialog').showModal();
 }
 
@@ -1470,16 +1486,6 @@ $('bundleId').oninput = () => {
 };
 $('btnAddManualPrice').onclick = () =>
   addManualPrice(productQueue.current());
-$('btnSelectAllSheets').onclick = () => {
-  $('sheetList').querySelectorAll('input[type="checkbox"]').forEach(box => {
-    box.checked = true;
-  });
-};
-$('btnClearSheets').onclick = () => {
-  $('sheetList').querySelectorAll('input[type="checkbox"]').forEach(box => {
-    box.checked = false;
-  });
-};
 $('btnUseWorkbookBundle').onclick = () => {
   const entry = productQueue.current();
   if (!entry?.bundle_conflict) return;

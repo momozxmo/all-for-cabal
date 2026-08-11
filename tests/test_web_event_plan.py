@@ -213,7 +213,9 @@ def test_direct_event_import_uses_desktop_parser_and_removes_upload(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()['sheets'] == [{'name': 'Activity A', 'count': 2}]
+    assert response.json()['sheets'] == [{
+        'name': 'Activity A', 'display_name': 'Summer Event', 'count': 2,
+    }]
     assert response.json()['events'][0]['sheet'] == 'Activity A'
     assert response.json()['events'][0]['slug'] == 'summer-event-pcth'
     assert response.json()['skipped'] == []

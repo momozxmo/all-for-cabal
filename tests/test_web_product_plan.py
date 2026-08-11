@@ -309,6 +309,7 @@ def test_import_plan_reports_product_count_per_candidate_sheet(
     assert response.status_code == 200, response.text
     assert response.json()['sheets'] == [{
         'name': 'Promotion 15.7',
+        'display_name': 'Orb Pack',
         'count': 2,
         'product_count': 1,
     }]

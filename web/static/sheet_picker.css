@@ -1,0 +1,39 @@
+.sheet-search-tools {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.sheet-search-tools input {
+  width: 100%;
+}
+
+.sheet-search-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sheet-row[hidden],
+.sheet-empty[hidden] {
+  display: none !important;
+}
+
+.sheet-row {
+  align-items: flex-start;
+  height: auto;
+  min-width: 0;
+}
+
+.sheet-row .sheet-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.sheet-empty {
+  color: var(--muted);
+  padding: 14px;
+  text-align: center;
+}
