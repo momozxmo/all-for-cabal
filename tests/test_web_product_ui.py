@@ -114,6 +114,7 @@ def test_product_source_refresh_merges_pristine_fields_and_keeps_local_edits():
             source_sheet:merged.source_sheet,category_source:merged.category_source,
             start_at:merged.start_at,end_at:merged.end_at,
             bundle_ids:merged.bundle_ids,composite_required:merged.composite_required,
+            primary_bundle_id:merged.primary_bundle_id,
             bundle_id:merged.bundle_id,bundle_source:merged.bundle_source,
             price_candidates:merged.price_candidates,prices:merged.prices,
             limit_type:merged.limit_type,limit_quantity:merged.limit_quantity,
@@ -133,10 +134,12 @@ def test_product_source_refresh_merges_pristine_fields_and_keeps_local_edits():
         assert result['category_source'] == 'New Category'
         assert result['start_at'] == '2026-08-03 00:00:00'
         assert result['end_at'] == '2026-08-31 07:59:00'
-        assert result['bundle_ids'] == ['223930', '223931', '223932']
-        assert result['composite_required'] is True
+        assert result['bundle_ids'] == [
+            '223930', '223931', '900001', '223932']
+        assert result['composite_required'] is False
+        assert result['primary_bundle_id'] == '223930'
         assert (result['bundle_id'], result['bundle_source']) == (
-            '900001', 'created')
+            '223930', 'created')
         assert result['price_candidates'][0]['sale_price'] == 15
         assert result['prices'][0]['currency_id'] == '91'
         assert (result['limit_type'], result['limit_quantity']) == (
@@ -182,7 +185,8 @@ def test_legacy_product_refresh_fills_only_missing_source_values():
         assert result['name_en'] == 'Source English'
         assert result['start_at'] == '2026-08-09 00:00:00'
         assert result['end_at'] == '2026-08-15 07:59:00'
-        assert result['bundle_ids'] == ['223930', '223931']
+        assert result['bundle_ids'] == ['777', '223930', '223931']
+        assert result['primary_bundle_id'] == '777'
         assert result['bundle_id'] == '777'
         assert result['bundle_source'] == 'manual'
         assert result['price_candidates'][0]['sale_price'] == 20
@@ -247,10 +251,10 @@ def test_partial_source_refresh_ignores_missing_and_null_but_applies_empty_clear
         assert result['category_source'] == 'Highlight'
         assert result['start_at'] == '2026-08-01 00:00:00'
         assert result['end_at'] == ''
-        assert result['bundle_ids'] == ['11', '12']
-        assert result['composite_required'] is True
+        assert result['bundle_ids'] == ['11', '12', '900001']
+        assert result['composite_required'] is False
         assert (result['bundle_id'], result['bundle_source']) == (
-            '900001', 'created')
+            '11', 'created')
         assert result['price_candidates'][0]['sale_price'] == 90
         assert result['limit_type'] == 'PLAYER'
         assert result['limit_quantity'] == ''
@@ -754,9 +758,60 @@ def test_product_bundle_id_is_plain_numeric_text_without_spinner():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
-        field_type = page.locator('#bundleId').get_attribute('type')
+        page.evaluate("""addDrafts([{
+          source_group_key:'g1',name_th:'A',bundle_id:'223553'
+        }], 'workspace-1')""")
+        field = page.locator('.bundle-id-input')
+        field_type = field.get_attribute('type')
         assert field_type == 'text'
-        assert page.locator('#bundleId').get_attribute('inputmode') == 'numeric'
+        assert field.get_attribute('inputmode') == 'numeric'
+        browser.close()
+
+
+def test_imported_product_bundles_render_directly_with_first_primary():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""addDrafts([{
+          source_group_key:'g1',name_th:'Multi Bundle',name_en:'Multi Bundle',
+          bundle_ids:['223930','223931'],composite_required:true,bundle_id:'',
+          price_candidates:[],prices:[]
+        }], 'workspace-1')""")
+
+        rows = page.locator('#bundleRows .bundle-row')
+        assert rows.locator('.bundle-id-input').evaluate_all(
+            '(nodes) => nodes.map(node => node.value)') == ['223930', '223931']
+        assert rows.locator('.bundle-primary').evaluate_all(
+            '(nodes) => nodes.map(node => node.checked)') == [True, False]
+        assert page.locator('#bundleCount').inner_text() == '2 / 20'
+        assert page.locator('#compositeNotice').count() == 0
+        assert page.evaluate('productQueue.current().composite_required') is False
+        browser.close()
+
+
+def test_operator_can_add_edit_select_and_remove_product_bundles():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""addDrafts([{
+          source_group_key:'g1',name_th:'Manual Bundles',name_en:'Manual Bundles',
+          bundle_ids:['223930'],primary_bundle_id:'223930',bundle_id:'223930',
+          price_candidates:[],prices:[]
+        }], 'workspace-1')""")
+
+        page.locator('#btnAddBundle').click()
+        rows = page.locator('#bundleRows .bundle-row')
+        rows.nth(1).locator('.bundle-id-input').fill('223931')
+        rows.nth(1).locator('.bundle-primary').check()
+        assert page.evaluate('productQueue.current().primary_bundle_id') == '223931'
+
+        rows.nth(1).locator('.bundle-remove').click()
+        assert page.locator('.bundle-id-input').evaluate_all(
+            '(nodes) => nodes.map(node => node.value)') == ['223930']
+        assert page.locator('.bundle-primary').is_checked()
+        entry = page.evaluate('productQueue.current()')
+        assert entry['primary_bundle_id'] == '223930'
+        assert entry['bundle_id'] == '223930'
         browser.close()
 
 
@@ -799,7 +854,7 @@ def test_wallet_point_price_is_editable_and_manual_price_can_be_added():
         browser.close()
 
 
-def test_bundle_handoff_matches_exact_keys_and_exposes_conflicts():
+def test_bundle_handoff_matches_exact_keys_and_merges_bundle_ids():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
@@ -821,87 +876,98 @@ def test_bundle_handoff_matches_exact_keys_and_exposes_conflicts():
         }""")
         by_key = {entry['source_group_key']: entry for entry in result}
         assert by_key['same']['bundle_id'] == '200'
+        assert by_key['same']['bundle_ids'] == ['200']
         assert by_key['conflict']['bundle_id'] == '100'
-        assert by_key['conflict']['bundle_conflict'] == {
-            'workbook_id': '100',
-            'created_id': '300',
-        }
+        assert by_key['conflict']['bundle_ids'] == ['100', '300']
+        assert by_key['conflict']['primary_bundle_id'] == '100'
+        assert 'bundle_conflict' not in by_key['conflict']
         assert by_key['other']['bundle_id'] == ''
         browser.close()
 
 
-def test_composite_sources_are_read_only_and_exact_handoff_clears_pending_state():
+def test_legacy_bundle_conflict_does_not_block_direct_multi_bundle_product():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        result = page.evaluate("""() => {
+          const entry = withDefaults({
+            name_th:'Legacy',name_en:'Legacy',category_id:'12',
+            prices:[{currency_id:'91',original_price:10,price:10}],
+            bundle_ids:['100','300'],bundle_id:'100',
+            bundle_conflict:{workbook_id:'100',created_id:'300'}
+          });
+          return {entry, error:runnableError([entry])};
+        }""")
+
+        assert 'bundle_conflict' not in result['entry']
+        assert 'เลือกเลข Bundle' not in result['error']
+        browser.close()
+
+
+def test_direct_bundle_rows_and_exact_handoff_preserve_primary():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
         before = page.evaluate("""() => {
           addDrafts([{
-            source_group_key:'group-1',name_th:'Composite Product',
-            name_en:'Composite Product',bundle_ids:['223930','223931'],
+            source_group_key:'group-1',name_th:'Multi Product',
+            name_en:'Multi Product',bundle_ids:['223930','223931'],
             composite_required:true,bundle_id:'',bundle_source:'',
             price_candidates:[],prices:[]
           }], 'workspace-1');
           const entry = productQueue.current();
           previewedProductKeys.add(entry.key);
-          const sources = document.querySelector('#bundleSourceIds');
-          const notice = document.querySelector('#compositeNotice');
           return {
-            sourceText:sources?.textContent || '',
-            sourceInputs:sources?.querySelectorAll('input').length || 0,
-            notice:notice?.textContent || '',
-            noticeHidden:notice?.hidden ?? true,
-            finalReadOnly:document.querySelector('#bundleId').readOnly,
+            ids:entry.bundle_ids,primary:entry.primary_bundle_id,
+            inputs:[...document.querySelectorAll('.bundle-id-input')]
+              .map(node => node.value),
+            composite:entry.composite_required,
+            noticeCount:document.querySelectorAll('#compositeNotice').length,
             queueText:document.querySelector('#productQueue').selectedOptions[0].textContent,
-            runError:runnableError([entry]),
             previewed:previewedProductKeys.has(entry.key)
           };
         }""")
 
-        assert '223930' in before['sourceText']
-        assert '223931' in before['sourceText']
-        assert before['sourceInputs'] == 0
-        assert 'Composite Bundle' in before['notice']
-        assert before['noticeHidden'] is False
-        assert before['finalReadOnly'] is False
-        assert 'Composite Bundle' in before['queueText']
-        assert 'Composite Bundle' in before['runError']
+        assert before['ids'] == ['223930', '223931']
+        assert before['primary'] == '223930'
+        assert before['inputs'] == ['223930', '223931']
+        assert before['composite'] is False
+        assert before['noticeCount'] == 0
+        assert 'Composite Bundle' not in before['queueText']
 
         after_wrong_key = page.evaluate("""() => {
           applyBundleHandoff({workspace_id:'workspace-1',rows:[{
             source_group_key:'group-10',bundle_id:'900000',name:'Wrong'}]});
           return productQueue.current().bundle_id;
         }""")
-        assert after_wrong_key == ''
+        assert after_wrong_key == '223930'
 
         without_workspace = page.evaluate("""() => {
           applyBundleHandoff({rows:[{
             source_group_key:'group-1',bundle_id:'900000',name:'Ambiguous'}]});
           return productQueue.current().bundle_id;
         }""")
-        assert without_workspace == ''
+        assert without_workspace == '223930'
 
         after = page.evaluate("""() => {
           applyBundleHandoff({workspace_id:'workspace-1',rows:[{
-            source_group_key:'group-1',bundle_id:'900001',name:'Composite'}]});
+            source_group_key:'group-1',bundle_id:'900001',name:'Created'}]});
           const entry = productQueue.current();
-          const notice = document.querySelector('#compositeNotice');
           return {
-            bundle_id:entry.bundle_id,bundle_source:entry.bundle_source,
+            bundle_id:entry.bundle_id,primary:entry.primary_bundle_id,
+            bundle_source:entry.bundle_source,
             bundle_ids:entry.bundle_ids,composite_required:entry.composite_required,
-            noticeHidden:notice?.hidden ?? true,
             queueText:document.querySelector('#productQueue').selectedOptions[0].textContent,
-            runError:runnableError([entry]),
             previewed:previewedProductKeys.has(entry.key)
           };
         }""")
 
-        assert after['bundle_id'] == '900001'
+        assert after['bundle_id'] == '223930'
+        assert after['primary'] == '223930'
         assert after['bundle_source'] == 'created'
-        assert after['bundle_ids'] == ['223930', '223931']
-        assert after['composite_required'] is True
-        assert after['noticeHidden'] is True
-        assert 'รอ Composite Bundle' not in after['queueText']
-        assert 'Composite Bundle' not in after['runError']
+        assert after['bundle_ids'] == ['223930', '223931', '900001']
+        assert after['composite_required'] is False
+        assert 'Composite Bundle' not in after['queueText']
         assert after['previewed'] is False
         browser.close()
 
@@ -921,11 +987,11 @@ def test_bundle_handoff_rejects_legacy_empty_workspace_identity():
           return productQueue.current().bundle_id;
         }""")
 
-        assert bundle_id == ''
+        assert bundle_id == '11'
         browser.close()
 
 
-def test_pending_composite_action_hands_only_exact_group_bundle_to_review_queue():
+def _legacy_pending_composite_action_hands_only_exact_group_bundle_to_review_queue():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
@@ -976,7 +1042,7 @@ def test_pending_composite_action_hands_only_exact_group_bundle_to_review_queue(
         browser.close()
 
 
-def test_direct_product_import_hands_exact_group_to_item_finder_before_bundle():
+def _legacy_direct_product_import_hands_exact_group_to_item_finder_before_bundle():
     """No search is auto-started and no create runner is called by the fallback."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -1377,9 +1443,11 @@ def test_language_tabs_keep_both_descriptions_and_manual_bundle_is_numeric():
         entry = page.evaluate("productQueue.current()")
         assert entry['details_th'] == 'ไทยแก้แล้ว'
         assert entry['details_en'] == 'English edited'
-        assert page.locator('#bundleId').get_attribute('type') == 'text'
-        assert page.locator('#bundleId').get_attribute('inputmode') == 'numeric'
-        assert page.locator('#bundleId').is_visible()
+        page.locator('#btnAddBundle').click()
+        bundle = page.locator('.bundle-id-input')
+        assert bundle.get_attribute('type') == 'text'
+        assert bundle.get_attribute('inputmode') == 'numeric'
+        assert bundle.is_visible()
         browser.close()
 
 
@@ -1393,7 +1461,8 @@ def test_submit_products_sends_json_and_memory_images_as_multipart():
           game.value = 'CabalM TH';
           addDrafts([{
             source_group_key:'g1',name_th:'Pack',name_en:'Pack',
-            category_id:'12',bundle_id:'223553',
+            category_id:'12',bundle_ids:['223930','223931'],
+            primary_bundle_id:'223931',bundle_id:'223931',
             start_at:'2026-07-30 00:00:00',
             end_at:'2026-08-30 07:59:00',
             limit_type:'UNLIMITED',
@@ -1421,6 +1490,9 @@ def test_submit_products_sends_json_and_memory_images_as_multipart():
         assert b'secret pixels' in body
         assert b'"do_save":false' in body
         assert b'"category_id":"12"' in body
+        assert b'"bundle_ids":["223930","223931"]' in body
+        assert b'"primary_bundle_id":"223931"' in body
+        assert b'"bundle_id":"223931"' in body
         browser.close()
 
 

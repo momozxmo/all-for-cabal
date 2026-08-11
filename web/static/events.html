@@ -44,6 +44,9 @@
     .reward-tab[aria-selected="true"]{border-color:var(--arc);
       background:var(--arc);color:#fff}
     .reward-tab:focus-visible{outline:2px solid var(--arc-bright);outline-offset:2px}
+    .plan-warning-highlight{border:1px solid rgba(242,182,75,.62);
+      border-left:4px solid var(--yellow);background:rgba(242,182,75,.10);
+      color:#ffe1a0;box-shadow:0 0 0 1px rgba(242,182,75,.06) inset}
     .rset:not([data-limited="yes"]) .limit-only{display:none}
     .idtable{width:100%;margin-top:10px}
     .idtable td,.idtable th{white-space:normal}
@@ -98,7 +101,7 @@
     <section class="card" id="editor" hidden>
       <div class="card-head"><h2>แก้ Event</h2><span id="editorWhich" class="hint"></span></div>
       <div class="card-body section">
-        <div id="planWarnings" class="summary warning" hidden></div>
+        <div id="planWarnings" class="summary warning plan-warning-highlight" hidden></div>
         <div class="event-layout">
           <div class="event-column">
             <section class="event-panel event-general" data-event-section="general">
@@ -446,7 +449,7 @@ function showSheets(sheets) {
   const list = $('sheetList'); list.replaceChildren();
   $('sheetTotal').textContent = `${sheets.length} แท็บ`;
   sheets.forEach(sheet => {
-    const displayName = sheet.display_name || sheet.name;
+    const displayName = sheet.name;
     const row = document.createElement('label');
     row.className = 'sheet-row';
     row.dataset.sheetName = displayName;

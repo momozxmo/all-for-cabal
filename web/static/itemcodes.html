@@ -555,7 +555,7 @@ function showSheets(sheets) {
   const list = $('sheetList'); list.replaceChildren();
   $('sheetTotal').textContent = `${sheets.length} แท็บ`;
   sheets.forEach(sheet => {
-    const displayName = sheet.display_name || sheet.name;
+    const displayName = sheet.name;
     const row = document.createElement('label');
     row.className = 'sheet-row';
     row.dataset.sheetName = displayName;

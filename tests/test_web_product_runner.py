@@ -254,6 +254,56 @@ def test_product_bundle_picker_accepts_current_popover_search_placeholder():
     assert '223553' in summary
 
 
+def test_product_builder_selects_multiple_bundles_and_primary(monkeypatch):
+    selected = []
+
+    async def fake_pick(page, _scope, value, *_args, **_kwargs):
+        selected.append(value)
+        await page.evaluate("""value => {
+          const list = document.querySelector('#selectedBundles');
+          const row = document.createElement('div');
+          row.className = 'selected-bundle-card';
+          row.innerHTML = `<span>#${value}</span><label>
+            <input type="radio" name="primaryBundle"> Primary</label>`;
+          list.appendChild(row);
+          document.querySelector('#bundleCount').textContent =
+            `${list.children.length}/20 Bundles`;
+        }""", value)
+        return True
+
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content('''
+                  <section><header><h2>Bundle</h2></header>
+                    <button type="button">เลือก bundle</button>
+                    <div id="selectedBundles"></div>
+                    <p id="bundleCount">0/20 Bundles</p>
+                  </section>''')
+                missing = []
+                await product_runner.ProductBuilder(
+                    lambda *_: None)._fill_bundles(page, {
+                        'bundle_ids': ['223930', '223931'],
+                        'primary_bundle_id': '223931',
+                        'bundle_id': '223931',
+                    }, missing)
+                checked = await page.locator(
+                    '.selected-bundle-card input:checked').evaluate_all(
+                        '(nodes) => nodes.map(node => '
+                        'node.closest("div").querySelector("span").textContent)')
+                return missing, checked
+            finally:
+                await browser.close()
+
+    monkeypatch.setattr(aztek_form, 'pick_bundle', fake_pick)
+    missing, checked = asyncio.run(scenario())
+    assert selected == ['223930', '223931']
+    assert missing == []
+    assert checked == ['#223931']
+
+
 def test_product_options_requires_authentication(anonymous_client):
     response = anonymous_client.post('/api/products/options', json={
         'game': GAME, 'kinds': ['currencies']})
@@ -330,6 +380,20 @@ def test_product_unknown_game_and_invalid_fields_stop_before_pairing(client):
     ):
         response = _run_products(client, [_product(**changed)])
         assert response.status_code in (400, 422), (changed, response.text)
+
+
+@pytest.mark.parametrize('changed', [
+    {'bundle_id': '', 'bundle_ids': []},
+    {'bundle_id': '', 'bundle_ids': ['223930', '223930']},
+    {'bundle_id': '', 'bundle_ids': ['bundle-223930']},
+    {'bundle_id': '', 'bundle_ids': [str(220000 + index)
+                                    for index in range(21)]},
+    {'bundle_id': '', 'bundle_ids': ['223930', '223931'],
+     'primary_bundle_id': '999999'},
+])
+def test_product_invalid_multi_bundle_values_stop_before_browser(client, changed):
+    response = _run_products(client, [_product(**changed)])
+    assert response.status_code in (400, 422), response.text
 
 
 def test_valid_product_still_requires_paired_aztek_session(client):
@@ -413,6 +477,36 @@ def test_product_preview_calls_fill_only_and_returns_client_key(
     assert body['created'] == 0
     assert body['results'][0]['client_key'] == 'p1'
     assert body['results'][0]['made_id'] is None
+    spec = calls[0][1]['spec']
+    assert spec['bundle_ids'] == ['223553']
+    assert spec['primary_bundle_id'] == '223553'
+    assert spec['bundle_id'] == '223553'
+
+
+def test_product_preview_preserves_ordered_bundles_and_primary(
+        client, monkeypatch):
+    _connect_aztek(client)
+    calls = []
+
+    class Builder:
+        def __init__(self, on_log):
+            self.on_log = on_log
+
+        async def run(self, **kwargs):
+            calls.append(kwargs['spec'])
+            return {'missing': [], 'kept_open': False, 'screenshot': None}
+
+    monkeypatch.setattr(product_runner, 'ProductBuilder', Builder)
+    response = _run_products(client, [_product(
+        bundle_id='223931',
+        bundle_ids=['223930', '223931'],
+        primary_bundle_id='223931',
+    )])
+
+    assert response.status_code == 200, response.text
+    assert calls[0]['bundle_ids'] == ['223930', '223931']
+    assert calls[0]['primary_bundle_id'] == '223931'
+    assert calls[0]['bundle_id'] == '223931'
 
 
 def test_product_create_keeps_per_entry_results_and_audit_has_no_payload_bytes(
@@ -643,13 +737,12 @@ def test_product_details_fill_only_nonempty_languages():
     assert calls == [('en', 'English details')]
 
 
-def test_product_display_dates_limit_tags_and_bundle_use_stable_helpers(
+def test_product_display_dates_limit_and_tags_use_stable_helpers(
         monkeypatch):
     page = _Page()
     switches = []
     dates = []
     selects = []
-    bundles = []
     fills = []
 
     async def fake_switch(_page, label, value, *_args, **_kwargs):
@@ -664,10 +757,6 @@ def test_product_display_dates_limit_tags_and_bundle_use_stable_helpers(
         selects.append((label, value))
         return True
 
-    async def fake_bundle(_page, _scope, value, *_args, **_kwargs):
-        bundles.append(value)
-        return True
-
     async def fake_fill(_page, selector, value, *_args, **_kwargs):
         fills.append((selector, value))
         return True
@@ -675,7 +764,6 @@ def test_product_display_dates_limit_tags_and_bundle_use_stable_helpers(
     monkeypatch.setattr(aztek_form, 'set_switch', fake_switch)
     monkeypatch.setattr(aztek_form, 'set_datetime', fake_datetime)
     monkeypatch.setattr(aztek_form, 'select_after_label', fake_select)
-    monkeypatch.setattr(aztek_form, 'pick_bundle', fake_bundle)
     monkeypatch.setattr(aztek_form, 'fill', fake_fill)
     builder = _builder()
     missing = []
@@ -692,14 +780,12 @@ def test_product_display_dates_limit_tags_and_bundle_use_stable_helpers(
     asyncio.run(builder._fill_display(page, spec, missing))
     asyncio.run(builder._fill_limit(page, spec, missing))
     asyncio.run(builder._fill_tags(page, spec))
-    asyncio.run(builder._fill_bundle(page, spec, missing))
 
     assert switches[:3] == [
         ('เปิดใช้งาน', True), ('โหมดทดสอบ', False), ('ซ่อน', True)]
     assert ('วันเริ่มขาย', spec['start_at']) in dates
     assert ('วันสิ้นสุด', spec['end_at']) in dates
     assert ('ประเภทการจำกัด', 'PLAYER') in selects
-    assert bundles == ['223553']
     assert 'SALE' in page.clicks and 'LIMITED' in page.clicks
     assert ('input[name="position"]', '3') in fills
     assert missing == []
@@ -724,6 +810,15 @@ def test_missing_product_requirements_are_reported(
     monkeypatch.setattr(aztek_form, 'set_switch', okay)
     monkeypatch.setattr(aztek_form, 'set_datetime', okay)
     monkeypatch.setattr(aztek_form, 'pick_bundle', okay)
+    builder = _builder()
+
+    async def validate_bundle(_page, bundle_spec, missing):
+        values = bundle_spec.get('bundle_ids') or [
+            bundle_spec.get('bundle_id')]
+        if not any(str(value or '').strip() for value in values):
+            missing.append('Bundle')
+
+    builder._fill_bundles = validate_bundle
     spec = {
         'name_th': 'สินค้า', 'name_en': 'Product', 'category_id': '12',
         'prices': [{'currency_id': '91', 'original_price': 100, 'price': 66}],
@@ -733,5 +828,5 @@ def test_missing_product_requirements_are_reported(
         'limit_type': 'UNLIMITED', 'tags': [],
     }
     spec[field] = [] if field == 'prices' else ''
-    missing = asyncio.run(_builder().fill_form(_Page(), spec))
+    missing = asyncio.run(builder.fill_form(_Page(), spec))
     assert label in missing

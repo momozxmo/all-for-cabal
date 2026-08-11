@@ -81,6 +81,14 @@ def test_event_drafts_and_group_keys_survive_the_bundle_handoff():
     assert 'item.group_key === row.group_key' in EVENTS
 
 
+def test_event_plan_warning_has_scoped_general_warning_highlight():
+    assert ('id="planWarnings" '
+            'class="summary warning plan-warning-highlight"') in EVENTS
+    assert '.plan-warning-highlight{' in EVENTS
+    assert 'border-left:4px solid var(--yellow)' in EVENTS
+    assert 'background:rgba(242,182,75,.10)' in EVENTS
+
+
 def test_itemcode_drafts_survive_the_bundle_handoff():
     assert 'itemcode_drafts:d.itemcode_drafts||[]' in HTML
     for fragment in ('itemcode_drafts', 'state.itemcodeDrafts',

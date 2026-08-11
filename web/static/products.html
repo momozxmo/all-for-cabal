@@ -49,6 +49,16 @@
     .price-match-row input,.price-match-row select{width:100%}
     .empty-note{color:var(--muted);font-size:12px}
     .bundle-summary{display:grid;gap:10px}
+    .bundle-rows{display:grid;gap:9px}
+    .bundle-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;
+      gap:9px;align-items:center;padding:9px;border:1px solid var(--edge);
+      border-radius:9px;background:var(--onyx)}
+    .bundle-row input[type="text"]{width:100%}
+    .bundle-primary-label{display:flex;align-items:center;gap:6px;
+      color:var(--muted);font-size:12px;white-space:nowrap}
+    .bundle-actions{display:flex;align-items:center;justify-content:space-between;
+      gap:10px;flex-wrap:wrap}
+    .bundle-error{color:var(--yellow);font-size:12px}
     .bundle-conflict{padding:10px;border:1px solid rgba(242,182,75,.5);border-radius:9px;
       background:#302711;color:var(--yellow)}
     .bundle-conflict .actions{margin-top:8px}
@@ -180,25 +190,12 @@
             <section class="product-panel" data-product-section="bundle">
               <h3>Bundle</h3>
               <div id="bundlePicker" class="bundle-summary">
-                <div class="field">
-                  <span>Bundle IDs จากไฟล์ (อ่านอย่างเดียว)</span>
-                  <div id="bundleSourceIds" class="price-match-list"></div>
+                <div id="bundleRows" class="bundle-rows"></div>
+                <div class="bundle-actions">
+                  <button id="btnAddBundle" type="button">+ เพิ่ม Bundle</button>
+                  <span id="bundleCount" class="hint">0 / 20</span>
                 </div>
-                <div id="compositeNotice" class="bundle-conflict" hidden>
-                  <b>ต้องสร้าง Composite Bundle 1 อันก่อน</b>
-                  <div>นำแถว Item ที่ import ของ Product กลุ่มนี้ไปตรวจและสร้างในหน้า Bundle แล้วส่ง Bundle ID ที่สร้างกลับมาช่องด้านล่าง</div>
-                  <button id="btnReviewComposite" type="button">ตรวจ Composite Bundle ในคิว Bundle</button>
-                </div>
-                <label class="field">Bundle ID *<input id="bundleId" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="กรอกเลข Bundle"></label>
-                <span id="bundleSource" class="hint"></span>
-                <div id="bundleConflict" class="bundle-conflict" hidden>
-                  <b>เลข Bundle จากไฟล์ไม่ตรงกับเลขที่เพิ่งสร้าง</b>
-                  <div id="bundleConflictText"></div>
-                  <div class="actions">
-                    <button id="btnUseWorkbookBundle" type="button">ใช้เลขจากไฟล์</button>
-                    <button id="btnUseCreatedBundle" type="button">ใช้เลขที่สร้าง</button>
-                  </div>
-                </div>
+                <div id="bundleError" class="bundle-error" hidden></div>
               </div>
             </section>
           </div>
@@ -317,7 +314,7 @@ let productRunBusy = false;
 const PRODUCT_SOURCE_FIELDS = [
   'source_sheet', 'game', 'name_th', 'name_en', 'category_source',
   'start_at', 'end_at', 'bundle_ids', 'composite_required',
-  'bundle_id', 'bundle_source', 'price_candidates', 'limit_type',
+  'primary_bundle_id', 'bundle_id', 'bundle_source', 'price_candidates', 'limit_type',
   'limit_quantity', 'limit_reset_interval_days', 'limit_reset_at',
   'tags', 'warnings',
 ];
@@ -544,6 +541,32 @@ function mergeSourceDraft(entry, draft) {
   for (const field of incomingFields) {
     const incoming = structuredClone(draft[field]);
     nextSnapshot[field] = structuredClone(incoming);
+    if (field === 'bundle_ids' && dirty[field]) {
+      const merged = [...(entry.bundle_ids || [])];
+      for (const value of incoming || []) {
+        const id = String(value || '').trim();
+        if (id && !merged.includes(id)) merged.push(id);
+      }
+      if (!sameProductValue(entry.bundle_ids, merged)) {
+        entry.bundle_ids = merged;
+        executionChanged = true;
+      }
+      continue;
+    }
+    if (field === 'bundle_ids' && !hadSnapshot
+        && !missingLegacySourceValue(entry.bundle_ids)) {
+      const merged = [...entry.bundle_ids];
+      for (const value of incoming || []) {
+        const id = String(value || '').trim();
+        if (id && !merged.includes(id)) merged.push(id);
+      }
+      if (!sameProductValue(entry.bundle_ids, merged)) {
+        entry.bundle_ids = merged;
+        executionChanged = true;
+      }
+      dirty[field] = true;
+      continue;
+    }
     if (hadSnapshot) {
       if (dirty[field]) continue;
     } else if (!missingLegacySourceValue(entry[field])) {
@@ -578,7 +601,7 @@ function withDefaults(source) {
     source_sheet: '', name_th: '', name_en: '',
     category_source: '', category_id: '', category_label: '',
     category_slug: '', details_th: '', details_en: '',
-    start_at: '', end_at: '', bundle_id: '', bundle_source: '',
+    start_at: '', end_at: '', bundle_id: '', primary_bundle_id: '', bundle_source: '',
     bundle_ids: [], composite_required: false,
     price_candidates: [], prices: [], limit_type: 'UNLIMITED',
     limit_quantity: '', limit_reset_interval_days: '',
@@ -588,7 +611,7 @@ function withDefaults(source) {
   }, raw);
   entry.price_candidates = Array.isArray(entry.price_candidates)
     ? entry.price_candidates : [];
-  entry.bundle_ids = Array.isArray(entry.bundle_ids) ? entry.bundle_ids : [];
+  normalizeProductBundles(entry);
   entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
   entry.tags = Array.isArray(entry.tags) ? entry.tags : [];
   entry.warnings = Array.isArray(entry.warnings) ? entry.warnings : [];
@@ -604,6 +627,30 @@ function withDefaults(source) {
     ...suppliedSourceFields,
   ])];
   return entry;
+}
+
+function normalizeProductBundles(entry) {
+  if (!entry) return entry;
+  const hasList = Array.isArray(entry.bundle_ids) && entry.bundle_ids.length;
+  const raw = hasList ? entry.bundle_ids
+    : (String(entry.bundle_id || '').trim() ? [entry.bundle_id] : []);
+  entry.bundle_ids = raw.map(value => String(value ?? '').trim());
+  let primary = String(
+    entry.primary_bundle_id || entry.bundle_id || entry.bundle_ids[0] || ''
+  ).trim();
+  if (!entry.bundle_ids.includes(primary)) primary = entry.bundle_ids[0] || '';
+  entry.primary_bundle_id = primary;
+  entry.bundle_id = primary;
+  entry.composite_required = false;
+  delete entry.bundle_conflict;
+  return entry;
+}
+
+function markBundleDirty(entry) {
+  ['bundle_ids', 'primary_bundle_id', 'bundle_id', 'bundle_source']
+    .forEach(field => markSourceDirty(entry, field));
+  invalidateProductPreview(entry);
+  productQueue.save();
 }
 
 function updateQueueOption(entry) {
@@ -631,33 +678,67 @@ function renderWarnings(entry) {
 }
 
 function renderBundle(entry) {
-  setField('bundleId', entry?.bundle_id || '');
-  const sourceIds = $('bundleSourceIds');
-  sourceIds.replaceChildren();
-  for (const id of entry?.bundle_ids || []) {
-    const chip = document.createElement('span');
-    chip.className = 'source-chip';
-    chip.textContent = `#${id}`;
-    sourceIds.appendChild(chip);
+  const list = $('bundleRows');
+  list.replaceChildren();
+  if (!entry) {
+    $('bundleCount').textContent = '0 / 20';
+    return;
   }
-  if (!sourceIds.children.length) {
-    const empty = document.createElement('span');
-    empty.className = 'empty-note';
-    empty.textContent = '—';
-    sourceIds.appendChild(empty);
-  }
-  const compositePending = !!entry?.composite_required
-    && !String(entry?.bundle_id || '').trim();
-  $('compositeNotice').hidden = !compositePending;
-  const source = entry?.bundle_source || '';
-  $('bundleSource').textContent = source
-    ? `ที่มา: ${source === 'workbook' ? 'ไฟล์แผน' : source === 'created' ? 'Bundle ที่เพิ่งสร้าง' : source}`
-    : 'ยังไม่ได้จับคู่ Bundle — กรอกเลขเองได้';
-  const conflict = entry?.bundle_conflict || null;
-  $('bundleConflict').hidden = !conflict;
-  $('bundleConflictText').textContent = conflict
-    ? `จากไฟล์ #${conflict.workbook_id} · ที่สร้าง #${conflict.created_id}`
-    : '';
+  normalizeProductBundles(entry);
+  entry.bundle_ids.forEach((bundleId, index) => {
+    const row = document.createElement('div');
+    row.className = 'bundle-row';
+    const input = document.createElement('input');
+    input.className = 'bundle-id-input';
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.pattern = '[0-9]*';
+    input.placeholder = 'กรอกเลข Bundle';
+    input.value = bundleId;
+    const primaryLabel = document.createElement('label');
+    primaryLabel.className = 'bundle-primary-label';
+    const primary = document.createElement('input');
+    primary.className = 'bundle-primary';
+    primary.type = 'radio';
+    primary.name = 'primaryBundle';
+    primary.checked = entry.primary_bundle_id === bundleId;
+    primaryLabel.append(primary, document.createTextNode('Primary'));
+    const remove = document.createElement('button');
+    remove.className = 'bundle-remove danger';
+    remove.type = 'button';
+    remove.textContent = 'ลบ';
+    input.oninput = () => {
+      const wasPrimary = entry.primary_bundle_id === entry.bundle_ids[index];
+      entry.bundle_ids[index] = input.value.trim();
+      if (wasPrimary) entry.primary_bundle_id = entry.bundle_ids[index];
+      entry.bundle_id = entry.primary_bundle_id;
+      entry.bundle_source = 'manual';
+      markBundleDirty(entry);
+    };
+    primary.onchange = () => {
+      if (!primary.checked) return;
+      entry.primary_bundle_id = entry.bundle_ids[index];
+      entry.bundle_id = entry.primary_bundle_id;
+      entry.bundle_source = 'manual';
+      markBundleDirty(entry);
+    };
+    remove.onclick = () => {
+      const removed = entry.bundle_ids.splice(index, 1)[0];
+      if (removed === entry.primary_bundle_id
+          || !entry.bundle_ids.includes(entry.primary_bundle_id)) {
+        entry.primary_bundle_id = entry.bundle_ids[0] || '';
+      }
+      entry.bundle_id = entry.primary_bundle_id;
+      entry.bundle_source = entry.bundle_ids.length ? 'manual' : '';
+      markBundleDirty(entry);
+      renderBundle(entry);
+    };
+    row.append(input, primaryLabel, remove);
+    list.appendChild(row);
+  });
+  $('bundleCount').textContent = `${entry.bundle_ids.length} / 20`;
+  $('btnAddBundle').disabled = entry.bundle_ids.length >= 20;
+  $('bundleError').hidden = true;
 }
 
 function imageState(entry, slot) {
@@ -735,12 +816,11 @@ function renderQueue() {
   const pick = $('productQueue');
   pick.replaceChildren();
   productQueue.items.forEach(entry => {
+    normalizeProductBundles(entry);
     const option = document.createElement('option');
     option.value = entry.key;
     const state = entry.product_id
       ? ` · Product #${entry.product_id}`
-      : entry.composite_required && !String(entry.bundle_id || '').trim()
-        ? ' · รอ Composite Bundle'
       : entry.status ? ` · ${entry.status}` : '';
     option.textContent =
       (entry.name_th || entry.name_en || 'Product ใหม่') + state;
@@ -900,6 +980,7 @@ function addDrafts(drafts, workspaceId) {
       existing.set(identityOf(draft), draft);
     } else {
       mergeSourceDraft(old, draft);
+      normalizeProductBundles(old);
     }
   }
   if (workspaceId) {
@@ -941,7 +1022,7 @@ function openProductSheetPicker(pending) {
   const list = $('sheetList');
   list.replaceChildren();
   for (const sheet of pending.sheets || []) {
-    const displayName = sheet.display_name || sheet.name;
+    const displayName = sheet.name;
     const label = document.createElement('label');
     label.className = 'sheet-row';
     label.dataset.sheetName = displayName;
@@ -1002,51 +1083,6 @@ async function applySelectedSheets() {
     `นำเข้า ${selected.length} Sheet แล้ว — ตรวจ Product ก่อนส่ง`;
 }
 
-async function reviewCompositeBundle() {
-  const entry = productQueue.current();
-  const workspaceId = String(entry?.workspace_id || '').trim();
-  const sourceKey = String(entry?.source_group_key || '').trim();
-  if (!entry?.composite_required || entry.bundle_id) return;
-  if (!workspaceId || !sourceKey) {
-    throw new Error('Composite Bundle ต้องมี workspace และ source group ที่ชัดเจน');
-  }
-  const response = await apiFetch(
-    `/api/workspaces/${encodeURIComponent(workspaceId)}/bundles`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({source_group_key: sourceKey}),
-    });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.detail || 'เตรียม Composite Bundle ไม่สำเร็จ');
-  }
-  if (data.needs_search) {
-    const handoff = data.search_handoff || {};
-    const handoffWorkspace = String(handoff.workspace_id || '').trim();
-    const handoffSource = String(handoff.source_group_key || '').trim();
-    if (handoffWorkspace !== workspaceId || handoffSource !== sourceKey) {
-      throw new Error('ข้อมูลส่งต่อ Item Finder ไม่ตรงกับ Product กลุ่มนี้');
-    }
-    sessionStorage.setItem(
-      'afc.itemFinderHandoff', JSON.stringify(handoff));
-    window.location.href = '/?workspace_id=' +
-      encodeURIComponent(workspaceId) + '&source_group_key=' +
-      encodeURIComponent(sourceKey);
-    return;
-  }
-  const bundles = (data.bundles || []).filter(bundle =>
-    String(bundle.group_key || '').trim() === sourceKey);
-  if (bundles.length !== 1) {
-    throw new Error('ไม่พบ Composite Bundle ที่ตรงกับ Product กลุ่มนี้เพียงกลุ่มเดียว');
-  }
-  sessionStorage.setItem('afc.bundleHandoff', JSON.stringify({
-    ...data,
-    workspace_id: workspaceId,
-    bundles,
-  }));
-  window.location.href = '/bundles';
-}
-
 function applyBundleHandoff(payload) {
   if (!payload || !Array.isArray(payload.rows)) return;
   const workspaceId = String(payload.workspace_id || '').trim();
@@ -1062,21 +1098,14 @@ function applyBundleHandoff(payload) {
         && entrySource === sourceKey && entryWorkspace === workspaceId;
     });
     if (!entry) continue;
-    const workbookId = String(entry.bundle_id || '').trim();
-    if (!workbookId) {
-      entry.bundle_id = createdId;
-      entry.bundle_source = 'created';
-      markSourceDirty(entry, 'bundle_id');
-      markSourceDirty(entry, 'bundle_source');
-      delete entry.bundle_conflict;
-    } else if (workbookId === createdId) {
-      delete entry.bundle_conflict;
-    } else {
-      entry.bundle_conflict = {
-        workbook_id: workbookId,
-        created_id: createdId,
-      };
-    }
+    normalizeProductBundles(entry);
+    if (!entry.bundle_ids.includes(createdId)) entry.bundle_ids.push(createdId);
+    if (!entry.primary_bundle_id) entry.primary_bundle_id = createdId;
+    entry.bundle_id = entry.primary_bundle_id;
+    entry.bundle_source = 'created';
+    delete entry.bundle_conflict;
+    ['bundle_ids', 'primary_bundle_id', 'bundle_id', 'bundle_source']
+      .forEach(field => markSourceDirty(entry, field));
     invalidateProductPreview(entry);
   }
   productQueue.save();
@@ -1124,6 +1153,7 @@ async function deleteActiveWorkspace(workspaceId = activeWorkspaceId) {
 
 function jobFrom(entry) {
   if (!entry) return null;
+  normalizeProductBundles(entry);
   return {
     client_key: entry.key,
     workspace_id: entry.workspace_id || '',
@@ -1136,7 +1166,9 @@ function jobFrom(entry) {
     details_th: entry.details_th || '',
     details_en: entry.details_en || '',
     prices: structuredClone(entry.prices || []),
-    bundle_id: String(entry.bundle_id || '').trim(),
+    bundle_ids: entry.bundle_ids.map(value => String(value || '').trim()),
+    primary_bundle_id: String(entry.primary_bundle_id || '').trim(),
+    bundle_id: String(entry.primary_bundle_id || '').trim(),
     start_at: entry.start_at || '',
     end_at: entry.end_at || '',
     is_enabled: !!entry.is_enabled,
@@ -1262,17 +1294,6 @@ function retryableProducts() {
 
 function runnableError(entries) {
   if (!entries.length) return 'ยังไม่ได้เลือก Product';
-  const composite = entries.find(entry => entry.composite_required
-    && !String(entry.bundle_id || '').trim());
-  if (composite) {
-    return `${composite.name_th || composite.name_en || 'Product'}: `
-      + 'ต้องสร้างและตรวจ Composite Bundle 1 อัน แล้วใส่ Bundle ID สุดท้ายก่อน';
-  }
-  const conflict = entries.find(entry => entry.bundle_conflict);
-  if (conflict) {
-    return `${conflict.name_th || conflict.name_en || 'Product'}: `
-      + 'กรุณาเลือกเลข Bundle ฝั่งใดฝั่งหนึ่งก่อน';
-  }
   const missingCategory = entries.find(entry =>
     !String(entry.category_id || '').trim());
   if (missingCategory) {
@@ -1285,6 +1306,22 @@ function runnableError(entries) {
   if (missingCurrency) {
     return `${missingCurrency.name_th || missingCurrency.name_en || 'Product'}: `
       + 'กรุณาเลือก Currency อย่างน้อย 1 รายการ';
+  }
+  for (const entry of entries) {
+    normalizeProductBundles(entry);
+    const ids = entry.bundle_ids.map(value => String(value || '').trim());
+    const name = entry.name_th || entry.name_en || 'Product';
+    if (!ids.length) return `${name}: กรุณาเพิ่ม Bundle อย่างน้อย 1 อัน`;
+    if (ids.length > 20) return `${name}: ใส่ Bundle ได้ไม่เกิน 20 อัน`;
+    if (ids.some(value => !/^\d+$/.test(value) || Number(value) <= 0)) {
+      return `${name}: Bundle ID ต้องเป็นเลขจำนวนเต็มมากกว่า 0`;
+    }
+    if (new Set(ids).size !== ids.length) {
+      return `${name}: Bundle ID ห้ามซ้ำกัน`;
+    }
+    if (!ids.includes(entry.primary_bundle_id)) {
+      return `${name}: กรุณาเลือก Primary Bundle`;
+    }
   }
   return '';
 }
@@ -1473,43 +1510,19 @@ $('categorySelect').onchange = () => {
   entry.category_label = selected?.label || '';
   productQueue.save();
 };
-$('bundleId').oninput = () => {
+$('btnAddBundle').onclick = () => {
   const entry = productQueue.current();
   if (!entry) return;
-  entry.bundle_id = $('bundleId').value;
-  entry.bundle_source = entry.bundle_id ? 'manual' : '';
-  markSourceDirty(entry, 'bundle_id');
-  markSourceDirty(entry, 'bundle_source');
-  delete entry.bundle_conflict;
-  productQueue.save();
+  normalizeProductBundles(entry);
+  if (entry.bundle_ids.length >= 20) return;
+  entry.bundle_ids.push('');
+  if (!entry.primary_bundle_id) entry.primary_bundle_id = '';
+  entry.bundle_source = 'manual';
+  markBundleDirty(entry);
   renderBundle(entry);
 };
 $('btnAddManualPrice').onclick = () =>
   addManualPrice(productQueue.current());
-$('btnUseWorkbookBundle').onclick = () => {
-  const entry = productQueue.current();
-  if (!entry?.bundle_conflict) return;
-  entry.bundle_id = entry.bundle_conflict.workbook_id;
-  entry.bundle_source = 'workbook';
-  markSourceDirty(entry, 'bundle_id');
-  markSourceDirty(entry, 'bundle_source');
-  delete entry.bundle_conflict;
-  productQueue.save();
-  invalidateProductPreview(entry);
-  renderBundle(entry);
-};
-$('btnUseCreatedBundle').onclick = () => {
-  const entry = productQueue.current();
-  if (!entry?.bundle_conflict) return;
-  entry.bundle_id = entry.bundle_conflict.created_id;
-  entry.bundle_source = 'created';
-  markSourceDirty(entry, 'bundle_id');
-  markSourceDirty(entry, 'bundle_source');
-  delete entry.bundle_conflict;
-  productQueue.save();
-  invalidateProductPreview(entry);
-  renderBundle(entry);
-};
 
 document.querySelectorAll('[data-product-tag]').forEach(box => {
   box.onchange = () => {
@@ -1548,11 +1561,6 @@ $('productPlanFile').onchange = async () => {
 };
 $('btnApplySheets').onclick = () =>
   applySelectedSheets().catch(error => {
-    $('runMsg').textContent = error.message;
-    log(error.message, 'ERROR');
-  });
-$('btnReviewComposite').onclick = () =>
-  reviewCompositeBundle().catch(error => {
     $('runMsg').textContent = error.message;
     log(error.message, 'ERROR');
   });

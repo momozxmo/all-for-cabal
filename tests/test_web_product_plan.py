@@ -68,7 +68,7 @@ def test_product_draft_defaults_are_safe_and_bundle_origin_is_visible():
     assert draft['position'] == '0'
 
 
-def test_multiple_source_bundles_require_one_reviewed_composite_bundle():
+def test_multiple_source_bundles_become_direct_product_bundles():
     draft = product_plan.build_products({
         'g1': _meta(
             bundle_id='', bundle_ids=['223930', '223931'],
@@ -76,9 +76,10 @@ def test_multiple_source_bundles_require_one_reviewed_composite_bundle():
     }, 'CabalPC TH', now=NOW)[0]
 
     assert draft['bundle_ids'] == ['223930', '223931']
-    assert draft['composite_required'] is True
-    assert draft['bundle_id'] == ''
-    assert draft['bundle_source'] == ''
+    assert draft['primary_bundle_id'] == '223930'
+    assert draft['composite_required'] is False
+    assert draft['bundle_id'] == '223930'
+    assert draft['bundle_source'] == 'workbook'
     assert draft['start_at'] == '2026-07-30 00:00:00'
     assert draft['end_at'] == '2026-07-30 07:59:00'
     assert draft['category_source'] == 'Highlight'
@@ -87,7 +88,7 @@ def test_multiple_source_bundles_require_one_reviewed_composite_bundle():
     assert draft['limit_quantity'] == '10'
     assert draft['limit_reset_interval_days'] == '7'
     assert draft['limit_reset_at'] == '2026-07-24 09:15:00'
-    assert any('Composite Bundle' in warning for warning in draft['warnings'])
+    assert not any('Composite Bundle' in warning for warning in draft['warnings'])
 
 
 def test_product_draft_normalizes_numeric_and_delimited_source_bundle_ids():
@@ -99,8 +100,9 @@ def test_product_draft_normalizes_numeric_and_delimited_source_bundle_ids():
 
     assert draft['bundle_ids'] == [
         '223930', '223931', '223932', '223933']
-    assert draft['bundle_id'] == ''
-    assert draft['composite_required'] is True
+    assert draft['primary_bundle_id'] == '223930'
+    assert draft['bundle_id'] == '223930'
+    assert draft['composite_required'] is False
 
 
 def test_no_limit_and_character_limit_are_not_confused():

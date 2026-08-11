@@ -236,17 +236,13 @@ def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
     bundle_ids = _id_tokens(product.get('bundle_ids'))
     if not bundle_ids:
         bundle_ids = _id_tokens(product.get('bundle_id'))
-    composite_required = len(bundle_ids) > 1
-    bundle_id = bundle_ids[0] if len(bundle_ids) == 1 else ''
+    primary_bundle_id = bundle_ids[0] if bundle_ids else ''
+    bundle_id = primary_bundle_id
     limit = _limit_fields(product, now=current)
     warnings = list(product.get('warnings') or ())
     warnings.extend(limit.pop('warnings'))
     if not end_at:
         warnings.append('ไม่พบ End Date/End Time ของ Product')
-    if composite_required:
-        warnings.append(
-            'ต้องสร้าง Composite Bundle 1 อันจากแถว Item ที่นำเข้าของ Product กลุ่มนี้ แล้วส่ง Bundle ID ที่ตรวจแล้วกลับมา')
-
     draft = {
         'source_group_key': str(group_key),
         'source_sheet': _text(product.get('source_sheet')),
@@ -261,9 +257,10 @@ def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
         'start_at': start_at,
         'end_at': end_at,
         'bundle_ids': bundle_ids,
-        'composite_required': composite_required,
+        'primary_bundle_id': primary_bundle_id,
+        'composite_required': False,
         'bundle_id': bundle_id,
-        'bundle_source': 'workbook' if bundle_id else '',
+        'bundle_source': 'workbook' if bundle_ids else '',
         'price_candidates': _clean_prices(product.get('price_candidates')),
         'prices': [],
         'tags': _tag_values(product.get('shop_label')),

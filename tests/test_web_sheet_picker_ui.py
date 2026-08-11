@@ -211,24 +211,27 @@ def test_tool_sheet_picker_searches_as_the_operator_types(page_name):
 
 
 @pytest.mark.parametrize('page_name', ['index', 'products', 'events', 'itemcodes'])
-def test_sheet_picker_displays_and_searches_content_name_but_submits_sheet_key(
-        page_name):
-    """Excel's 31-character tab limit must not hide the full plan title."""
-    truncated = 'ID COM Cabal Community Quiz ! "'
-    full_name = 'Cabal Community Quiz ! "Where am i now?"'
+def test_sheet_picker_displays_searches_and_submits_exact_sheet_name(page_name):
+    """The visible and submitted identity must be the real worksheet tab."""
+    tab_name = 'ID COM Cabal Community Quiz ! "'
+    derived_name = 'Cabal Community Quiz ! "Where am i now?"'
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _open_real_picker(browser, page_name, [{
-            'name': truncated,
-            'display_name': full_name,
+            'name': tab_name,
+            'display_name': derived_name,
             'count': 5,
             'product_count': 1,
         }])
 
-        assert full_name in page.locator('#sheetList .sheet-name').inner_text()
+        visible = page.locator('#sheetList .sheet-name').inner_text()
+        assert tab_name in visible
+        assert derived_name not in visible
         page.locator('#sheetSearch').fill('where am i now')
+        assert page.locator('#sheetList .sheet-row:visible').count() == 0
+        page.locator('#sheetSearch').fill('ID COM Cabal')
         assert page.locator('#sheetList .sheet-row:visible').count() == 1
-        assert page.locator('#sheetList input').get_attribute('value') == truncated
+        assert page.locator('#sheetList input').get_attribute('value') == tab_name
         browser.close()
 
 

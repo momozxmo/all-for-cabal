@@ -403,13 +403,58 @@ class ProductBuilder(ActivityBuilder):
             except Exception as exc:
                 self.log('เลือก Tag %s ไม่สำเร็จ: %s' % (tag, exc), 'WARNING')
 
-    async def _fill_bundle(self, page, spec, missing):
-        bundle_id = str(spec.get('bundle_id') or '').strip()
-        if not bundle_id:
+    async def _fill_bundles(self, page, spec, missing):
+        raw_ids = spec.get('bundle_ids') or [spec.get('bundle_id')]
+        bundle_ids = [str(value or '').strip() for value in raw_ids
+                      if str(value or '').strip()]
+        if not bundle_ids:
             missing.append('Bundle')
-        elif not await aztek_form.pick_bundle(
-                page, page, bundle_id, self.log):
-            missing.append('Bundle %s' % bundle_id)
+            return
+        heading = page.get_by_role('heading', name='Bundle', exact=True)
+        section = page.locator('section').filter(has=heading).first
+        for bundle_id in bundle_ids:
+            if not await aztek_form.pick_bundle(
+                    page, section, bundle_id, self.log):
+                missing.append('Bundle %s' % bundle_id)
+                return
+            text = await section.inner_text()
+            if not re.search(r'#%s\b' % re.escape(bundle_id), text):
+                missing.append('Bundle %s' % bundle_id)
+                return
+
+        primary_id = str(
+            spec.get('primary_bundle_id') or bundle_ids[0]).strip()
+        if primary_id not in bundle_ids:
+            missing.append('Primary Bundle %s' % primary_id)
+            return
+        primary_text = section.get_by_text(
+            '#%s' % primary_id, exact=True).first
+        primary_card = primary_text.locator(
+            'xpath=ancestor::*[.//input[@type="radio"]][1]').first
+        primary = primary_card.locator('input[type="radio"]').first
+        try:
+            if await primary.count() == 0:
+                raise RuntimeError('Primary control not found')
+            await primary.check(timeout=6000)
+            if not await primary.is_checked():
+                raise RuntimeError('Primary control did not stay checked')
+        except Exception as exc:
+            self.log('เลือก Primary Bundle %s ไม่สำเร็จ: %s' % (
+                primary_id, exc), 'WARNING')
+            missing.append('Primary Bundle %s' % primary_id)
+            return
+
+        text = await section.inner_text()
+        selected_ids = re.findall(r'#(\d+)\b', text)
+        expected_count = len(bundle_ids)
+        count_ok = re.search(
+            r'\b%s\s*/\s*20\s*Bundles\b' % expected_count,
+            text, re.I)
+        if selected_ids != bundle_ids or not count_ok:
+            missing.append('Bundle list/count')
+
+    async def _fill_bundle(self, page, spec, missing):
+        await self._fill_bundles(page, spec, missing)
 
     async def fill_form(self, page, spec):
         missing = []
@@ -420,5 +465,5 @@ class ProductBuilder(ActivityBuilder):
         await self._fill_display(page, spec, missing)
         await self._fill_limit(page, spec, missing)
         await self._fill_tags(page, spec)
-        await self._fill_bundle(page, spec, missing)
+        await self._fill_bundles(page, spec, missing)
         return missing

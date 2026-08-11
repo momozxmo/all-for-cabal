@@ -176,7 +176,9 @@ class ProductSpec(BaseModel):
     details_en: str = Field(default='', max_length=20000)
     start_at: str = Field(min_length=1, max_length=32)
     end_at: str = Field(min_length=1, max_length=32)
-    bundle_id: str = Field(min_length=1, max_length=32)
+    bundle_id: str = Field(default='', max_length=32)
+    bundle_ids: list[str] = Field(default_factory=list, max_length=20)
+    primary_bundle_id: str = Field(default='', max_length=32)
     prices: list[ProductPriceSpec] = Field(min_length=1, max_length=20)
     limit_type: Literal['UNLIMITED', 'PLAYER', 'CHARACTER'] = 'UNLIMITED'
     limit_quantity: str = Field(default='', max_length=12)
@@ -1353,7 +1355,30 @@ def _clean_product(spec: ProductSpec) -> dict:
     end_at = _require_datetime(spec.end_at, 'วันสิ้นสุด', where)
     _require_order(
         start_at, end_at, ('วันเริ่มขาย', 'วันสิ้นสุด'), where)
-    bundle_id = _positive_digits(spec.bundle_id, 'Bundle ID', where)
+    raw_bundle_ids = spec.bundle_ids or ([spec.bundle_id] if spec.bundle_id else [])
+    bundle_ids = []
+    seen_bundle_ids = set()
+    for raw_bundle_id in raw_bundle_ids:
+        bundle_id = _positive_digits(raw_bundle_id, 'Bundle ID', where)
+        if bundle_id in seen_bundle_ids:
+            raise HTTPException(
+                status_code=400,
+                detail='Bundle ID ของ%s ห้ามซ้ำกัน: %s' % (where, bundle_id))
+        seen_bundle_ids.add(bundle_id)
+        bundle_ids.append(bundle_id)
+    if not bundle_ids:
+        raise HTTPException(
+            status_code=400, detail='Bundle ID ของ%s ห้ามว่าง' % where)
+    primary_bundle_id = str(spec.primary_bundle_id or '').strip()
+    if primary_bundle_id:
+        primary_bundle_id = _positive_digits(
+            primary_bundle_id, 'Primary Bundle ID', where)
+        if primary_bundle_id not in seen_bundle_ids:
+            raise HTTPException(
+                status_code=400,
+                detail='Primary Bundle ID ของ%s ต้องอยู่ในรายการ Bundle' % where)
+    else:
+        primary_bundle_id = bundle_ids[0]
     try:
         position = str(int(spec.position.strip() or '0'))
     except ValueError:
@@ -1405,7 +1430,9 @@ def _clean_product(spec: ProductSpec) -> dict:
         'details_en': spec.details_en,
         'start_at': start_at,
         'end_at': end_at,
-        'bundle_id': bundle_id,
+        'bundle_ids': bundle_ids,
+        'primary_bundle_id': primary_bundle_id,
+        'bundle_id': primary_bundle_id,
         'prices': prices,
         'limit_type': spec.limit_type,
         'limit_quantity': limit_quantity,

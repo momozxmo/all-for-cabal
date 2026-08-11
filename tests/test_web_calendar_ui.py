@@ -578,6 +578,11 @@ def test_event_page_imports_one_event_per_sheet_with_all_reward_sets():
 
         assert page.locator('#btnImport').count() == 1
         assert page.locator('#sheetDialog').count() == 1
+        # set_content() does not fetch the shared console.css, so provide the
+        # one shared token used by this page-specific visual assertion.
+        page.evaluate(
+            "document.documentElement.style.setProperty('--yellow', '#e0b03a')"
+        )
         page.evaluate("""
           addDrafts([{
             sheet: 'Activity A', sheet_key: 'sheet-a',
@@ -601,7 +606,22 @@ def test_event_page_imports_one_event_per_sheet_with_all_reward_sets():
         assert page.locator('#startEvent').input_value() == '2026-07-26 00:00:00'
         assert page.locator('#startClaim').input_value() == '2026-07-26 00:00:00'
         assert page.locator('#endEvent').input_value() == ''
-        assert 'ไม่พบวันสิ้นสุด' in page.locator('#planWarnings').inner_text()
+        warning = page.locator('#planWarnings')
+        assert warning.is_visible()
+        assert 'ไม่พบวันสิ้นสุด' in warning.inner_text()
+        warning_style = warning.evaluate("""element => {
+          const style = getComputedStyle(element);
+          return {
+            background: style.backgroundColor,
+            borderLeftWidth: style.borderLeftWidth,
+            color: style.color,
+          };
+        }""")
+        assert warning_style == {
+            'background': 'rgba(242, 182, 75, 0.1)',
+            'borderLeftWidth': '4px',
+            'color': 'rgb(255, 225, 160)',
+        }
         browser.close()
 
 
