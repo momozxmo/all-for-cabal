@@ -290,6 +290,7 @@
 
 <script src="/static/console.js"></script>
 <script src="/static/sheet_picker.js"></script>
+<script src="/static/game_sync.js"></script>
 <script>
 const PRODUCT_QUEUE_KEY = 'afc.productQueue.v1';
 const PRODUCT_WORKSPACE_KEY = 'afc.productWorkspace';
@@ -311,6 +312,7 @@ const optionState = {
 const previewedProductKeys = new Set();
 const productEditRevisions = new Map();
 let productRunBusy = false;
+let productPageReady = false;
 const PRODUCT_SOURCE_FIELDS = [
   'source_sheet', 'game', 'name_th', 'name_en', 'category_source',
   'start_at', 'end_at', 'bundle_ids', 'composite_required',
@@ -341,6 +343,25 @@ function matchFetchedOption(source, options) {
 
 function optionCacheKey(game, kind) {
   return `afc.productOptions.v2:${game}:${kind}`;
+}
+
+function rememberProductGame() {
+  try { localStorage.setItem(GAME_KEY, $('game').value); } catch (error) {}
+}
+
+function setProductGame(game) {
+  const value = String(game || '');
+  const picker = $('game');
+  if (!value || ![...picker.options].some(option => option.value === value)) {
+    return;
+  }
+  const changed = picker.value !== value;
+  picker.value = value;
+  if (changed && productPageReady) {
+    picker.dispatchEvent(new Event('change', {bubbles: true}));
+  } else {
+    rememberProductGame();
+  }
 }
 
 function readOptionCache(game, kind) {
@@ -999,7 +1020,7 @@ async function loadWorkspaceProducts(workspaceId) {
   activeWorkspaceId = data.workspace_id || workspaceId;
   addDrafts(data.products || [], activeWorkspaceId);
   localStorage.setItem(PRODUCT_WORKSPACE_KEY, activeWorkspaceId);
-  if (data.game) $('game').value = data.game;
+  if (data.game) setProductGame(data.game);
   return data;
 }
 
@@ -1118,7 +1139,7 @@ function drainBundleHandoff() {
     if (!raw) return;
     sessionStorage.removeItem('afc.productBundleHandoff');
     const payload = JSON.parse(raw);
-    if (payload.game) $('game').value = payload.game;
+    if (payload.game) setProductGame(payload.game);
     applyBundleHandoff(payload);
   } catch (error) {
     log('อ่านเลข Bundle ที่ส่งมาไม่สำเร็จ', 'WARNING');
@@ -1584,7 +1605,7 @@ $('btnLogout').onclick = async () => {
 
 $('game').addEventListener('change', async () => {
   invalidateAllProductPreviews();
-  try { localStorage.setItem(GAME_KEY, $('game').value); } catch (error) {}
+  rememberProductGame();
   optionState.categories = {
     options: [], fetched_at: '', loading: false, warning: ''};
   optionState.currencies = {
@@ -1636,6 +1657,8 @@ async function bootProductPage() {
         error => log(error.message, 'WARNING')),
     ]);
   }
+  productPageReady = true;
+  rememberProductGame();
 }
 
 bootProductPage();

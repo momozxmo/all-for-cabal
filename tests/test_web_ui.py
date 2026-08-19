@@ -32,6 +32,13 @@ def test_shared_sheet_picker_assets_are_served_by_the_real_app(client):
     assert '.sheet-row[hidden]' in style.text
 
 
+def test_shared_game_sync_asset_is_served_by_the_real_app(client):
+    script = client.get('/static/game_sync.js')
+
+    assert script.status_code == 200
+    assert script.headers['content-type'].startswith('application/javascript')
+
+
 def test_product_page_is_in_the_pipeline_and_shop_handoff():
     assert 'id="btnToProduct"' in HTML
     assert 'afc.productQueue.v1' in PRODUCTS

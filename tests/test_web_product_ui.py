@@ -8,8 +8,11 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTS = ROOT / 'web' / 'static' / 'products.html'
 BUNDLES = ROOT / 'web' / 'static' / 'bundles.html'
+EVENTS = ROOT / 'web' / 'static' / 'events.html'
+ITEMCODES = ROOT / 'web' / 'static' / 'itemcodes.html'
 ITEM_FINDER = ROOT / 'web' / 'static' / 'index.html'
 CONSOLE_JS = ROOT / 'web' / 'static' / 'console.js'
+GAME_SYNC_JS = ROOT / 'web' / 'static' / 'game_sync.js'
 SHEET_PICKER_JS = ROOT / 'web' / 'static' / 'sheet_picker.js'
 
 
@@ -17,6 +20,9 @@ def _page_html(path):
     return path.read_text(encoding='utf-8').replace(
         '<script src="/static/console.js"></script>',
         '<script>%s</script>' % CONSOLE_JS.read_text(encoding='utf-8'),
+    ).replace(
+        '<script src="/static/game_sync.js"></script>',
+        '<script>%s</script>' % GAME_SYNC_JS.read_text(encoding='utf-8'),
     ).replace(
         '<script src="/static/sheet_picker.js"></script>',
         '<script>%s</script>' % SHEET_PICKER_JS.read_text(encoding='utf-8'),
@@ -34,7 +40,68 @@ def _tool_page(browser):
     )
     page.goto('http://tool.test/products', wait_until='domcontentloaded')
     page.wait_for_function("typeof addDrafts === 'function'")
+    page.wait_for_function("productPageReady === true")
     return page
+
+
+def _route_live_game_tools(context, workspace=None):
+    def route_tool(route):
+        url = route.request.url
+        tool_pages = {
+            'http://tool.test/': ITEM_FINDER,
+            'http://tool.test/bundles': BUNDLES,
+            'http://tool.test/events': EVENTS,
+            'http://tool.test/itemcodes': ITEMCODES,
+            'http://tool.test/products': PRODUCTS,
+        }
+        if url in tool_pages:
+            route.fulfill(
+                status=200, content_type='text/html; charset=utf-8',
+                body=tool_pages[url].read_text(encoding='utf-8'))
+        elif url.endswith('/static/console.js'):
+            route.fulfill(
+                content_type='application/javascript',
+                body=CONSOLE_JS.read_text(encoding='utf-8'))
+        elif url.endswith('/static/game_sync.js'):
+            route.fulfill(
+                content_type='application/javascript',
+                body=GAME_SYNC_JS.read_text(encoding='utf-8'))
+        elif url.endswith('/static/sheet_picker.js'):
+            route.fulfill(
+                content_type='application/javascript',
+                body=SHEET_PICKER_JS.read_text(encoding='utf-8'))
+        elif url.endswith('/api/auth/me'):
+            route.fulfill(json={
+                'username': 'operator', 'role': 'member',
+                'local_mode': True,
+            })
+        elif url.endswith('/api/games'):
+            route.fulfill(json={'games': [
+                'CabalM TH', 'CabalM SEA', 'CabalPC TH',
+            ]})
+        elif url.endswith('/api/modes'):
+            route.fulfill(json={
+                'event': {'web_mode': 'any', 'web_locked': False},
+                'itemcode': {'web_mode': 'no', 'web_locked': True},
+                'shop': {'web_mode': 'any', 'web_locked': False},
+            })
+        elif url.endswith('/api/capabilities'):
+            route.fulfill(json={'allow_headed': False})
+        elif url.endswith('/api/aztek/status'):
+            route.fulfill(json={'status': 'active'})
+        elif url.endswith('/api/products/options'):
+            route.fulfill(json={'options': {
+                'categories': [], 'currencies': [],
+            }})
+        elif workspace and '/api/workspaces/' in url \
+                and url.endswith('/products'):
+            route.fulfill(json=workspace)
+        elif '/static/' in url:
+            route.fulfill(content_type='text/css', body='')
+        else:
+            route.abort()
+
+    context.route('http://tool.test/**', route_tool)
 
 
 def test_product_page_has_shared_workspace_queue_contract(client):
@@ -44,6 +111,58 @@ def test_product_page_has_shared_workspace_queue_contract(client):
     assert '/api/workspaces/' in html
     assert 'href="/products"' in html
     assert client.get('/products').status_code == 200
+
+
+def test_server_picker_syncs_live_across_all_open_tool_tabs():
+    """Changing any visible picker must update every other open tool tab."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        pages = []
+        for path in ('/', '/bundles', '/itemcodes', '/events', '/products'):
+            page = context.new_page()
+            page.goto('http://tool.test' + path, wait_until='domcontentloaded')
+            page.wait_for_function(
+                "document.querySelectorAll('#game option').length === 3")
+            pages.append(page)
+
+        for index, source in enumerate(pages):
+            game = 'CabalPC TH' if index % 2 == 0 else 'CabalM SEA'
+            source.select_option('#game', game)
+            for target in pages:
+                target.wait_for_function(
+                    "game => document.querySelector('#game').value === game",
+                    arg=game)
+                assert target.locator('#game').input_value() == game
+        browser.close()
+
+
+def test_restored_product_workspace_broadcasts_its_game_to_other_tabs():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context, workspace={
+            'workspace_id': 'workspace-1',
+            'game': 'CabalPC TH',
+            'products': [],
+        })
+        event_page = context.new_page()
+        product_page = context.new_page()
+        event_page.goto(
+            'http://tool.test/events', wait_until='domcontentloaded')
+        event_page.wait_for_function(
+            "document.querySelectorAll('#game option').length === 3")
+        event_page.evaluate(
+            "localStorage.setItem('afc.productWorkspace', 'workspace-1')")
+
+        product_page.goto(
+            'http://tool.test/products', wait_until='domcontentloaded')
+        product_page.wait_for_function(
+            "document.querySelector('#game').value === 'CabalPC TH'")
+
+        assert event_page.locator('#game').input_value() == 'CabalPC TH'
+        browser.close()
 
 
 def test_product_queue_loads_workspace_drafts_once_and_survives_reload():

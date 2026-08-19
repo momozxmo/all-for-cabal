@@ -454,6 +454,13 @@ def console_js():
                         media_type='application/javascript')
 
 
+@router.get('/static/game_sync.js')
+def game_sync_js():
+    """Synchronize the shared game/server picker between open tool tabs."""
+    return FileResponse(os.path.join(STATIC_DIR, 'game_sync.js'),
+                        media_type='application/javascript')
+
+
 @router.get('/static/sheet_picker.css')
 def sheet_picker_css():
     """Shared search and long-name layout for workbook sheet pickers."""
