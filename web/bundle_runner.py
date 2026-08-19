@@ -21,6 +21,7 @@ from playwright.async_api import async_playwright
 
 import new_tool
 from web import browser_launch
+from web.create_flow import click_create_and_wait_for_write
 from web.search_runner import to_web_url
 
 
@@ -481,18 +482,14 @@ class BundleBuilder:
         if button is None:
             self.log('หาปุ่มสร้าง Bundle ไม่เจอ — ไม่ได้สร้าง', 'ERROR')
             return False, None
-        response = None
-        try:
-            async with page.expect_response(
-                lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
-                           and 'bundle' in r.url.lower()),
-                timeout=20000,
-            ) as info:
-                await button.click()
-            response = await info.value
-        except Exception:
-            response = None
-        self.log('กดยืนยันการสร้างบันเดิลแล้ว กำลังตรวจผล', 'INFO')
+        response, confirmed = await click_create_and_wait_for_write(
+            page, button,
+            lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
+                       and 'bundle' in r.url.lower()),
+        )
+        if confirmed:
+            self.log('กด "ยืนยัน" ในหน้าต่างยืนยันการสร้าง Bundle แล้ว', 'INFO')
+        self.log('กดสร้าง Bundle แล้ว กำลังตรวจผล', 'INFO')
         await page.wait_for_timeout(1500)
 
         if response is not None and not response.ok:

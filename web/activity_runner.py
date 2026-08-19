@@ -16,6 +16,7 @@ from playwright.async_api import async_playwright
 import aztek_core as core
 import new_tool
 from web import browser_launch
+from web.create_flow import click_create_and_wait_for_write
 from web.search_runner import to_web_url
 
 
@@ -96,17 +97,13 @@ class ActivityBuilder:
         if await button.count() == 0:
             self.log('หาปุ่ม "%s" ไม่เจอ — ไม่ได้สร้าง' % self.SAVE_LABEL, 'ERROR')
             return False, None
-        response = None
-        try:
-            async with page.expect_response(
-                lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
-                           and self.WRITE_MARK in r.url.lower()),
-                timeout=20000,
-            ) as info:
-                await button.click()
-            response = await info.value
-        except Exception:
-            response = None
+        response, confirmed = await click_create_and_wait_for_write(
+            page, button,
+            lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
+                       and self.WRITE_MARK in r.url.lower()),
+        )
+        if confirmed:
+            self.log('กด "ยืนยัน" ในหน้าต่างยืนยันการสร้างแล้ว', 'INFO')
         await page.wait_for_timeout(1500)
 
         if response is not None and not response.ok:

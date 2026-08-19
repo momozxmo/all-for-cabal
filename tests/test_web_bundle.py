@@ -825,14 +825,35 @@ def test_save_refuses_to_claim_success_on_an_error_response():
 def test_save_uses_the_current_v2_create_bundle_button():
     old = "button:has-text('ยืนยันการสร้างบันเดิล')"
     current = "button:has-text('สร้าง Bundle')"
+    dialog_confirm = (
+        '[role="dialog"] button:text-is("ยืนยัน"), '
+        '[role="alertdialog"] button:text-is("ยืนยัน"), '
+        'button:text-is("ยืนยัน"):visible'
+    )
     page = FakePage(
         response=FakeResponse(200, {'data': {'bundleId': 90210}}),
-        counts={old: 0, current: 1},
+        counts={old: 0, current: 1, dialog_confirm: 0},
     )
     saved, bundle_id = asyncio.run(_builder()._save(page))
     assert saved is True
     assert bundle_id == '90210'
     assert page.clicked == [current]
+
+
+def test_save_confirms_the_create_dialog_before_waiting_for_the_bundle_write():
+    create = "button:has-text('สร้าง Bundle')"
+    confirm = (
+        '[role="dialog"] button:text-is("ยืนยัน"), '
+        '[role="alertdialog"] button:text-is("ยืนยัน"), '
+        'button:text-is("ยืนยัน"):visible'
+    )
+    page = FakePage(
+        response=FakeResponse(200, {'data': {'bundleId': 90210}}),
+        counts={create: 1, confirm: 1},
+    )
+
+    assert asyncio.run(_builder()._save(page)) == (True, '90210')
+    assert page.clicked == [create, confirm]
 
 
 def test_save_stops_when_the_confirm_button_is_missing():

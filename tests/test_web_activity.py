@@ -473,6 +473,89 @@ def test_save_without_write_response_or_detail_id_is_not_reported_created():
     assert asyncio.run(builder._save(Page())) == (False, None)
 
 
+@pytest.mark.parametrize('builder_class', [
+    itemcode_runner.ItemCodeBuilder,
+    event_runner.EventBuilder,
+    product_runner.ProductBuilder,
+])
+def test_save_confirms_the_create_dialog_before_waiting_for_the_write(
+        builder_class):
+    """Aztek writes only after the second, dialog-scoped confirmation click."""
+    builder = _builder(builder_class)
+    create_selector = "button:has-text('%s')" % builder.SAVE_LABEL
+    confirm_selector = (
+        '[role="dialog"] button:text-is("ยืนยัน"), '
+        '[role="alertdialog"] button:text-is("ยืนยัน"), '
+        'button:text-is("ยืนยัน"):visible'
+    )
+
+    class Response:
+        ok = True
+        status = 200
+
+        async def json(self):
+            return {}
+
+    class Locator:
+        def __init__(self, page, selector):
+            self.page = page
+            self.selector = selector
+
+        @property
+        def first(self):
+            return self
+
+        async def count(self):
+            return int(self.selector in (create_selector, confirm_selector))
+
+        async def wait_for(self, **kwargs):
+            if not await self.count():
+                raise TimeoutError(self.selector)
+
+        async def click(self, **kwargs):
+            self.page.clicked.append(self.selector)
+            if self.selector == confirm_selector:
+                self.page.confirmed = True
+                self.page.url = 'https://x/%s/501' % builder.PATH
+
+    class Page:
+        url = 'https://x/%s/create' % builder.PATH
+
+        def __init__(self):
+            self.clicked = []
+            self.confirmed = False
+
+        def locator(self, selector):
+            return Locator(self, selector)
+
+        def expect_response(self, predicate, timeout):
+            page = self
+
+            class Write:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return False
+
+                @property
+                def value(self):
+                    async def get():
+                        if not page.confirmed:
+                            raise TimeoutError('write waits for confirmation')
+                        return Response()
+                    return get()
+
+            return Write()
+
+        async def wait_for_timeout(self, ms):
+            return None
+
+    page = Page()
+    assert asyncio.run(builder._save(page)) == (True, '501')
+    assert page.clicked == [create_selector, confirm_selector]
+
+
 def test_a_form_that_is_missing_a_required_field_is_not_saved():
     """Half an Item Code on the live site is worse than none: it looks made."""
     builder = _builder()
