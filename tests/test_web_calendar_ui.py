@@ -16,6 +16,7 @@ EVENTS = ROOT / 'web' / 'static' / 'events.html'
 INDEX = ROOT / 'web' / 'static' / 'index.html'
 BUNDLES = ROOT / 'web' / 'static' / 'bundles.html'
 ACCOUNT = ROOT / 'web' / 'static' / 'account.html'
+PRODUCTS = ROOT / 'web' / 'static' / 'products.html'
 
 
 def _tool_page(browser, path):
@@ -56,6 +57,95 @@ def _standalone_page(browser, path):
         wait_until='domcontentloaded',
     )
     return page
+
+
+def test_creation_pages_show_actionable_accessible_errors():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+
+        pages = [_standalone_page(browser, BUNDLES)]
+        pages.extend(_tool_page(browser, path)
+                     for path in (ITEMCODES, EVENTS, PRODUCTS))
+        for page, path in zip(
+                pages, (BUNDLES, ITEMCODES, EVENTS, PRODUCTS)):
+            page.wait_for_function("typeof showNotice === 'function'")
+            page.evaluate("""
+              showNotice(
+                'runMsg', 'error', 'สร้างรายการนี้ไม่ได้',
+                'Bundle ID ยังว่าง',
+                'กรอก Bundle ID แล้วลองสร้างอีกครั้ง'
+              )
+            """)
+
+            notice = page.locator('#runMsg')
+            assert notice.is_visible(), path.name
+            assert notice.get_attribute('role') == 'alert', path.name
+            assert notice.get_attribute('aria-live') == 'assertive', path.name
+            assert 'notice-error' in (notice.get_attribute('class') or ''), path.name
+            assert notice.locator('.notice-title').inner_text() == \
+                'สร้างรายการนี้ไม่ได้', path.name
+            assert notice.locator('.notice-detail').inner_text() == \
+                'Bundle ID ยังว่าง', path.name
+            assert notice.locator('.notice-next').inner_text() == \
+                'ทำต่อ: กรอก Bundle ID แล้วลองสร้างอีกครั้ง', path.name
+            assert page.evaluate('document.activeElement === runMsg'), path.name
+            page.close()
+
+        browser.close()
+
+
+def test_item_finder_shows_the_same_actionable_error_notice():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _standalone_page(browser, INDEX)
+        page.wait_for_function("typeof showNotice === 'function'")
+
+        page.evaluate("""
+          showNotice(
+            'finderNotice', 'error', 'อ่านไฟล์ไม่สำเร็จ',
+            'ไม่พบ Sheet ที่เลือก',
+            'เลือก Sheet ใหม่แล้วลองอีกครั้ง'
+          )
+        """)
+
+        notice = page.locator('#finderNotice')
+        assert notice.is_visible()
+        assert notice.get_attribute('role') == 'alert'
+        assert notice.get_attribute('aria-live') == 'assertive'
+        assert 'notice-error' in (notice.get_attribute('class') or '')
+        assert notice.locator('.notice-title').inner_text() == \
+            'อ่านไฟล์ไม่สำเร็จ'
+        assert notice.locator('.notice-detail').inner_text() == \
+            'ไม่พบ Sheet ที่เลือก'
+        assert notice.locator('.notice-next').inner_text() == \
+            'ทำต่อ: เลือก Sheet ใหม่แล้วลองอีกครั้ง'
+        assert page.evaluate('document.activeElement === finderNotice')
+        browser.close()
+
+
+def test_shared_notice_announces_each_non_error_state_politely():
+    expected_icons = {
+        'progress': '⏳',
+        'success': '✓',
+        'warning': '⚠',
+        'info': 'ℹ',
+    }
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser, ITEMCODES)
+
+        for tone, icon in expected_icons.items():
+            page.evaluate(
+                "tone => showNotice('runMsg', tone, 'ข้อความทดสอบ')",
+                tone,
+            )
+            notice = page.locator('#runMsg')
+            assert notice.get_attribute('role') == 'status', tone
+            assert notice.get_attribute('aria-live') == 'polite', tone
+            assert f'notice-{tone}' in (notice.get_attribute('class') or ''), tone
+            assert notice.locator('.notice-icon').inner_text() == icon, tone
+
+        browser.close()
 
 
 def _bundle_page(context):
@@ -776,6 +866,14 @@ def test_itemcode_create_all_keeps_failed_entries_selected_and_retryable():
         assert page.evaluate("queue.current().slug") == 'second-code-mth'
         assert page.locator('#queuePick').input_value() == page.evaluate(
             "queue.current().key")
+        notice = page.locator('#runMsg')
+        assert 'notice-warning' in (notice.get_attribute('class') or '')
+        assert notice.locator('.notice-title').inner_text() == \
+            'สร้างได้ 1/2 Item Code'
+        assert notice.locator('.notice-detail').inner_text() == \
+            'Second Code: bundle rejected'
+        assert notice.locator('.notice-next').inner_text() == \
+            'ทำต่อ: แก้รายการที่ไม่ผ่านในคิว แล้วลองสร้างอีกครั้ง'
         browser.close()
 
 

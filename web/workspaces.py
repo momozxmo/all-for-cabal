@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import datetime as _dt
+import copy
+import sqlite3
+import time
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from web.item_service import merge_imported, mode_policy, stamp_sheet_rows
-from web.models import PendingImportRecord, WorkspaceRecord
+from web.models import Job, PendingImportRecord, WorkspaceRecord
+
+
+_SQLITE_WRITE_ATTEMPTS = 4
+_SQLITE_WRITE_RETRY_SECONDS = 0.025
 
 
 def _json_safe(value):
@@ -32,6 +40,52 @@ class WorkspaceNotFound(LookupError):
 
 class PendingImportNotFound(LookupError):
     pass
+
+
+class EmptySheetSelection(ValueError):
+    pass
+
+
+class DuplicateSheetSelection(ValueError):
+    pass
+
+
+class UnknownSheetSelection(ValueError):
+    def __init__(self, sheet_name: str) -> None:
+        self.sheet_name = sheet_name
+        super().__init__(sheet_name)
+
+
+class WorkspaceBusy(RuntimeError):
+    pass
+
+
+def is_sqlite_busy(error: OperationalError) -> bool:
+    """Recognize only SQLite's driver-provided BUSY/LOCKED result codes."""
+    code = getattr(error.orig, 'sqlite_errorcode', None)
+    if not isinstance(code, int):
+        return False
+    return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+def _acquire_sqlite_write(session: Session) -> None:
+    if session.get_bind().dialect.name != 'sqlite':
+        return
+    for attempt in range(_SQLITE_WRITE_ATTEMPTS):
+        try:
+            connection = session.connection()
+            driver_connection = connection.connection.driver_connection
+            if driver_connection.in_transaction:
+                return
+            connection.exec_driver_sql('BEGIN IMMEDIATE')
+            return
+        except OperationalError as error:
+            session.rollback()
+            if not is_sqlite_busy(error):
+                raise
+            if attempt + 1 == _SQLITE_WRITE_ATTEMPTS:
+                raise WorkspaceBusy() from error
+            time.sleep(_SQLITE_WRITE_RETRY_SECONDS * (attempt + 1))
 
 
 class WorkspaceRepository:
@@ -68,14 +122,24 @@ class WorkspaceRepository:
         return workspace
 
     def delete_owned(self, owner_user_id: str, workspace_id: str) -> None:
-        result = self._session.execute(
-            delete(WorkspaceRecord).where(
+        workspace = self._session.scalar(
+            select(WorkspaceRecord).where(
                 WorkspaceRecord.id == workspace_id,
                 WorkspaceRecord.owner_user_id == owner_user_id,
-            )
+            ).with_for_update()
         )
-        if result.rowcount != 1:
+        if workspace is None:
             raise WorkspaceNotFound()
+        active_job = self._session.scalar(
+            select(Job.id).where(
+                Job.workspace_id == workspace_id,
+                Job.status.in_(('queued', 'running')),
+            ).limit(1)
+        )
+        if active_job is not None:
+            raise WorkspaceBusy()
+        self._session.delete(workspace)
+        self._session.flush()
 
     def replace_template(
         self, owner_user_id: str, workspace_id: str, filename: str,
@@ -115,54 +179,74 @@ class WorkspaceRepository:
     def apply_pending(
         self, owner_user_id: str, pending_id: str, selected_sheets: list[str],
     ) -> WorkspaceRecord:
-        with self._session.begin_nested():
-            pending = self._session.scalar(
-                select(PendingImportRecord).where(
-                    PendingImportRecord.id == pending_id,
-                    PendingImportRecord.owner_user_id == owner_user_id,
-                ).with_for_update()
-            )
-            if pending is None:
-                raise PendingImportNotFound()
+        if not isinstance(selected_sheets, list) or not selected_sheets:
+            raise EmptySheetSelection()
+        if (not all(isinstance(name, str) for name in selected_sheets)
+                or len(selected_sheets) != len(set(selected_sheets))):
+            raise DuplicateSheetSelection()
 
-            workspace = self._session.scalar(
-                select(WorkspaceRecord).where(
-                    WorkspaceRecord.id == pending.workspace_id,
-                    WorkspaceRecord.owner_user_id == owner_user_id,
-                ).with_for_update()
-            )
-            if workspace is None:
-                raise PendingImportNotFound()
+        _acquire_sqlite_write(self._session)
+        try:
+            with self._session.begin_nested():
+                claimed = self._session.execute(
+                    delete(PendingImportRecord).where(
+                        PendingImportRecord.id == pending_id,
+                        PendingImportRecord.owner_user_id == owner_user_id,
+                    ).returning(
+                        PendingImportRecord.workspace_id,
+                        PendingImportRecord.sheets,
+                        PendingImportRecord.skipped,
+                    )
+                ).mappings().one_or_none()
+                if claimed is None:
+                    raise PendingImportNotFound()
 
-            selected = set(selected_sheets)
-            items = []
-            for sheet_name, rows in pending.sheets:
-                if sheet_name in selected:
-                    items.extend(
-                        stamp_sheet_rows(sheet_name, rows)
-                        if workspace.mode == 'event' else rows)
-            merged = merge_imported(
-                workspace.criteria, workspace.occurrences, workspace.group_meta, items
-            )
-            workspace = self._update_workspace(
-                owner_user_id,
-                workspace.id,
-                criteria=merged.criteria,
-                occurrences=merged.occurrences,
-                group_meta=merged.group_meta,
-                skipped=list(workspace.skipped) + list(pending.skipped),
-                results=[],
-                not_found=[],
-            )
-            deleted = self._session.execute(
-                delete(PendingImportRecord).where(
-                    PendingImportRecord.id == pending.id,
-                    PendingImportRecord.owner_user_id == owner_user_id,
+                workspace_id = claimed['workspace_id']
+                sheets = copy.deepcopy(claimed['sheets'])
+                pending_skipped = copy.deepcopy(claimed['skipped'])
+                available = [sheet_name for sheet_name, _rows in sheets]
+                if len(available) != len(set(available)):
+                    raise DuplicateSheetSelection()
+                available_set = set(available)
+                unknown = [
+                    name for name in selected_sheets if name not in available_set]
+                if unknown:
+                    raise UnknownSheetSelection(unknown[0])
+
+                workspace = self._session.scalar(
+                    select(WorkspaceRecord).where(
+                        WorkspaceRecord.id == workspace_id,
+                        WorkspaceRecord.owner_user_id == owner_user_id,
+                    ).with_for_update()
                 )
-            )
-            if deleted.rowcount != 1:
-                raise PendingImportNotFound()
-            return workspace
+                if workspace is None:
+                    raise PendingImportNotFound()
+
+                selected = set(selected_sheets)
+                items = []
+                for sheet_name, rows in sheets:
+                    if sheet_name in selected:
+                        items.extend(
+                            stamp_sheet_rows(sheet_name, rows)
+                            if workspace.mode == 'event' else rows)
+                merged = merge_imported(
+                    workspace.criteria, workspace.occurrences,
+                    workspace.group_meta, items)
+                return self._update_workspace(
+                    owner_user_id,
+                    workspace.id,
+                    criteria=merged.criteria,
+                    occurrences=merged.occurrences,
+                    group_meta=merged.group_meta,
+                    skipped=list(workspace.skipped) + list(pending_skipped),
+                    results=[],
+                    not_found=[],
+                )
+        except OperationalError as error:
+            self._session.rollback()
+            if is_sqlite_busy(error):
+                raise WorkspaceBusy() from error
+            raise
 
     def save_results(
         self, owner_user_id: str, workspace_id: str, *, game: str, results: list,

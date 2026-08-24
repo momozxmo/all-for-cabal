@@ -4,7 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import (Boolean, CheckConstraint, DateTime, ForeignKey, Index,
+                        JSON, String, Text, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -113,6 +114,13 @@ class WebSession(Base):
 
 class PairingToken(Base):
     __tablename__ = 'pairing_tokens'
+    __table_args__ = (
+        Index(
+            'uq_pairing_tokens_one_pending_user', 'user_id', unique=True,
+            sqlite_where=text("status = 'pending' AND used_at IS NULL"),
+            postgresql_where=text("status = 'pending' AND used_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uuid_hex)
     user_id: Mapped[str] = mapped_column(
@@ -170,9 +178,10 @@ class WorkspaceRecord(TimestampMixin, Base):
 
     owner: Mapped[User] = relationship(back_populates='workspaces')
     pending_imports: Mapped[list[PendingImportRecord]] = relationship(
-        back_populates='workspace'
+        back_populates='workspace', passive_deletes='all'
     )
-    jobs: Mapped[list[Job]] = relationship(back_populates='workspace')
+    jobs: Mapped[list[Job]] = relationship(
+        back_populates='workspace', passive_deletes='all')
 
 
 class PendingImportRecord(TimestampMixin, Base):
@@ -183,7 +192,8 @@ class PendingImportRecord(TimestampMixin, Base):
         String(32), ForeignKey('users.id'), nullable=False, index=True
     )
     workspace_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey('workspaces.id'), nullable=False, index=True
+        String(32), ForeignKey('workspaces.id', ondelete='CASCADE'),
+        nullable=False, index=True
     )
     sheets: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
     skipped: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
@@ -200,7 +210,7 @@ class Job(TimestampMixin, Base):
         String(32), ForeignKey('users.id'), nullable=False, index=True
     )
     workspace_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey('workspaces.id'), index=True
+        String(32), ForeignKey('workspaces.id', ondelete='SET NULL'), index=True
     )
     tool: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default='queued')

@@ -1,6 +1,8 @@
 import base64
 # 'inspect' alone is taken by sqlalchemy's below.
 import inspect as pyinspect
+import importlib.util
+import json
 import os
 import shutil
 import tempfile
@@ -12,22 +14,26 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError, StatementError
 
+from web import app as web_app
 from web import security
 from web.auth_service import AuthService
 from web.db import Database
-from web.models import User, WebSession, WorkspaceRecord, utc_now
+from web.models import (Job, PairingToken, PendingImportRecord, User, WebSession,
+                        WorkspaceRecord, utc_now)
 from web.search_coordinator import SearchCoordinator
 from web.settings import Settings
 
 
 PRODUCTION_SETTINGS = {
-    'APP_SECRET_KEY': 'app-secret',
-    'AZTEK_SESSION_ENCRYPTION_KEY': 'encryption-key',
-    'BOOTSTRAP_ADMIN_USERNAME': 'admin',
-    'BOOTSTRAP_ADMIN_PASSWORD': 'password',
+    'APP_SECRET_KEY': 'production-signing-secret-with-32-chars',
+    'AZTEK_SESSION_ENCRYPTION_KEY': base64.urlsafe_b64encode(
+        b'p' * 32
+    ).decode('ascii'),
+    'BOOTSTRAP_ADMIN_USERNAME': 'production.owner',
+    'BOOTSTRAP_ADMIN_PASSWORD': 'production-password',
 }
 
 APPLICATION_TABLES = {
@@ -300,8 +306,179 @@ def test_bootstrap_admin_requires_credentials_and_an_empty_user_table(
 
 def configure_production(monkeypatch):
     monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv(
+        'DATABASE_URL',
+        'postgresql://production:password@localhost/all_for_cabal',
+    )
     for name, value in PRODUCTION_SETTINGS.items():
         monkeypatch.setenv(name, value)
+
+
+def configure_development(monkeypatch):
+    monkeypatch.setenv('APP_ENV', 'development')
+    monkeypatch.setenv('APP_SECRET_KEY', 'development-signing-secret-00000000')
+    monkeypatch.setenv(
+        'AZTEK_SESSION_ENCRYPTION_KEY',
+        base64.urlsafe_b64encode(b'd' * 32).decode('ascii'),
+    )
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_USERNAME', '')
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_PASSWORD', '')
+    monkeypatch.setenv('LOCAL_DESKTOP_MODE', 'false')
+    monkeypatch.setenv('SESSION_COOKIE_SECURE', 'false')
+    monkeypatch.setenv('BROWSER_CONCURRENCY', '1')
+
+
+def test_missing_app_env_fails_closed(monkeypatch):
+    monkeypatch.delenv('APP_ENV', raising=False)
+
+    with pytest.raises(ValueError, match='APP_ENV'):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('value', ['', 'test', 'prod', 'productionn', 'staging'])
+def test_unknown_app_env_fails_closed(monkeypatch, value):
+    monkeypatch.setenv('APP_ENV', value)
+
+    with pytest.raises(ValueError, match='APP_ENV'):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('name,value', [
+    ('LOCAL_DESKTOP_MODE', 'yes'),
+    ('SESSION_COOKIE_SECURE', '0'),
+])
+def test_environment_booleans_accept_only_true_or_false(
+    monkeypatch, name, value
+):
+    configure_development(monkeypatch)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('value', ['many', '0', '-1', '2'])
+def test_browser_concurrency_must_be_exactly_one(monkeypatch, value):
+    configure_development(monkeypatch)
+    monkeypatch.setenv('BROWSER_CONCURRENCY', value)
+
+    with pytest.raises(ValueError, match='BROWSER_CONCURRENCY'):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('value', ['', 'not a valid database url'])
+def test_database_url_must_be_nonempty_and_parseable(monkeypatch, value):
+    configure_development(monkeypatch)
+    monkeypatch.setenv('DATABASE_URL', value)
+
+    with pytest.raises(ValueError, match='DATABASE_URL'):
+        Settings.from_env()
+
+
+def test_production_database_url_must_use_postgresql(monkeypatch):
+    configure_production(monkeypatch)
+    monkeypatch.setenv('DATABASE_URL', 'sqlite:///production.db')
+
+    with pytest.raises(ValueError, match='DATABASE_URL'):
+        Settings.from_env()
+
+
+def test_production_database_url_rejects_postgresql_prefix_spoof(monkeypatch):
+    configure_production(monkeypatch)
+    monkeypatch.setenv(
+        'DATABASE_URL',
+        'postgresqlfake://production:password@localhost/all_for_cabal',
+    )
+
+    with pytest.raises(ValueError, match='DATABASE_URL'):
+        Settings.from_env()
+
+
+def test_production_rejects_short_signing_secret(monkeypatch):
+    configure_production(monkeypatch)
+    monkeypatch.setenv('APP_SECRET_KEY', 'too-short')
+
+    with pytest.raises(ValueError, match='APP_SECRET_KEY'):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('value', [
+    base64.b64encode(b'\xfb' * 32).decode('ascii'),
+    base64.urlsafe_b64encode(b'k' * 31).decode('ascii'),
+])
+def test_settings_reject_malformed_encryption_key(monkeypatch, value):
+    configure_production(monkeypatch)
+    monkeypatch.setenv('AZTEK_SESSION_ENCRYPTION_KEY', value)
+
+    with pytest.raises(ValueError, match='AZTEK_SESSION_ENCRYPTION_KEY'):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize('field', ['aztek_origin', 'aztek_auth_origin'])
+def test_settings_reject_non_https_aztek_origins(test_settings, field):
+    invalid = replace(
+        test_settings,
+        app_env='development',
+        **{field: 'http://unsafe.example.test'},
+    )
+
+    with pytest.raises(ValueError, match=field.upper()):
+        invalid.validate()
+
+
+def test_production_rejects_builtin_admin_credentials(monkeypatch):
+    configure_production(monkeypatch)
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_USERNAME', 'admin')
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_PASSWORD', 'admin123456')
+
+    with pytest.raises(ValueError, match='BOOTSTRAP_ADMIN_PASSWORD'):
+        Settings.from_env()
+
+
+def test_development_has_no_builtin_admin_credentials(monkeypatch):
+    configure_development(monkeypatch)
+
+    settings = Settings.from_env()
+
+    assert settings.bootstrap_admin_username == ''
+    assert settings.bootstrap_admin_password == ''
+
+
+@pytest.mark.parametrize(
+    'missing_name',
+    ['BOOTSTRAP_ADMIN_USERNAME', 'BOOTSTRAP_ADMIN_PASSWORD'],
+)
+def test_development_rejects_partial_bootstrap_credentials(
+    monkeypatch, missing_name
+):
+    configure_development(monkeypatch)
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_USERNAME', 'development.owner')
+    monkeypatch.setenv('BOOTSTRAP_ADMIN_PASSWORD', 'development-password')
+    monkeypatch.delenv(missing_name)
+
+    with pytest.raises(ValueError, match='BOOTSTRAP_ADMIN'):
+        Settings.from_env()
+
+
+def test_direct_settings_reject_unknown_app_env(test_settings):
+    with pytest.raises(ValueError, match='APP_ENV'):
+        replace(test_settings, app_env='prod').validate()
+
+
+def test_direct_test_settings_remain_valid(test_settings):
+    test_settings.validate()
+
+
+def test_create_app_validates_settings_before_database_construction(
+    monkeypatch, test_settings
+):
+    def forbidden_database(_settings):
+        raise AssertionError('Database constructed before Settings.validate')
+
+    monkeypatch.setattr(web_app, 'Database', forbidden_database)
+
+    with pytest.raises(ValueError, match='APP_ENV'):
+        web_app.create_app(replace(test_settings, app_env='prod'))
 
 
 def test_settings_default_to_local_sqlite(monkeypatch):
@@ -334,18 +511,10 @@ def test_development_warns_about_process_local_secrets(monkeypatch):
         Settings.from_env()
 
 
-def test_malformed_browser_concurrency_is_rejected(monkeypatch):
-    monkeypatch.setenv('APP_ENV', 'development')
-    monkeypatch.setenv('BROWSER_CONCURRENCY', 'many')
-    with pytest.warns(RuntimeWarning, match='sessions will not survive restart'):
-        with pytest.raises(ValueError, match='BROWSER_CONCURRENCY must be an integer'):
-            Settings.from_env()
-
-
 def test_alembic_migration_creates_and_removes_application_schema(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix='afc_test_')
     database_url = 'sqlite:///%s' % os.path.join(tmpdir, 'migration.db').replace('\\', '/')
-    configure_production(monkeypatch)
+    configure_development(monkeypatch)
     monkeypatch.setenv('DATABASE_URL', database_url)
     config = Config(str(Path(__file__).parents[1] / 'alembic.ini'))
     engine = create_engine(database_url)
@@ -450,6 +619,222 @@ def test_schema_enforces_identity_and_ownership_constraints(test_database):
     assert audit_user_id['nullable'] is True
 
 
+def test_workspace_fk_and_pairing_partial_index_model_metadata_are_exact():
+    pending_fk = next(
+        foreign_key for foreign_key in PendingImportRecord.__table__.foreign_keys
+        if foreign_key.parent.name == 'workspace_id')
+    job_fk = next(
+        foreign_key for foreign_key in Job.__table__.foreign_keys
+        if foreign_key.parent.name == 'workspace_id')
+
+    assert pending_fk.ondelete == 'CASCADE'
+    assert job_fk.ondelete == 'SET NULL'
+    assert WorkspaceRecord.pending_imports.property.passive_deletes == 'all'
+    assert WorkspaceRecord.jobs.property.passive_deletes == 'all'
+
+    index = next(
+        item for item in PairingToken.__table__.indexes
+        if item.name == 'uq_pairing_tokens_one_pending_user')
+    assert index.unique is True
+    assert [column.name for column in index.columns] == ['user_id']
+    assert str(index.dialect_options['sqlite']['where']) == (
+        "status = 'pending' AND used_at IS NULL")
+    assert str(index.dialect_options['postgresql']['where']) == (
+        "status = 'pending' AND used_at IS NULL")
+
+
+def _load_workspace_fk_migration_module():
+    path = (Path(__file__).parents[1] / 'alembic' / 'versions' /
+            '20260820_workspace_fk_semantics.py')
+    spec = importlib.util.spec_from_file_location('workspace_fk_migration', path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_workspace_fk_migration_helper_accepts_named_and_unnamed_constraints():
+    migration = _load_workspace_fk_migration_module()
+    named = [{
+        'name': 'fk_jobs_workspace_postgresql',
+        'constrained_columns': ['workspace_id'],
+        'referred_table': 'workspaces',
+    }]
+    unnamed = [{
+        'name': None,
+        'constrained_columns': ['workspace_id'],
+        'referred_table': 'workspaces',
+    }]
+
+    assert migration._workspace_fk_name('jobs', named) == (
+        'fk_jobs_workspace_postgresql')
+    assert migration._workspace_fk_name('pending_imports', unnamed) == (
+        'fk_pending_imports_workspace_id_workspaces')
+
+
+def test_workspace_fk_migration_preserves_data_deduplicates_tokens_and_round_trips(
+    monkeypatch
+):
+    tmpdir = tempfile.mkdtemp(prefix='afc_workspace_fk_')
+    database_url = 'sqlite:///%s' % os.path.join(
+        tmpdir, 'migration.db').replace('\\', '/')
+    configure_development(monkeypatch)
+    monkeypatch.setenv('DATABASE_URL', database_url)
+    config = Config(str(Path(__file__).parents[1] / 'alembic.ini'))
+    engine = create_engine(database_url)
+
+    def enable_foreign_keys(dbapi_connection, _connection_record):
+        dbapi_connection.execute('PRAGMA foreign_keys=ON')
+
+    event.listen(engine, 'connect', enable_foreign_keys)
+    now = '2026-08-20 12:00:00.000000'
+    later = '2026-08-20 13:00:00.000000'
+
+    try:
+        command.upgrade(config, '20260722_auth_sessions')
+        with engine.begin() as connection:
+            assert connection.exec_driver_sql(
+                'PRAGMA foreign_keys').scalar_one() == 1
+            connection.execute(text(
+                'INSERT INTO users '
+                '(id, username, password_hash, role, is_active, '
+                'password_changed_at, created_at, updated_at) '
+                'VALUES (:id, :username, :password_hash, :role, :is_active, '
+                ':password_changed_at, :created_at, :updated_at)'
+            ), {
+                'id': 'user-one', 'username': 'migration.user',
+                'password_hash': 'hash', 'role': 'member', 'is_active': True,
+                'password_changed_at': now, 'created_at': now, 'updated_at': now,
+            })
+            connection.execute(text(
+                'INSERT INTO workspaces '
+                '(id, owner_user_id, mode, filename, criteria, occurrences, '
+                'group_meta, skipped, results, not_found, created_at, updated_at) '
+                'VALUES (:id, :owner, :mode, :filename, :criteria, :occurrences, '
+                ':group_meta, :skipped, :results, :not_found, :created, :updated)'
+            ), {
+                'id': 'workspace-one', 'owner': 'user-one', 'mode': 'event',
+                'filename': 'preserved.xlsx', 'criteria': json.dumps([{'kind': '1'}]),
+                'occurrences': json.dumps([]), 'group_meta': json.dumps({}),
+                'skipped': json.dumps([]), 'results': json.dumps([]),
+                'not_found': json.dumps([]), 'created': now, 'updated': now,
+            })
+            connection.execute(text(
+                'INSERT INTO pending_imports '
+                '(id, owner_user_id, workspace_id, sheets, skipped, created_at, updated_at) '
+                'VALUES (:id, :owner, :workspace, :sheets, :skipped, :created, :updated)'
+            ), {
+                'id': 'pending-one', 'owner': 'user-one',
+                'workspace': 'workspace-one',
+                'sheets': json.dumps([['Plan', [{'kind': '2'}]]]),
+                'skipped': json.dumps([]), 'created': now, 'updated': now,
+            })
+            connection.execute(text(
+                'INSERT INTO jobs '
+                '(id, owner_user_id, workspace_id, tool, status, config, result, '
+                'log, created_at, updated_at) '
+                'VALUES (:id, :owner, :workspace, :tool, :status, :config, :result, '
+                ':log, :created, :updated)'
+            ), {
+                'id': 'job-one', 'owner': 'user-one', 'workspace': 'workspace-one',
+                'tool': 'item_finder', 'status': 'done', 'config': json.dumps({}),
+                'result': json.dumps({}), 'log': json.dumps([]),
+                'created': now, 'updated': now,
+            })
+            token_rows = [
+                ('token-old', 'hash-old', now, None),
+                ('token-a', 'hash-a', later, None),
+                ('token-z', 'hash-z', later, None),
+                ('token-used', 'hash-used', later, later),
+            ]
+            for token_id, token_hash, created_at, used_at in token_rows:
+                connection.execute(text(
+                    'INSERT INTO pairing_tokens '
+                    '(id, user_id, token_hash, status, created_at, expires_at, used_at) '
+                    'VALUES (:id, :user, :token_hash, :status, :created, :expires, :used)'
+                ), {
+                    'id': token_id, 'user': 'user-one', 'token_hash': token_hash,
+                    'status': 'pending', 'created': created_at,
+                    'expires': '2026-08-21 12:00:00.000000', 'used': used_at,
+                })
+
+        # The original revision's SQLite workspace FKs are deliberately unnamed.
+        assert next(
+            fk for fk in inspect(engine).get_foreign_keys('pending_imports')
+            if fk['constrained_columns'] == ['workspace_id'])['name'] is None
+
+        command.upgrade(config, 'head')
+        schema = inspect(engine)
+        pending_fk = next(
+            fk for fk in schema.get_foreign_keys('pending_imports')
+            if fk['constrained_columns'] == ['workspace_id'])
+        job_fk = next(
+            fk for fk in schema.get_foreign_keys('jobs')
+            if fk['constrained_columns'] == ['workspace_id'])
+        assert pending_fk['options']['ondelete'] == 'CASCADE'
+        assert job_fk['options']['ondelete'] == 'SET NULL'
+        pairing_index = next(
+            index for index in schema.get_indexes('pairing_tokens')
+            if index['name'] == 'uq_pairing_tokens_one_pending_user')
+        assert pairing_index['unique'] == 1
+        assert pairing_index['column_names'] == ['user_id']
+        assert "status = 'pending' AND used_at IS NULL" in str(
+            pairing_index['dialect_options']['sqlite_where'])
+
+        with engine.begin() as connection:
+            assert connection.execute(text(
+                'SELECT filename FROM workspaces WHERE id=:id'),
+                {'id': 'workspace-one'}).scalar_one() == 'preserved.xlsx'
+            assert connection.execute(text(
+                'SELECT id FROM pending_imports WHERE id=:id'),
+                {'id': 'pending-one'}).scalar_one() == 'pending-one'
+            assert connection.execute(text(
+                'SELECT workspace_id FROM jobs WHERE id=:id'),
+                {'id': 'job-one'}).scalar_one() == 'workspace-one'
+            statuses = dict(connection.execute(text(
+                'SELECT id, status FROM pairing_tokens ORDER BY id')).all())
+            hashes = dict(connection.execute(text(
+                'SELECT id, token_hash FROM pairing_tokens ORDER BY id')).all())
+        assert statuses == {
+            'token-a': 'expired', 'token-old': 'expired',
+            'token-used': 'pending', 'token-z': 'pending',
+        }
+        assert hashes == {
+            'token-a': 'hash-a', 'token-old': 'hash-old',
+            'token-used': 'hash-used', 'token-z': 'hash-z',
+        }
+
+        command.downgrade(config, '20260722_auth_sessions')
+        schema = inspect(engine)
+        assert 'uq_pairing_tokens_one_pending_user' not in {
+            index['name'] for index in schema.get_indexes('pairing_tokens')}
+        assert next(
+            fk for fk in schema.get_foreign_keys('pending_imports')
+            if fk['constrained_columns'] == ['workspace_id'])['options'].get(
+                'ondelete') is None
+        assert next(
+            fk for fk in schema.get_foreign_keys('jobs')
+            if fk['constrained_columns'] == ['workspace_id'])['options'].get(
+                'ondelete') is None
+
+        command.upgrade(config, 'head')
+        assert 'uq_pairing_tokens_one_pending_user' in {
+            index['name'] for index in inspect(engine).get_indexes('pairing_tokens')}
+        with engine.begin() as connection:
+            connection.execute(text(
+                'DELETE FROM workspaces WHERE id=:id'), {'id': 'workspace-one'})
+        with engine.connect() as connection:
+            assert connection.execute(text(
+                'SELECT id FROM pending_imports WHERE id=:id'),
+                {'id': 'pending-one'}).first() is None
+            assert connection.execute(text(
+                'SELECT workspace_id FROM jobs WHERE id=:id'),
+                {'id': 'job-one'}).scalar_one() is None
+    finally:
+        engine.dispose()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def test_database_session_commits_and_rolls_back(test_database):
     committed_id = '2' * 32
     rolled_back_id = '3' * 32
@@ -527,7 +912,7 @@ def test_the_socket_only_watches_the_search_it_asked_for():
     The run has to belong to the application, not to the socket: the endpoint
     starts it and then subscribes, and only an explicit stop cancels it.
     """
-    start = pyinspect.getsource(SearchCoordinator.start)
+    start = pyinspect.getsource(SearchCoordinator._start_reserved)
     assert 'ensure_future' in start, 'the run must outlive the caller'
     assert '_cancel' not in start
     # Cancelling is its own request now.

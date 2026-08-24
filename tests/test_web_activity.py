@@ -94,19 +94,20 @@ def test_code_type_maps_to_the_select_value(given, expected):
 
 # ------------------------------ reward sets ------------------------------
 
-def test_reward_sets_without_a_name_are_dropped_and_order_is_kept():
+def test_reward_sets_keep_blank_names_and_order_for_the_fill_report():
     cleaned = _clean_itemcode_rewards([
         {'name_th': 'หนึ่ง', 'bundle_id': ' 1 ', 'code_type': 'SERVER',
          'num_codes': ' 25 '},
-        {'name_th': '  ', 'name_en': '', 'bundle_id': '2'},   # nameless
+        {'name_th': '  ', 'name_en': '', 'bundle_id': '2'},
         {'name_en': 'Two', 'bundle_id': '3'},
     ])
-    assert [r['name_th'] or r['name_en'] for r in cleaned] == ['หนึ่ง', 'Two']
+    assert [r['name_th'] or r['name_en'] for r in cleaned] == [
+        'หนึ่ง', '', 'Two']
     assert cleaned[0]['code_type'] == '2'
     assert (cleaned[0]['bundle_id'], cleaned[0]['num_codes']) == ('1', '25')
     # Fix is the safe default: it needs codes the operator supplied, so it
     # cannot quietly ask the server to generate any.
-    assert cleaned[1]['code_type'] == '1'
+    assert cleaned[2]['code_type'] == '1'
 
 
 def test_an_event_reward_set_carries_no_codes():
@@ -117,8 +118,10 @@ def test_an_event_reward_set_carries_no_codes():
 
 
 def test_a_queue_of_reward_sets_cannot_grow_without_bound():
-    many = [_reward(name_th='r%d' % n) for n in range(60)]
-    assert len(_clean_event_rewards(many)) == 20
+    exactly = [_reward(name_th='r%d' % n) for n in range(20)]
+    assert len(_clean_event_rewards(exactly)) == 20
+    with pytest.raises(ValueError):
+        _clean_event_rewards(exactly + [_reward(name_th='overflow')])
 
 
 # ------------------------------ the API gate ------------------------------

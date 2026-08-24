@@ -18,19 +18,27 @@ from web.app import BundleRunRequest, _clean_items, _clean_rewards
 
 # ------------------------------ rewards ------------------------------
 
-def test_clean_rewards_keeps_only_well_formed_entries():
+def test_clean_rewards_preserve_valid_entries_as_canonical_text():
     cleaned = _clean_rewards([
         {'type': 'credit', 'value': 'Alz', 'qty': '100'},   # lowercase kind
         {'type': 'PLAYER_EXP', 'value': 'Rank 5', 'qty': 1},
-        {'type': 'BITCOIN', 'value': 'nope', 'qty': '1'},   # unknown kind
-        {'type': 'DEBIT', 'value': '', 'qty': '1'},         # no value
-        {'type': 'MILEAGE', 'value': 'M', 'qty': '0'},      # not a real amount
-        {'type': 'MILEAGE', 'value': 'M', 'qty': 'ten'},    # not a number
     ])
     assert cleaned == [
         {'type': 'CREDIT', 'value': 'Alz', 'qty': '100'},
         {'type': 'PLAYER_EXP', 'value': 'Rank 5', 'qty': '1'},
     ]
+
+
+@pytest.mark.parametrize('reward', [
+    {'type': 'BITCOIN', 'value': 'nope', 'qty': '1'},
+    {'type': 'DEBIT', 'value': '', 'qty': '1'},
+    {'type': 'MILEAGE', 'value': 'M', 'qty': '0'},
+    {'type': 'MILEAGE', 'value': 'M', 'qty': 'ten'},
+    {'type': 'MILEAGE', 'value': 'M', 'qty': None},
+])
+def test_clean_rewards_reject_every_invalid_submitted_entry(reward):
+    with pytest.raises(ValueError):
+        _clean_rewards([reward])
 
 
 def test_creating_is_off_unless_asked():
@@ -79,15 +87,11 @@ def test_each_bundle_carries_its_own_type_and_rewards():
     assert (payload.bundles[1].bundle_type, payload.bundles[1].rewards) == ('FIXED', [])
 
 
-def test_items_are_taken_as_typed_in_the_order_given():
-    """The page builds bundles from typed or pasted ids, not from a search, so
-    an id only has to look like one. Order is the operator's."""
+def test_items_are_canonical_and_keep_the_submitted_order():
     items = _clean_items([
         {'id': ' 200479 ', 'qty': '3', 'tier': 'Epic'},
-        {'id': 'ID 11', 'rate': '12.5'},          # digits dug out of free text
-        {'id': '200479', 'qty': '9'},             # already in — Aztek refuses it
-        {'id': 'no digits here'},
-        {'id': '22', 'qty': 'ten'},               # unreadable count -> 1
+        {'id': '11', 'rate': '12.500'},
+        {'id': '22'},
     ])
     assert items == [
         {'id': '200479', 'qty': '3', 'tier': 'Epic', 'rate': ''},
@@ -96,9 +100,24 @@ def test_items_are_taken_as_typed_in_the_order_given():
     ]
 
 
-def test_a_pasted_column_cannot_grow_without_bound():
-    items = _clean_items([{'id': str(n)} for n in range(1, 500)])
-    assert len(items) == 200
+@pytest.mark.parametrize('items', [
+    [{'id': 'ID 11'}],
+    [{'id': '1', 'qty': ''}],
+    [{'id': '1', 'qty': None}],
+    [{'id': '1', 'qty': 1.0}],
+    [{'id': '1', 'qty': '0'}],
+    [{'id': '1'}, {'id': '1'}],
+    [{'id': '1', 'rate': '1e3'}],
+])
+def test_invalid_item_rows_reject_instead_of_being_rewritten_or_dropped(items):
+    with pytest.raises(ValueError):
+        _clean_items(items)
+
+
+def test_bundle_item_limit_accepts_200_and_rejects_201_without_truncating():
+    assert len(_clean_items([{'id': str(n)} for n in range(1, 201)])) == 200
+    with pytest.raises(ValueError):
+        _clean_items([{'id': str(n)} for n in range(1, 202)])
 
 
 def test_one_failing_bundle_does_not_stop_the_rest():

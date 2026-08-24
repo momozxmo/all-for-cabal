@@ -93,7 +93,7 @@
             <button id="btnCreateOne" class="warn" disabled title="กด “เปิดหน้าเว็บดูก่อน” ตรวจฟอร์มก่อน">🚀 สร้างจริง (บันเดิลที่เลือก)</button>
             <button id="btnCreateAll" class="warn" disabled>⚡ สร้างทุกบันเดิลในคิว (0)</button>
           </div>
-          <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
+          <div id="runMsg" class="notice" role="status" aria-live="polite" hidden></div>
           <!-- A created bundle is only half the job: its number is what the next
                two tools are waiting for, and copying it by hand is where the
                desktop flow used to lose people. -->
@@ -150,6 +150,22 @@ function log(message, level='INFO'){
   line.textContent=`[${new Date().toLocaleTimeString()}] ${message}`;
   $('log').appendChild(line); $('log').scrollTop=$('log').scrollHeight;
 }
+const NOTICE_ICONS=Object.freeze({progress:'⏳',success:'✓',warning:'⚠',error:'✕',info:'ℹ'});
+function showNotice(target,tone,title,detail='',nextStep=''){
+  const notice=typeof target==='string'?$(target):target;if(!notice)return;
+  const status=Object.hasOwn(NOTICE_ICONS,tone)?tone:'info';
+  notice.className=`notice notice-${status}`;notice.hidden=false;
+  notice.setAttribute('role',status==='error'?'alert':'status');
+  notice.setAttribute('aria-live',status==='error'?'assertive':'polite');notice.tabIndex=-1;
+  const head=document.createElement('span');head.className='notice-head';
+  const icon=document.createElement('span');icon.className='notice-icon';icon.setAttribute('aria-hidden','true');icon.textContent=NOTICE_ICONS[status];
+  const heading=document.createElement('span');heading.className='notice-title';heading.textContent=String(title||'แจ้งให้ทราบ');
+  head.append(icon,heading);notice.replaceChildren(head);
+  if(detail){const body=document.createElement('span');body.className='notice-detail';body.textContent=String(detail);notice.appendChild(body);}
+  if(nextStep){const next=document.createElement('span');next.className='notice-next';next.textContent=`ทำต่อ: ${nextStep}`;notice.appendChild(next);}
+  if(status==='error')notice.focus({preventScroll:false});
+}
+function clearNotice(target){const notice=typeof target==='string'?$(target):target;if(!notice)return;notice.hidden=true;notice.replaceChildren();}
 $('btnClearLog').onclick=()=>$('log').replaceChildren();
 $('btnLogout').onclick=async()=>{ $('btnLogout').disabled=true;
   try{ await fetch('/api/auth/logout',{method:'POST'}); } finally{ window.location.replace('/login'); } };
@@ -228,7 +244,7 @@ $('btnQueueClear').onclick=()=>{if(!state.queue.length)return;
   if(!confirm(`ล้างคิวทั้งหมด ${state.queue.length} บันเดิล? (ที่แก้ไว้จะหายหมด)`))return;
   state.queue=[];state.active='';state.results=[];state.made=[];
   $('bundleResults').replaceChildren();$('handoff').hidden=true;
-  $('runMsg').textContent='';select('');};
+  clearNotice('runMsg');select('');};
 
 // ---- รับของจาก Item Finder ----
 // Item Finder writes here and sends the operator over; the handoff is one-way
@@ -398,8 +414,8 @@ function renderRewards(){const box=$('rewardList');box.replaceChildren();
     rm.onclick=()=>{bundleRewards().splice(i,1);renderRewards();renderQueue();};
     [k,v,q,rm].forEach(el=>row.appendChild(el));box.appendChild(row);});}
 $('btnRewardAdd').onclick=()=>{const value=$('rewardValue').value.trim();
-  if(!current()){$('runMsg').textContent='เลือกบันเดิลในคิวก่อน';return;}
-  if(!value){$('runMsg').textContent='ใส่ค่า reward ก่อน (เช่น ชื่อสกุลเงิน/ยศ)';return;}
+  if(!current()){showNotice('runMsg','warning','ยังเพิ่ม reward ไม่ได้','ยังไม่ได้เลือกบันเดิล','เลือกบันเดิลในคิวก่อน');return;}
+  if(!value){showNotice('runMsg','warning','ยังเพิ่ม reward ไม่ได้','ช่องค่า reward ยังว่าง','ใส่ชื่อสกุลเงินหรือยศ แล้วกดเพิ่มอีกครั้ง');return;}
   bundleRewards().push({type:$('rewardKind').value,value,qty:String(parseInt($('rewardQty').value)||1)});
   $('rewardValue').value='';$('rewardQty').value='1';renderRewards();renderQueue();};
 
@@ -470,15 +486,16 @@ $('rewardKind').onchange=()=>{picker.active=-1;$('rewardValue').value='';fillRew
 async function fetchRewardOptions(){
   const game=$('game').value;if(!game)return;
   $('btnRewardFetch').disabled=true;
-  $('runMsg').textContent='กำลังเปิดหน้า Aztek เพื่ออ่านตัวเลือก reward…';
+  showNotice('runMsg','progress','กำลังโหลดตัวเลือก reward','ระบบกำลังเปิดหน้า Aztek เพื่ออ่านรายการ');
   try{const r=await apiFetch('/api/reward-options',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game})});
     const d=await r.json();
-    if(!r.ok){$('runMsg').textContent=d.detail||'ดึงตัวเลือกไม่สำเร็จ';return;}
+    if(!r.ok){showNotice('runMsg','error','โหลดตัวเลือก reward ไม่สำเร็จ',d.detail||'Aztek ไม่ส่งรายการกลับมา','ตรวจการเชื่อมต่อ Aztek แล้วลองอีกครั้ง');return;}
     (d.logs||[]).forEach(l=>log('[reward] '+l.msg,l.level));
     state.rewardOptions=d.reward_options||{};state.rewardOptionsGame=game;fillRewardOptions();
     const total=Object.values(state.rewardOptions).reduce((n,v)=>n+v.length,0);
-    $('runMsg').textContent=total?`โหลดตัวเลือก reward แล้ว ${total} รายการ`:'ไม่พบตัวเลือกบนหน้า Aztek';
-  }catch(e){$('runMsg').textContent='ดึงตัวเลือกไม่สำเร็จ';}
+    if(total)showNotice('runMsg','success','โหลดตัวเลือก reward แล้ว',`พบทั้งหมด ${total} รายการ`,'เลือกค่าจากช่อง reward ได้เลย');
+    else showNotice('runMsg','warning','ไม่พบตัวเลือก reward','หน้า Aztek ไม่มีรายการสำหรับเซิร์ฟเวอร์นี้','พิมพ์ค่าเองหรือตรวจเซิร์ฟเวอร์ที่เลือก');
+  }catch(e){showNotice('runMsg','error','โหลดตัวเลือก reward ไม่สำเร็จ',e.message||'เชื่อมต่อ Aztek ไม่ได้','ตรวจการเชื่อมต่อแล้วลองอีกครั้ง');}
   finally{$('btnRewardFetch').disabled=false;}}
 $('btnRewardFetch').onclick=fetchRewardOptions;
 function openRewardPicker(){
@@ -519,37 +536,36 @@ function renderResults(results,append){const box=$('bundleResults');
 
 async function runBundles(bundles, doSave){
   const jobs=bundles.map(jobFrom).filter(j=>j.items.length||j.rewards.length);
-  if(!jobs.length){$('runMsg').textContent='ยังไม่มีไอเทมในบันเดิลนี้';return null;}
+  if(!jobs.length){showNotice('runMsg','warning','ยังตรวจหรือสร้างไม่ได้','บันเดิลนี้ยังไม่มีไอเทมหรือ reward','เพิ่มอย่างน้อย 1 รายการแล้วลองอีกครั้ง');return null;}
   const short=jobs.filter(rateGap).map(j=>j.name);
-  if(short.length){$('runMsg').textContent='บันเดิล RANDOM ที่เรทสุ่มไม่ครบ: '+short.join(', ');return null;}
+  if(short.length){showNotice('runMsg','error','เรทสุ่มยังไม่ครบ 100%',short.join(', '),'แก้เรทของบันเดิลที่ระบุแล้วลองอีกครั้ง');return null;}
   ['btnPreview','btnCreateOne','btnCreateAll'].forEach(id=>$(id).disabled=true);
   $('shot').replaceChildren();
   try{const r=await apiFetch('/api/bundles/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game:$('game').value,bundles:jobs,do_save:doSave})});
     const d=await r.json();
-    if(!r.ok){$('runMsg').textContent=d.detail||'ทำรายการไม่สำเร็จ';return null;}
+    if(!r.ok){showNotice('runMsg','error',doSave?'สร้าง Bundle ไม่สำเร็จ':'เปิดตรวจ Bundle ไม่สำเร็จ',d.detail||'Aztek ไม่รับข้อมูล','ตรวจข้อมูลและการเชื่อมต่อแล้วลองอีกครั้ง');return null;}
     (d.logs||[]).forEach(l=>log('[bundle] '+l.msg,l.level));
     if(d.screenshot_b64){const img=document.createElement('img');
       img.src='data:image/png;base64,'+d.screenshot_b64;
       img.style.cssText='max-width:100%;border:1px solid var(--edge);border-radius:8px';
       $('shot').appendChild(img);}
     return d;
-  }catch(e){$('runMsg').textContent='เชื่อมต่อไม่สำเร็จ';return null;}
+  }catch(e){showNotice('runMsg','error','เชื่อมต่อ Aztek ไม่สำเร็จ',e.message||'ไม่สามารถเปิดหน้าเว็บได้','ตรวจการเชื่อมต่อ Aztek แล้วลองอีกครั้ง');return null;}
   finally{paintRunButtons();}}
 
 $('btnPreview').onclick=async()=>{const b=current();if(!b)return;
-  $('runMsg').textContent='กำลังเปิดหน้าเว็บและกรอกฟอร์ม…';
+  showNotice('runMsg','progress','กำลังเปิด Bundle เพื่อตรวจสอบ',`กำลังกรอกข้อมูลของ “${b.name}” บน Aztek`);
   const d=await runBundles([b],false);if(!d)return;
   const r=(d.results||[])[0]||{};
-  $('runMsg').textContent=`✓ กรอกฟอร์มแล้ว "${r.name}" · ไอเทม ${r.added}/${r.total} · `
-    +(r.kept_open?'หน้าต่าง Chrome เปิดค้างไว้ให้ตรวจเอง — ตรวจแล้วกด “สร้างจริง”'
-                 :'ยังไม่กดสร้าง — ตรวจแล้วกด “สร้างจริง”');
+  showNotice('runMsg','success','กรอก Bundle ครบแล้ว',`“${r.name}” · ไอเทม ${r.added}/${r.total}`,
+    r.kept_open?'ตรวจในหน้าต่าง Chrome แล้วกด “สร้างจริง”':'ตรวจข้อมูลแล้วกด “สร้างจริง”');
   $('btnCreateOne').disabled=false;};
 
 async function createThese(bundles){
   const total=bundles.reduce((n,b)=>n+b.items.filter(it=>String(it.id).trim()).length,0);
   if(!confirm(`สร้างจริงบน Aztek ${bundles.length} บันเดิล (${total} ไอเทม) ใช่ไหม?\n\n`
              +`กดแล้วสร้างทีละอันจนครบ ย้อนกลับเองไม่ได้`))return;
-  $('runMsg').textContent=`กำลังสร้าง ${bundles.length} บันเดิล… (ดูความคืบหน้าในหน้าต่าง Chrome)`;
+  showNotice('runMsg','progress',`กำลังสร้าง ${bundles.length} Bundle`,'ดูความคืบหน้าได้ในหน้าต่าง Chrome');
   const d=await runBundles(bundles,true);if(!d)return;
   const fresh=d.results||[];
   state.results=fresh;
@@ -559,9 +575,14 @@ async function createThese(bundles){
   const made=new Set((d.results||[]).filter(r=>r.saved).map(r=>r.name));
   state.queue=state.queue.filter(b=>!made.has(b.name));
   state.active=state.queue.length?state.queue[0].key:'';select(state.active);
-  $('runMsg').textContent=d.created===d.planned
-    ?`✅ สร้างครบ ${d.created}/${d.planned} บันเดิล — เลข Bundle อยู่ในตารางด้านล่าง`
-    :`⚠️ สร้างได้ ${d.created}/${d.planned} บันเดิล — ที่ไม่ผ่านยังอยู่ในคิว`;}
+  if(d.created===d.planned){
+    showNotice('runMsg','success',`สร้างครบ ${d.created}/${d.planned} Bundle`,'เลข Bundle อยู่ในตารางด้านล่าง','ส่งเลขต่อไปหน้า Event หรือ Product ได้');
+  }else{
+    const failed=(d.results||[]).find(row=>!row.saved)||{};
+    showNotice('runMsg','warning',`สร้างได้ ${d.created}/${d.planned} Bundle`,
+      failed.name?`${failed.name}: ${failed.error||'สร้างไม่สำเร็จ'}`:'มีบางรายการสร้างไม่สำเร็จ',
+      'แก้รายการที่ไม่ผ่านในคิว แล้วลองสร้างอีกครั้ง');
+  }}
 $('btnCreateOne').onclick=()=>{const b=current();return b?createThese([b]):null;};
 $('btnCreateAll').onclick=()=>state.queue.length?createThese(state.queue.slice()):null;
 

@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import re
 import sys
@@ -12,6 +13,7 @@ import time
 import warnings
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import (APIRouter, Cookie, Depends, FastAPI, File, Form,
@@ -19,8 +21,10 @@ from fastapi import (APIRouter, Cookie, Depends, FastAPI, File, Form,
                      WebSocketDisconnect)
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse)
-from pydantic import BaseModel, Field
+from pydantic import (BaseModel, Field, StrictBool, StrictStr,
+                      ValidationError)
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,10 +32,12 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import item_finder  # noqa: E402
-from web import aztek_form, item_service, search_runner  # noqa: E402
+from web import aztek_form, aztek_sessions as pairing_service  # noqa: E402
+from web import item_service, search_runner  # noqa: E402
 from web.audit import write_audit  # noqa: E402
 from web.auth_service import AuthService  # noqa: E402
 from web.aztek_sessions import (AztekSessionService, InvalidStorageState,  # noqa: E402
+                                PairingTokenIssueConflict,
                                 PairingTokenNotFound, PairingTokenUnavailable)
 from web.browser_gate import BrowserOperationGate  # noqa: E402
 from web.db import Database  # noqa: E402
@@ -41,11 +47,22 @@ from web.local_aztek_capture import (LocalAztekCaptureService,  # noqa: E402
                                      LocalCaptureLoginRequired,
                                      LocalCaptureTimeout)
 from web.models import Job, User, utc_now  # noqa: E402
+from web.pairing_http import (PairingIssueReservations, PairingParseResult,  # noqa: E402
+                              PairingPrincipalSnapshot, StorageStatePayload,
+                              pairing_parse_dependency,
+                              resolve_pairing_principal)
+from web.request_limits import RequestSizeLimitMiddleware, WORKBOOK_BODY_MAX  # noqa: E402
 from web.search_coordinator import SearchCoordinator  # noqa: E402
-from web.security import hash_password, hash_token, verify_password  # noqa: E402
+from web.security import hash_password, verify_password  # noqa: E402
 from web.settings import Settings  # noqa: E402
-from web.workspaces import (PendingImportNotFound, WorkspaceNotFound,
-                            WorkspaceRepository)  # noqa: E402
+from web.validation import (PayloadValueError, non_negative_int_text,  # noqa: E402
+                            optional_text, plain_decimal_text,
+                            positive_int_text, strict_bool)
+from web.workspaces import (DuplicateSheetSelection, EmptySheetSelection,
+                            PendingImportNotFound, UnknownSheetSelection,
+                            WorkspaceBusy, WorkspaceNotFound,
+                            WorkspaceRepository,
+                            is_sqlite_busy)  # noqa: E402
 
 
 router = APIRouter()
@@ -53,6 +70,13 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 # Retained for compatibility with legacy callers; handlers never use it as data.
 WORKSPACES = item_service.WorkspaceStore()
 Mode = Literal['event', 'itemcode', 'shop']
+
+
+class _JsonNumberLexeme:
+    __slots__ = ('text',)
+
+    def __init__(self, text: str) -> None:
+        self.text = text
 
 
 class ApplyPlanRequest(BaseModel):
@@ -71,9 +95,10 @@ class BundleSpec(BaseModel):
     Items are whatever they typed, pasted or sent over from Item Finder — the
     page is a tool in its own right, so nothing here is tied to a search.
     """
+    client_key: StrictStr = Field(default='', max_length=80)
     name: str = Field(default='', max_length=200)
     bundle_type: Literal['FIXED', 'CHOICE', 'RANDOM'] = 'FIXED'
-    deliver: bool = True
+    deliver: StrictBool = True
     # [{id, qty, tier, rate}] — id is the only required part.
     items: list[dict] = Field(default_factory=list)
     # Rewards are per bundle, not per run: two bundles in the same batch rarely
@@ -87,7 +112,7 @@ class BundleRunRequest(BaseModel):
     # Off by default: bundles are only written on an explicit opt-in, so a
     # replayed or malformed preview request can never reach the live site.
     # A preview takes exactly one bundle; a create takes the whole queue.
-    do_save: bool = False
+    do_save: StrictBool = False
 
 
 class ItemCodeSpec(BaseModel):
@@ -101,13 +126,14 @@ class ItemCodeSpec(BaseModel):
     each reward set and is filled only when imported data or the operator
     enables it.
     """
+    client_key: StrictStr = Field(default='', max_length=80)
     name_th: str = Field(default='', max_length=200)
     name_en: str = Field(default='', max_length=200)
     slug: str = Field(default='', max_length=120)
-    uses_per_user: str = Field(default='1', max_length=12)
-    limited: bool = False
-    quantity: str = Field(default='', max_length=12)
-    remaining: str = Field(default='', max_length=12)
+    uses_per_user: object = '1'
+    limited: StrictBool = False
+    quantity: object = ''
+    remaining: object = ''
     start_time: str = Field(default='', max_length=32)
     end_time: str = Field(default='', max_length=32)
     # Which bundle group this came from, so a page that handed it over can show
@@ -121,18 +147,19 @@ class ItemCodeRunRequest(BaseModel):
     itemcodes: list[ItemCodeSpec] = Field(default_factory=list)
     # Off by default, like the bundle route: writing to the live site is always
     # an explicit opt-in, so a replayed preview can never create anything.
-    do_save: bool = False
+    do_save: StrictBool = False
 
 
 class EventSpec(BaseModel):
     """One Event. The bundle ids come from the plan, so nothing is searched."""
+    client_key: StrictStr = Field(default='', max_length=80)
     slug: str = Field(default='', max_length=120)
     name_th: str = Field(default='', max_length=200)
     name_en: str = Field(default='', max_length=200)
     kind: Literal['WINNER', 'ALL'] = 'WINNER'
-    uses_per_user: str = Field(default='1', max_length=12)
-    quantity: str = Field(default='0', max_length=12)
-    remaining: str = Field(default='0', max_length=12)
+    uses_per_user: object = '1'
+    quantity: object = '0'
+    remaining: object = '0'
     start_event: str = Field(default='', max_length=32)
     end_event: str = Field(default='', max_length=32)
     start_claim: str = Field(default='', max_length=32)
@@ -144,7 +171,7 @@ class EventSpec(BaseModel):
 class EventRunRequest(BaseModel):
     game: str = Field(min_length=1, max_length=64)
     events: list[EventSpec] = Field(default_factory=list)
-    do_save: bool = False
+    do_save: StrictBool = False
 
 
 class RewardOptionsRequest(BaseModel):
@@ -158,44 +185,44 @@ class ProductOptionsRequest(BaseModel):
 
 
 class ProductPriceSpec(BaseModel):
-    currency_id: str = Field(min_length=1, max_length=120)
-    currency_slug: str = Field(default='', max_length=160)
-    currency_label: str = Field(default='', max_length=200)
-    original_price: float = Field(ge=0)
-    price: float = Field(ge=0)
+    currency_id: StrictStr = Field(min_length=1, max_length=120)
+    currency_slug: StrictStr = Field(default='', max_length=160)
+    currency_label: StrictStr = Field(default='', max_length=200)
+    original_price: object
+    price: object
 
 
 class ProductSpec(BaseModel):
-    client_key: str = Field(min_length=1, max_length=80)
-    source_group_key: str = Field(default='', max_length=240)
-    name_th: str = Field(min_length=1, max_length=200)
-    name_en: str = Field(min_length=1, max_length=200)
-    category_id: str = Field(min_length=1, max_length=120)
-    category_label: str = Field(default='', max_length=200)
-    details_th: str = Field(default='', max_length=20000)
-    details_en: str = Field(default='', max_length=20000)
-    start_at: str = Field(min_length=1, max_length=32)
-    end_at: str = Field(min_length=1, max_length=32)
-    bundle_id: str = Field(default='', max_length=32)
-    bundle_ids: list[str] = Field(default_factory=list, max_length=20)
-    primary_bundle_id: str = Field(default='', max_length=32)
+    client_key: StrictStr = Field(min_length=1, max_length=80)
+    source_group_key: StrictStr = Field(default='', max_length=240)
+    name_th: StrictStr = Field(max_length=200)
+    name_en: StrictStr = Field(max_length=200)
+    category_id: StrictStr = Field(max_length=120)
+    category_label: StrictStr = Field(default='', max_length=200)
+    details_th: StrictStr = Field(default='', max_length=20000)
+    details_en: StrictStr = Field(default='', max_length=20000)
+    start_at: StrictStr = Field(max_length=32)
+    end_at: StrictStr = Field(max_length=32)
+    bundle_id: object = ''
+    bundle_ids: list[object] = Field(default_factory=list, max_length=20)
+    primary_bundle_id: object = ''
     prices: list[ProductPriceSpec] = Field(min_length=1, max_length=20)
     limit_type: Literal['UNLIMITED', 'PLAYER', 'CHARACTER'] = 'UNLIMITED'
-    limit_quantity: str = Field(default='', max_length=12)
-    limit_reset_interval_days: str = Field(default='', max_length=12)
-    limit_reset_at: str = Field(default='', max_length=32)
+    limit_quantity: object = ''
+    limit_reset_interval_days: object = ''
+    limit_reset_at: object = ''
     tags: list[Literal['EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE']] = Field(
         default_factory=list, max_length=5)
-    is_enabled: bool = False
-    is_test_mode: bool = True
-    is_hidden: bool = False
-    position: str = Field(default='0', max_length=12)
+    is_enabled: StrictBool = False
+    is_test_mode: StrictBool = True
+    is_hidden: StrictBool = False
+    position: object = '0'
 
 
 class ProductRunRequest(BaseModel):
-    game: str = Field(min_length=1, max_length=64)
+    game: StrictStr = Field(min_length=1, max_length=64)
     products: list[ProductSpec] = Field(default_factory=list, max_length=30)
-    do_save: bool = False
+    do_save: StrictBool = False
 
 
 class LoginRequest(BaseModel):
@@ -210,12 +237,6 @@ class LocalLaunchRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
-
-
-class StorageStatePayload(BaseModel):
-    pairing_token: str = Field(min_length=20, max_length=200)
-    account_label: str | None = Field(default=None, max_length=120)
-    storage_state: dict
 
 
 class LoginThrottle:
@@ -306,6 +327,28 @@ def require_user(
     return user
 
 
+def require_pairing_principal(
+    request: Request,
+    afc_session: str | None = Cookie(default=None),
+) -> PairingPrincipalSnapshot:
+    """Authenticate pairing issuance in one closed, short-lived Session."""
+    failed = False
+    principal = None
+    try:
+        principal = resolve_pairing_principal(
+            request.app.state.database,
+            request.app.state.auth_service,
+            afc_session,
+        )
+    except Exception:
+        failed = True
+    if failed:
+        raise HTTPException(status_code=500, detail='pairing_failed')
+    if principal is None:
+        raise HTTPException(status_code=401, detail='กรุณาเข้าสู่ระบบ')
+    return principal
+
+
 def require_admin(user: User = Depends(require_user)) -> User:
     if user.role != 'admin':
         raise HTTPException(status_code=403, detail='ไม่มีสิทธิ์ใช้งานส่วนนี้')
@@ -360,21 +403,35 @@ def _get_workspace(repository: WorkspaceRepository, user_id: str, workspace_id: 
         raise HTTPException(status_code=404, detail='ไม่พบงาน Item Finder นี้')
 
 
-async def _temporary_upload(file):
+async def _temporary_upload(file: UploadFile, max_bytes: int = WORKBOOK_BODY_MAX) -> str:
     suffix = os.path.splitext(file.filename or '')[1] or '.xlsx'
-    raw = await file.read()
-    handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    raw_fd, path = tempfile.mkstemp(suffix=suffix)
+    handle = None
     try:
-        handle.write(raw)
+        handle = os.fdopen(raw_fd, 'wb')
+        written = 0
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > max_bytes:
+                raise HTTPException(status_code=413, detail='workbook_too_large')
+            handle.write(chunk)
         handle.close()
-    except Exception:
-        handle.close()
+    except BaseException:
         try:
-            os.unlink(handle.name)
+            if handle is not None:
+                handle.close()
+        except Exception:
+            pass
+        try:
+            os.close(raw_fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(path)
         except OSError:
             pass
         raise
-    return handle.name
+    return path
 
 
 @router.get('/', response_class=HTMLResponse)
@@ -684,21 +741,109 @@ def change_password(
     user.password_hash = hash_password(payload.new_password)
     user.password_changed_at = utc_now()
     request.app.state.auth_service.revoke_all_sessions(db, user.id)
+    write_audit(
+        db,
+        user_id=user.id,
+        action='auth.password_changed',
+        status='success',
+        resource_type='user',
+        resource_id=user.id,
+        request=request,
+    )
     response = Response(status_code=204)
     _clear_session_cookie(response, request.app.state.settings)
     return response
 
 
 @router.post('/api/aztek/pairing-token')
-def create_pairing_token(request: Request, user: User = Depends(require_user),
-                         db: Session = Depends(get_db)):
-    issue = request.app.state.aztek_session_service.create_pairing_token(db, user)
-    write_audit(
-        db, user_id=user.id, action='aztek.pairing_requested', status='success',
-        tool='aztek', resource_type='aztek_session', resource_id=user.id,
-        request=request,
-    )
-    return {'pairing_token': issue.raw_token, 'expires_at': issue.expires_at.isoformat()}
+def create_pairing_token(
+    request: Request,
+    principal: PairingPrincipalSnapshot = Depends(require_pairing_principal),
+):
+    """Issue atomically, exposing a token only after commit and close."""
+    database: Database = request.app.state.database
+    service: AztekSessionService = request.app.state.aztek_session_service
+    reservations: PairingIssueReservations = (
+        request.app.state.pairing_issue_reservations)
+    outcome = 'pairing_failed'
+    committed_issue = None
+
+    try:
+        with reservations.reserve(principal.user_id):
+            snapshot_failed = False
+            snapshot_busy = False
+            attempt = None
+            try:
+                with database.session() as snapshot_db:
+                    attempt = service._prepare_pairing_issue(
+                        snapshot_db, principal.user_id)
+            except Exception as error:
+                snapshot_busy = pairing_service.is_pairing_sqlite_busy(error)
+                snapshot_failed = True
+                error = None
+
+            if snapshot_failed:
+                outcome = 'pairing_busy' if snapshot_busy else 'pairing_failed'
+            else:
+                for write_number in range(4):
+                    issue = None
+                    durable = False
+                    write_busy = False
+                    write_conflict = False
+                    write_failed = False
+                    try:
+                        with database.session() as write_db:
+                            pairing_service._begin_fresh_pairing_write(write_db)
+                            issue = service._apply_pairing_issue(write_db, attempt)
+                            write_audit(
+                                write_db,
+                                user_id=principal.user_id,
+                                action='aztek.pairing_requested',
+                                status='success',
+                                tool='aztek',
+                                resource_type='aztek_session',
+                                resource_id=principal.user_id,
+                            )
+                            write_db.commit()
+                            durable = True
+                    except PairingTokenIssueConflict:
+                        write_conflict = True
+                    except Exception as error:
+                        write_busy = pairing_service.is_pairing_sqlite_busy(error)
+                        write_failed = True
+                        error = None
+
+                    if write_conflict:
+                        outcome = 'pairing_token_conflict'
+                        break
+                    if write_failed:
+                        if write_busy and not durable and write_number < 3:
+                            time.sleep(0.025 * (write_number + 1))
+                            continue
+                        outcome = 'pairing_busy' if write_busy else 'pairing_failed'
+                        break
+                    committed_issue = issue
+                    outcome = 'success'
+                    break
+    except PairingTokenIssueConflict:
+        outcome = 'pairing_token_conflict'
+    except Exception as error:
+        outcome = ('pairing_busy'
+                   if pairing_service.is_pairing_sqlite_busy(error)
+                   else 'pairing_failed')
+        error = None
+
+    if outcome == 'success' and committed_issue is not None:
+        return {
+            'pairing_token': committed_issue.raw_token,
+            'expires_at': committed_issue.expires_at.isoformat(),
+        }
+    if outcome == 'pairing_token_conflict':
+        return JSONResponse(
+            {'detail': 'pairing_token_conflict'}, status_code=409)
+    if outcome == 'pairing_busy':
+        return JSONResponse({'detail': 'pairing_busy'}, status_code=409)
+    return JSONResponse({'detail': 'pairing_failed'}, status_code=500)
 
 
 @router.post('/api/aztek/local-capture')
@@ -763,37 +908,104 @@ async def capture_local_aztek_session(
 
 
 @router.post('/api/aztek/pair')
-def pair_aztek_session(payload: StorageStatePayload, request: Request,
-                       db: Session = Depends(get_db)):
-    # The only endpoint authenticated by pairing token instead of a cookie.
+def pair_aztek_session(
+    request: Request,
+    parsed: PairingParseResult = Depends(pairing_parse_dependency),
+):
+    """Consume one parsed token in fresh, bounded route-owned transactions."""
     client_ip = request.client.host if request.client else 'unknown'
-    settings: Settings = request.app.state.settings
     throttle: LoginThrottle = request.app.state.pairing_throttle
-    throttle_key = '%s|%s' % (
-        client_ip, hash_token(payload.pairing_token, settings))
+    throttle_key = '%s|%s' % (client_ip, parsed.fingerprint)
     if throttle.is_limited(throttle_key):
         return JSONResponse({'detail': 'ลองใหม่ภายหลัง'}, status_code=429)
 
+    payload = parsed.payload
+    if payload is None:
+        throttle.record_failure(throttle_key)
+        return JSONResponse(
+            {'detail': 'ข้อมูลเซสชันไม่ถูกต้อง'}, status_code=422)
+
     service: AztekSessionService = request.app.state.aztek_session_service
+    database: Database = request.app.state.database
+    outcome = 'pairing_failed'
+    account_label = None
+    prepared = None
+    validation_failed = False
     try:
-        session = service.consume_pairing_token(
-            db, payload.pairing_token, payload.storage_state, payload.account_label)
-    except PairingTokenNotFound:
+        prepared = service._prepare_pairing_consumption(
+            payload.pairing_token,
+            payload.storage_state,
+            payload.account_label,
+        )
+    except InvalidStorageState:
+        validation_failed = True
+    except Exception:
+        outcome = 'pairing_failed'
+
+    if validation_failed:
         throttle.record_failure(throttle_key)
-        raise HTTPException(status_code=404, detail='ไม่พบรหัสจับคู่')
-    except PairingTokenUnavailable:
+        outcome = 'invalid'
+    elif prepared is not None:
+        for write_number in range(4):
+            attempt_outcome = 'success'
+            saved_label = None
+            durable = False
+            write_busy = False
+            write_failed = False
+            try:
+                with database.session() as write_db:
+                    pairing_service._begin_fresh_pairing_write(write_db)
+                    try:
+                        session = service._apply_pairing_consumption(
+                            write_db, prepared)
+                    except PairingTokenNotFound:
+                        attempt_outcome = 'not_found'
+                    except PairingTokenUnavailable:
+                        attempt_outcome = 'unavailable'
+                    else:
+                        saved_label = session.account_label
+                        write_audit(
+                            write_db,
+                            user_id=session.user_id,
+                            action='aztek.connected',
+                            status='success',
+                            tool='aztek',
+                            resource_type='aztek_session',
+                            resource_id=session.user_id,
+                        )
+                    write_db.commit()
+                    durable = True
+            except Exception as error:
+                write_busy = pairing_service.is_pairing_sqlite_busy(error)
+                write_failed = True
+                error = None
+
+            if write_failed:
+                if write_busy and not durable and write_number < 3:
+                    time.sleep(0.025 * (write_number + 1))
+                    continue
+                outcome = 'pairing_busy' if write_busy else 'pairing_failed'
+                break
+            outcome = attempt_outcome
+            account_label = saved_label
+            break
+
+    if outcome == 'success':
+        throttle.clear(throttle_key)
+        return {'status': 'connected', 'account_label': account_label}
+    if outcome == 'not_found':
         throttle.record_failure(throttle_key)
-        raise HTTPException(status_code=410, detail='รหัสจับคู่หมดอายุหรือถูกใช้ไปแล้ว')
-    except InvalidStorageState as exc:
+        return JSONResponse({'detail': 'ไม่พบรหัสจับคู่'}, status_code=404)
+    if outcome == 'unavailable':
         throttle.record_failure(throttle_key)
-        raise HTTPException(status_code=422, detail='ข้อมูลเซสชันไม่ถูกต้อง: %s' % str(exc))
-    throttle.clear(throttle_key)
-    write_audit(
-        db, user_id=session.user_id, action='aztek.connected', status='success',
-        tool='aztek', resource_type='aztek_session', resource_id=session.user_id,
-        request=request,
-    )
-    return {'status': 'connected', 'account_label': session.account_label}
+        return JSONResponse(
+            {'detail': 'รหัสจับคู่หมดอายุหรือถูกใช้ไปแล้ว'}, status_code=410)
+    if outcome == 'invalid':
+        return JSONResponse(
+            {'detail': 'ข้อมูลเซสชันไม่ถูกต้อง'}, status_code=422)
+    if outcome == 'pairing_busy':
+        return JSONResponse({'detail': 'pairing_busy'}, status_code=409)
+    return JSONResponse({'detail': 'pairing_failed'}, status_code=500)
 
 
 @router.get('/api/aztek/status')
@@ -828,25 +1040,65 @@ def games(user: User = Depends(require_user)):
     return {'games': list(item_finder.GAME_NAMES)}
 
 
-def _clean_rewards(raw: list[dict]) -> list[dict]:
-    """Keep only well-formed rewards: a known kind, a value, a positive count."""
-    # Imported here (like the endpoint below) so module import does not pull in
-    # playwright.
+_RANDOM_RATE_RULE = (
+    'ต้องเป็นเลขทศนิยมมากกว่า 0 และไม่เกิน 100 '
+    'โดยมีทศนิยมไม่เกิน 3 ตำแหน่ง')
+_PRODUCT_PRICE_RULE = (
+    'ต้องเป็นเลขทศนิยมตั้งแต่ 0 ขึ้นไปในรูปแบบปกติ'
+    'และยาวไม่เกิน 64 ตัวอักษร')
+
+
+def _safe_failure(detail: str) -> PayloadValueError:
+    return PayloadValueError(detail, '')
+
+
+def _decimal_with_rule(value: object, label: str, *, minimum: Decimal,
+                       maximum: Decimal | None = None,
+                       places: int | None = None, rule: str) -> str:
+    failed = False
+    try:
+        text = plain_decimal_text(
+            value, label, minimum=minimum, maximum=maximum, places=places)
+    except PayloadValueError:
+        failed = True
+        text = ''
+    if failed:
+        raise PayloadValueError(label, rule) from None
+    return text
+
+
+def _nonblank_client_keys_are_unique(jobs: list[dict]) -> bool:
+    keys = [job.get('client_key', '') for job in jobs
+            if job.get('client_key', '')]
+    return len(keys) == len(set(keys))
+
+
+def _clean_rewards(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
+    """Validate every submitted Bundle reward without dropping a row."""
     from web import bundle_runner
 
     cleaned = []
-    for entry in raw:
-        kind = str(entry.get('type') or '').strip().upper()
-        value = str(entry.get('value') or '').strip()
-        if kind not in bundle_runner.REWARD_KINDS or not value:
-            continue
-        try:
-            qty = int(str(entry.get('qty') or '1').strip())
-        except ValueError:
-            continue
-        if qty < 1:
-            continue
-        cleaned.append({'type': kind, 'value': value, 'qty': str(qty)})
+    for row, entry in enumerate(raw, 1):
+        entry = entry if isinstance(entry, dict) else {}
+        kind_value = entry.get('type')
+        kind = kind_value.strip().upper() if isinstance(kind_value, str) else ''
+        if kind not in bundle_runner.REWARD_KINDS:
+            raise _safe_failure(
+                f'Bundle ที่ {bundle_number}: ประเภท reward แถว {row} '
+                'ไม่ถูกต้อง')
+
+        value_source = entry.get('value')
+        value = value_source.strip() if isinstance(value_source, str) else ''
+        if not value:
+            raise _safe_failure(
+                f'Bundle ที่ {bundle_number}: ค่า reward แถว {row} '
+                'ต้องเป็นข้อความที่ไม่ว่าง')
+
+        qty_source = entry['qty'] if 'qty' in entry else '1'
+        qty = positive_int_text(
+            qty_source,
+            f'Bundle ที่ {bundle_number}: จำนวน reward แถว {row}')
+        cleaned.append({'type': kind, 'value': value, 'qty': qty})
     return cleaned
 
 
@@ -1004,16 +1256,40 @@ def apply_plan(payload: ApplyPlanRequest, request: Request,
     selected = payload.selected_sheets
     if not pending_id or not selected:
         raise HTTPException(status_code=400, detail='กรุณาเลือกอย่างน้อย 1 sheet')
+    if len(selected) != len(set(selected)):
+        raise HTTPException(status_code=400, detail='เลือก sheet ซ้ำกัน')
     try:
         workspace = WorkspaceRepository(db).apply_pending(user.id, pending_id, selected)
+        write_audit(
+            db, user_id=user.id, action='plan.applied', status='success',
+            summary={'count': len(selected), 'mode': workspace.mode},
+            tool='item_finder', resource_type='workspace', resource_id=workspace.id,
+            request=request,
+        )
+        db.commit()
+    except EmptySheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='กรุณาเลือกอย่างน้อย 1 sheet')
+    except DuplicateSheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='เลือก sheet ซ้ำกัน')
+    except UnknownSheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='ไม่พบ sheet ที่เลือก')
     except (PendingImportNotFound, WorkspaceNotFound):
+        db.rollback()
         raise HTTPException(status_code=404, detail='ไม่พบไฟล์นำเข้าที่รอเลือก sheet')
-    write_audit(
-        db, user_id=user.id, action='plan.applied', status='success',
-        summary={'count': len(selected), 'mode': workspace.mode},
-        tool='item_finder', resource_type='workspace', resource_id=workspace.id,
-        request=request,
-    )
+    except WorkspaceBusy:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='workspace_busy')
+    except OperationalError as error:
+        db.rollback()
+        if is_sqlite_busy(error):
+            raise HTTPException(status_code=409, detail='workspace_busy')
+        raise
+    except BaseException:
+        db.rollback()
+        raise
     return _workspace_view(workspace)
 
 
@@ -1032,13 +1308,32 @@ def delete_workspace(workspace_id: str, request: Request,
                      db: Session = Depends(get_db)):
     repository = WorkspaceRepository(db)
     workspace = _get_workspace(repository, user.id, workspace_id)
-    repository.delete_owned(user.id, workspace_id)
-    write_audit(
-        db, user_id=user.id, action='workspace.deleted', status='success',
-        summary={'mode': workspace.mode, 'filename': workspace.filename},
-        tool='item_finder', resource_type='workspace', resource_id=workspace_id,
-        request=request,
-    )
+    summary = {'mode': workspace.mode, 'filename': workspace.filename}
+    try:
+        with request.app.state.search_coordinator.deletion_guard(workspace_id):
+            try:
+                repository.delete_owned(user.id, workspace_id)
+                write_audit(
+                    db, user_id=user.id, action='workspace.deleted',
+                    status='success', summary=summary,
+                    tool='item_finder', resource_type='workspace',
+                    resource_id=workspace_id, request=request,
+                )
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+    except WorkspaceBusy:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='workspace_busy')
+    except WorkspaceNotFound:
+        db.rollback()
+        raise HTTPException(status_code=404, detail='ไม่พบงาน Item Finder นี้')
+    except OperationalError as error:
+        db.rollback()
+        if is_sqlite_busy(error):
+            raise HTTPException(status_code=409, detail='workspace_busy')
+        raise
     return Response(status_code=204)
 
 
@@ -1332,98 +1627,110 @@ _PRODUCT_IMAGE_SLOT = {
 }
 
 
-def _positive_digits(value: str, label: str, where: str,
-                     *, optional=False) -> str:
-    text = str(value or '').strip()
-    if optional and not text:
-        return ''
-    if not text.isdigit() or int(text) <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail='%s ของ%s ต้องเป็นจำนวนเต็มมากกว่า 0' % (label, where))
+def _product_numeric(value: object) -> object:
+    if type(value) is _JsonNumberLexeme:
+        return value.text
+    return value
+
+
+def _product_datetime(value: str, label: str) -> str:
+    text = value.strip()
+    if aztek_form.parse_datetime(text) is None:
+        raise PayloadValueError(label, 'ต้องเป็นวันเวลาที่ถูกต้อง')
     return text
 
 
-def _clean_product(spec: ProductSpec) -> dict:
+def _clean_product(spec: ProductSpec, *, product_number: int = 1) -> dict:
+    prefix = f'Product ที่ {product_number}'
     name_th = spec.name_th.strip()
     name_en = spec.name_en.strip()
-    where = name_th or name_en or 'Product'
     if not name_th:
-        raise HTTPException(
-            status_code=400, detail='ชื่อ Product (ไทย) ของ%s ห้ามว่าง' % where)
+        raise _safe_failure(f'{prefix}: ชื่อ Product (ไทย) ห้ามว่าง')
     if not name_en:
-        raise HTTPException(
-            status_code=400, detail='ชื่อ Product (อังกฤษ) ของ%s ห้ามว่าง' % where)
+        raise _safe_failure(f'{prefix}: ชื่อ Product (อังกฤษ) ห้ามว่าง')
     category_id = spec.category_id.strip()
     if not category_id:
-        raise HTTPException(
-            status_code=400, detail='หมวดหมู่ของ%s ห้ามว่าง' % where)
-    start_at = _require_datetime(spec.start_at, 'วันเริ่มขาย', where)
-    end_at = _require_datetime(spec.end_at, 'วันสิ้นสุด', where)
-    _require_order(
-        start_at, end_at, ('วันเริ่มขาย', 'วันสิ้นสุด'), where)
-    raw_bundle_ids = spec.bundle_ids or ([spec.bundle_id] if spec.bundle_id else [])
-    bundle_ids = []
-    seen_bundle_ids = set()
-    for raw_bundle_id in raw_bundle_ids:
-        bundle_id = _positive_digits(raw_bundle_id, 'Bundle ID', where)
+        raise _safe_failure(f'{prefix}: หมวดหมู่ห้ามว่าง')
+    start_at = _product_datetime(spec.start_at, f'{prefix}: วันเริ่มขาย')
+    end_at = _product_datetime(spec.end_at, f'{prefix}: วันสิ้นสุด')
+    if aztek_form.parse_datetime(start_at) >= aztek_form.parse_datetime(end_at):
+        raise _safe_failure(f'{prefix}: วันเริ่มขายต้องมาก่อนวันสิ้นสุด')
+
+    if spec.bundle_ids:
+        raw_bundle_ids = spec.bundle_ids
+    elif isinstance(spec.bundle_id, str) and not spec.bundle_id.strip():
+        raw_bundle_ids = []
+    else:
+        raw_bundle_ids = [spec.bundle_id]
+    bundle_ids: list[str] = []
+    seen_bundle_ids: set[str] = set()
+    for row, raw_bundle_id in enumerate(raw_bundle_ids, 1):
+        bundle_id = positive_int_text(
+            _product_numeric(raw_bundle_id),
+            f'{prefix}: Bundle ID แถว {row}', max_length=32)
         if bundle_id in seen_bundle_ids:
-            raise HTTPException(
-                status_code=400,
-                detail='Bundle ID ของ%s ห้ามซ้ำกัน: %s' % (where, bundle_id))
+            raise _safe_failure(f'{prefix}: Bundle ID ห้ามซ้ำกัน')
         seen_bundle_ids.add(bundle_id)
         bundle_ids.append(bundle_id)
     if not bundle_ids:
-        raise HTTPException(
-            status_code=400, detail='Bundle ID ของ%s ห้ามว่าง' % where)
-    primary_bundle_id = str(spec.primary_bundle_id or '').strip()
-    if primary_bundle_id:
-        primary_bundle_id = _positive_digits(
-            primary_bundle_id, 'Primary Bundle ID', where)
-        if primary_bundle_id not in seen_bundle_ids:
-            raise HTTPException(
-                status_code=400,
-                detail='Primary Bundle ID ของ%s ต้องอยู่ในรายการ Bundle' % where)
-    else:
+        raise _safe_failure(f'{prefix}: ต้องมี Bundle อย่างน้อย 1 รายการ')
+
+    raw_primary = spec.primary_bundle_id
+    if isinstance(raw_primary, str) and not raw_primary.strip():
         primary_bundle_id = bundle_ids[0]
-    try:
-        position = str(int(spec.position.strip() or '0'))
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail='ตำแหน่งของ%s ต้องเป็นตัวเลขจำนวนเต็ม' % where)
+    else:
+        primary_bundle_id = positive_int_text(
+            _product_numeric(raw_primary),
+            f'{prefix}: Primary Bundle ID', max_length=32)
+        if primary_bundle_id not in seen_bundle_ids:
+            raise _safe_failure(
+                f'{prefix}: Primary Bundle ID ต้องอยู่ในรายการ Bundle')
+
+    position = non_negative_int_text(
+        _product_numeric(spec.position), f'{prefix}: ตำแหน่ง')
 
     prices = []
-    currency_ids = set()
-    for number, price in enumerate(spec.prices, 1):
+    currency_ids: set[str] = set()
+    for row, price in enumerate(spec.prices, 1):
         currency_id = price.currency_id.strip()
         if currency_id in currency_ids:
-            raise HTTPException(
-                status_code=400,
-                detail='Currency ของ%s ซ้ำกัน: %s' % (where, currency_id))
+            raise _safe_failure(f'{prefix}: Currency ห้ามซ้ำกัน')
         currency_ids.add(currency_id)
         prices.append({
             'currency_id': currency_id,
             'currency_slug': price.currency_slug.strip(),
             'currency_label': price.currency_label.strip(),
-            'original_price': price.original_price,
-            'price': price.price,
+            'original_price': _decimal_with_rule(
+                _product_numeric(price.original_price),
+                f'{prefix}: ราคาปกติแถว {row}', minimum=Decimal('0'),
+                rule=_PRODUCT_PRICE_RULE),
+            'price': _decimal_with_rule(
+                _product_numeric(price.price),
+                f'{prefix}: ราคาขายแถว {row}', minimum=Decimal('0'),
+                rule=_PRODUCT_PRICE_RULE),
         })
-    if not prices:
-        raise HTTPException(
-            status_code=400, detail='สกุลเงินของ%s ห้ามว่าง' % where)
 
-    limit_quantity = spec.limit_quantity.strip()
-    reset_interval = spec.limit_reset_interval_days.strip()
-    reset_at = spec.limit_reset_at.strip()
-    if spec.limit_type != 'UNLIMITED':
-        limit_quantity = _positive_digits(
-            limit_quantity, 'จำนวนที่ซื้อได้', where)
-    if reset_interval:
-        reset_interval = _positive_digits(
-            reset_interval, 'รอบรีเซ็ต', where)
-    if reset_at:
-        reset_at = _require_datetime(reset_at, 'เวลารีเซ็ต', where)
+    if spec.limit_type == 'UNLIMITED':
+        limit_quantity = ''
+        reset_interval = ''
+        reset_at = ''
+    else:
+        limit_quantity = positive_int_text(
+            _product_numeric(spec.limit_quantity),
+            f'{prefix}: จำนวนที่ซื้อได้')
+
+        raw_interval = spec.limit_reset_interval_days
+        if isinstance(raw_interval, str) and not raw_interval.strip():
+            reset_interval = ''
+        else:
+            reset_interval = positive_int_text(
+                _product_numeric(raw_interval), f'{prefix}: รอบรีเซ็ต')
+
+        reset_at = optional_text(
+            spec.limit_reset_at, f'{prefix}: เวลารีเซ็ต', max_length=32)
+        if reset_at and aztek_form.parse_datetime(reset_at) is None:
+            raise PayloadValueError(
+                f'{prefix}: เวลารีเซ็ต', 'ต้องเป็นวันเวลาที่ถูกต้อง')
 
     return {
         'client_key': spec.client_key,
@@ -1494,6 +1801,32 @@ async def _product_images(request: Request, jobs: list[dict]) -> None:
         }
 
 
+def _parse_product_payload(payload: str) -> ProductRunRequest:
+    failed = False
+    decoded = None
+    try:
+        decoded = json.loads(
+            payload,
+            parse_int=_JsonNumberLexeme,
+            parse_float=_JsonNumberLexeme,
+            parse_constant=_JsonNumberLexeme,
+        )
+    except (json.JSONDecodeError, RecursionError):
+        failed = True
+
+    parsed = None
+    if not failed:
+        try:
+            parsed = ProductRunRequest.model_validate(decoded)
+        except (ValidationError, RecursionError):
+            failed = True
+
+    if failed or parsed is None:
+        raise HTTPException(
+            status_code=422, detail='ข้อมูล Product ไม่ถูกต้อง') from None
+    return parsed
+
+
 @router.post('/api/products/run')
 async def products_run(
     request: Request,
@@ -1502,20 +1835,24 @@ async def products_run(
     db: Session = Depends(get_db),
 ):
     """Preview one Product or explicitly create the checked Product queue."""
-    from pydantic import ValidationError
     from web import product_runner
 
+    parsed = _parse_product_payload(payload)
+    validation_detail = None
     try:
-        parsed = ProductRunRequest.model_validate_json(payload)
-    except ValidationError as exc:
+        jobs = [
+            _clean_product(spec, product_number=number)
+            for number, spec in enumerate(parsed.products, 1)
+        ]
+    except PayloadValueError as error:
+        validation_detail = error.detail
+        jobs = []
+    if validation_detail is not None:
         raise HTTPException(
-            status_code=422,
-            detail='ข้อมูล Product ไม่ถูกต้อง: %s' % exc)
-    jobs = [_clean_product(spec) for spec in parsed.products]
-    keys = [job['client_key'] for job in jobs]
-    if len(keys) != len(set(keys)):
+            status_code=400, detail=validation_detail) from None
+    if not _nonblank_client_keys_are_unique(jobs):
         raise HTTPException(
-            status_code=400, detail='client_key ของ Product ห้ามซ้ำ')
+            status_code=400, detail='client_key ของรายการห้ามซ้ำกัน')
     _prepare(parsed.game, jobs, parsed.do_save)
     await _product_images(request, jobs)
 
@@ -1536,30 +1873,50 @@ async def products_run(
 MAX_BUNDLE_ITEMS = 200
 
 
-def _clean_items(raw: list[dict]) -> list[dict]:
-    """Keep the item rows that name a real id, in the order they were given.
+def _clean_items(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
+    """Validate each Bundle item in order; never repair or truncate input."""
+    if len(raw) > MAX_BUNDLE_ITEMS:
+        raise _safe_failure(
+            f'Bundle ที่ {bundle_number}: มีไอเทมได้ไม่เกิน 200 แถว')
 
-    Order is the operator's: the plan file — or the column they pasted — lists
-    items the way the bundle should read. Duplicates are dropped because Aztek
-    refuses the second copy anyway.
-    """
     items: list[dict] = []
     seen: set[str] = set()
-    for entry in raw:
-        digits = re.search(r'\d+', str(entry.get('id') or ''))
-        if not digits or digits.group() in seen:
-            continue
-        item_id = digits.group()
+    for row, entry in enumerate(raw, 1):
+        entry = entry if isinstance(entry, dict) else {}
+        item_id = positive_int_text(
+            entry.get('id'),
+            f'Bundle ที่ {bundle_number}: Item ID แถว {row}')
+        if item_id in seen:
+            raise _safe_failure(
+                f'Bundle ที่ {bundle_number}: Item ID ห้ามซ้ำกัน')
         seen.add(item_id)
-        try:
-            qty = max(1, int(str(entry.get('qty') or '1').strip() or '1'))
-        except ValueError:
-            qty = 1
-        items.append({'id': item_id, 'qty': str(qty),
-                      'tier': str(entry.get('tier') or 'Common').strip() or 'Common',
-                      'rate': str(entry.get('rate') or '').strip()})
-        if len(items) >= MAX_BUNDLE_ITEMS:
-            break
+
+        qty_source = entry['qty'] if 'qty' in entry else '1'
+        qty = positive_int_text(
+            qty_source,
+            f'Bundle ที่ {bundle_number}: จำนวนไอเทมแถว {row}')
+
+        tier_source = entry.get('tier')
+        tier = tier_source.strip() if isinstance(tier_source, str) else ''
+        tier = tier or 'Common'
+
+        rate_source = entry['rate'] if 'rate' in entry else ''
+        if isinstance(rate_source, str) and not rate_source.strip():
+            rate = ''
+        elif 'rate' not in entry:
+            rate = ''
+        else:
+            rate = _decimal_with_rule(
+                rate_source,
+                f'Bundle ที่ {bundle_number}: เรทสุ่มแถว {row}',
+                minimum=Decimal('0'), maximum=Decimal('100'), places=3,
+                rule=_RANDOM_RATE_RULE)
+            if Decimal(rate) <= 0:
+                raise PayloadValueError(
+                    f'Bundle ที่ {bundle_number}: เรทสุ่มแถว {row}',
+                    _RANDOM_RATE_RULE)
+        items.append({
+            'id': item_id, 'qty': qty, 'tier': tier, 'rate': rate})
     return items
 
 
@@ -1584,21 +1941,46 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
         raise HTTPException(status_code=400, detail='ไม่รู้จักเกม: %s' % payload.game)
 
     jobs = []
-    for index, spec in enumerate(payload.bundles):
-        items = _clean_items(spec.items)
-        rewards = _clean_rewards(spec.rewards)
-        if not items and not rewards:
-            continue
-        if spec.bundle_type == 'RANDOM' and any(not it['rate'] for it in items):
-            raise HTTPException(
-                status_code=400,
-                detail='บันเดิลแบบ RANDOM ต้องใส่เรทสุ่มให้ครบทุกไอเทม: %s'
-                       % (spec.name.strip() or 'บันเดิลที่ %d' % (index + 1)))
-        jobs.append({'name': spec.name.strip() or 'Bundle %d' % (index + 1),
-                     'type': spec.bundle_type, 'deliver': spec.deliver,
-                     'items': items, 'rewards': rewards})
+    validation_detail = None
+    try:
+        for index, spec in enumerate(payload.bundles, 1):
+            if spec.bundle_type == 'RANDOM':
+                raw_items = spec.items
+            else:
+                raw_items = [
+                    dict(entry, rate='') for entry in spec.items
+                ]
+            items = _clean_items(raw_items, bundle_number=index)
+            rewards = _clean_rewards(spec.rewards, bundle_number=index)
+            if spec.bundle_type == 'RANDOM':
+                for row, item in enumerate(items, 1):
+                    if not item['rate']:
+                        raise PayloadValueError(
+                            f'Bundle ที่ {index}: เรทสุ่มแถว {row}',
+                            _RANDOM_RATE_RULE)
+            if not items and not rewards:
+                raise _safe_failure(
+                    f'Bundle ที่ {index}: ต้องมีไอเทมหรือ reward '
+                    'อย่างน้อย 1 รายการ')
+            jobs.append({
+                'client_key': spec.client_key,
+                'name': spec.name.strip() or f'Bundle {index}',
+                'type': spec.bundle_type,
+                'deliver': spec.deliver,
+                'items': items,
+                'rewards': rewards,
+            })
+    except PayloadValueError as error:
+        validation_detail = error.detail
+        jobs = []
+    if validation_detail is not None:
+        raise HTTPException(
+            status_code=400, detail=validation_detail) from None
     if not jobs:
         raise HTTPException(status_code=400, detail='ไม่มีบันเดิลให้ทำ (ยังไม่มีไอเทม)')
+    if not _nonblank_client_keys_are_unique(jobs):
+        raise HTTPException(
+            status_code=400, detail='client_key ของรายการห้ามซ้ำกัน')
     if not payload.do_save and len(jobs) != 1:
         raise HTTPException(status_code=400,
                             detail='ดูตัวอย่างได้ทีละบันเดิลเท่านั้น')
@@ -1649,6 +2031,9 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
             tool='create_bundle', resource_type='aztek_session',
             resource_id=user.id, request=request)
         raise HTTPException(status_code=502, detail='ทำรายการบันเดิลไม่สำเร็จ: %s' % exc)
+
+    for entry, job in zip(results, jobs):
+        entry['client_key'] = job['client_key']
 
     screenshot_b64 = None
     for entry in results:
@@ -1719,44 +2104,88 @@ def _require_order(start: str, end: str, labels: tuple, where: str) -> None:
                    % (labels[0], where, labels[1], start, end))
 
 
-def _reward_head(entry: dict) -> dict:
-    """The fields every reward set has, whichever form it belongs to."""
+def _reward_head(entry: dict, *, family: str = 'Item Code', number: int = 1,
+                 row: int = 1) -> dict:
+    """Canonical numeric fields shared by Item Code and Event rewards."""
+    prefix = f'{family} ที่ {number}: ชุดรางวัลที่ {row}'
+    name_th_source = entry.get('name_th')
+    name_en_source = entry.get('name_en')
+    name_th = name_th_source.strip() if isinstance(name_th_source, str) else ''
+    name_en = name_en_source.strip() if isinstance(name_en_source, str) else ''
+
+    uses_source = entry['uses_per_user'] if 'uses_per_user' in entry else '1'
+    uses_per_user = positive_int_text(
+        uses_source, f'{prefix}: จำนวนครั้งต่อผู้ใช้')
+
+    if 'limited' in entry:
+        limited = strict_bool(entry['limited'], f'{prefix}: จำกัดจำนวน')
+    else:
+        limited = False
+    if limited:
+        quantity = positive_int_text(
+            entry.get('quantity'), f'{prefix}: จำนวนครั้ง')
+        remaining = positive_int_text(
+            entry.get('remaining'), f'{prefix}: จำนวนคงเหลือ')
+    else:
+        quantity = ''
+        remaining = ''
+
+    bundle_id = positive_int_text(
+        entry.get('bundle_id'), f'{prefix}: Bundle ID')
     return {
-        'name_th': str(entry.get('name_th') or '').strip(),
-        'name_en': str(entry.get('name_en') or '').strip(),
-        'uses_per_user': str(entry.get('uses_per_user') or '1').strip() or '1',
-        'limited': bool(entry.get('limited')),
-        'quantity': str(entry.get('quantity') or '').strip(),
-        'remaining': str(entry.get('remaining') or '').strip(),
-        'bundle_id': str(entry.get('bundle_id') or '').strip(),
+        'name_th': name_th,
+        'name_en': name_en,
+        'uses_per_user': uses_per_user,
+        'limited': limited,
+        'quantity': quantity,
+        'remaining': remaining,
+        'bundle_id': bundle_id,
     }
 
 
-def _clean_itemcode_rewards(raw: list[dict]) -> list[dict]:
-    """Reward sets with a name, in order. Codes are kept as the operator typed
-    them; whether they are complete enough to save is the filler's call."""
+def _clean_itemcode_rewards(
+    raw: list[dict],
+    *,
+    itemcode_number: int = 1,
+) -> list[dict]:
+    """Validate every Item Code reward set and preserve its position."""
     from web import itemcode_runner
 
+    if len(raw) > MAX_REWARD_SETS:
+        raise _safe_failure(
+            f'Item Code ที่ {itemcode_number}: '
+            'มีชุดรางวัลได้ไม่เกิน 20 ชุด')
     cleaned = []
-    for entry in raw[:MAX_REWARD_SETS]:
-        reward = _reward_head(entry)
-        if not reward['name_th'] and not reward['name_en']:
-            continue
+    for row, entry in enumerate(raw, 1):
+        reward = _reward_head(
+            entry, family='Item Code', number=itemcode_number, row=row)
         reward['code_type'] = itemcode_runner.code_type_value(
             entry.get('code_type'))
         reward['code_list'] = str(entry.get('code_list') or '')
         reward['prefix'] = str(entry.get('prefix') or '').strip()
-        reward['num_codes'] = str(entry.get('num_codes') or '').strip()
+        if reward['code_type'] == '2':
+            reward['num_codes'] = positive_int_text(
+                entry.get('num_codes'),
+                f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
+                'จำนวนโค้ด')
+        else:
+            reward['num_codes'] = ''
         cleaned.append(reward)
     return cleaned
 
 
-def _clean_event_rewards(raw: list[dict]) -> list[dict]:
+def _clean_event_rewards(
+    raw: list[dict],
+    *,
+    event_number: int = 1,
+) -> list[dict]:
+    if len(raw) > MAX_REWARD_SETS:
+        raise _safe_failure(
+            f'Event ที่ {event_number}: มีชุดรางวัลได้ไม่เกิน 20 ชุด')
     cleaned = []
-    for entry in raw[:MAX_REWARD_SETS]:
-        reward = _reward_head(entry)
-        if not reward['name_th'] and not reward['name_en']:
-            continue
+    for row, entry in enumerate(raw, 1):
+        reward = _reward_head(
+            entry, family='Event', number=event_number, row=row)
         cleaned.append(reward)
     return cleaned
 
@@ -1802,6 +2231,9 @@ async def _run_activity(builder, specs, *, game, do_save, request, db, user,
             tool=tool, resource_type='aztek_session', resource_id=user.id,
             request=request)
         raise HTTPException(status_code=502, detail='ทำรายการไม่สำเร็จ: %s' % exc)
+
+    for entry, spec in zip(results, specs):
+        entry['client_key'] = spec.get('client_key', '')
 
     screenshot_b64 = None
     for entry in results:
@@ -1902,27 +2334,87 @@ async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
     from web import itemcode_runner
 
     settings: Settings = request.app.state.settings
+    if len(payload.itemcodes) > MAX_ACTIVITIES:
+        raise HTTPException(
+            status_code=400,
+            detail='Item Code ทำได้ไม่เกิน 30 รายการต่อครั้ง')
     jobs = []
-    for index, spec in enumerate(payload.itemcodes[:MAX_ACTIVITIES]):
-        where = spec.name_th.strip() or 'Item Code ที่ %d' % (index + 1)
-        limited = bool(spec.limited)
-        quantity = _positive_digits(
-            spec.quantity, 'จำนวนครั้งที่สามารถใช้งานได้', where
-        ) if limited else ''
-        remaining = _positive_digits(
-            spec.remaining, 'จำนวนคงเหลือ', where
-        ) if limited else ''
-        jobs.append({
-            'name_th': spec.name_th.strip(), 'name_en': spec.name_en.strip(),
-            'slug': _require_slug(spec.slug, where),
-            'uses_per_user': spec.uses_per_user.strip() or '1',
-            'limited': limited, 'quantity': quantity, 'remaining': remaining,
-            'start_time': _require_datetime(spec.start_time, 'เวลาเริ่มใช้งาน', where),
-            'end_time': _require_datetime(spec.end_time, 'เวลาสิ้นสุด', where),
-            'group': spec.group,
-            'rewards': _clean_itemcode_rewards(spec.rewards)})
-        _require_order(jobs[-1]['start_time'], jobs[-1]['end_time'],
-                       ('เวลาเริ่มใช้งาน', 'เวลาสิ้นสุด'), where)
+    result_slots = []
+    batch_create = payload.do_save and len(payload.itemcodes) > 1
+    validation_detail = None
+    for index, spec in enumerate(payload.itemcodes, 1):
+        try:
+            prefix = f'Item Code ที่ {index}'
+            where = spec.name_th.strip() or prefix
+            limited = spec.limited
+            uses_per_user = positive_int_text(
+                spec.uses_per_user, f'{prefix}: จำนวนครั้งต่อผู้ใช้')
+            if limited:
+                quantity = positive_int_text(
+                    spec.quantity,
+                    f'{prefix}: จำนวนครั้งที่สามารถใช้งานได้')
+                remaining = positive_int_text(
+                    spec.remaining, f'{prefix}: จำนวนคงเหลือ')
+            else:
+                quantity = ''
+                remaining = ''
+            job = {
+                'client_key': spec.client_key,
+                'name_th': spec.name_th.strip(),
+                'name_en': spec.name_en.strip(),
+                'slug': _require_slug(spec.slug, where),
+                'uses_per_user': uses_per_user,
+                'limited': limited,
+                'quantity': quantity,
+                'remaining': remaining,
+                'start_time': _require_datetime(
+                    spec.start_time, 'เวลาเริ่มใช้งาน', where),
+                'end_time': _require_datetime(
+                    spec.end_time, 'เวลาสิ้นสุด', where),
+                'group': spec.group,
+                'rewards': _clean_itemcode_rewards(
+                    spec.rewards, itemcode_number=index),
+            }
+            _require_order(job['start_time'], job['end_time'],
+                           ('เวลาเริ่มใช้งาน', 'เวลาสิ้นสุด'), where)
+            jobs.append(job)
+            result_slots.append(None)
+        except (PayloadValueError, HTTPException) as error:
+            if isinstance(error, HTTPException) and error.status_code != 400:
+                raise
+            detail = error.detail
+            if not batch_create:
+                validation_detail = detail
+                jobs = []
+                break
+            result_slots.append({
+                'client_key': spec.client_key,
+                'name': spec.name_th.strip() or spec.slug or prefix,
+                'slug': spec.slug,
+                'group': spec.group,
+                'saved': False,
+                'made_id': None,
+                'missing': [],
+                'error': detail,
+            })
+    if validation_detail is not None:
+        raise HTTPException(
+            status_code=400, detail=validation_detail) from None
+    if not _nonblank_client_keys_are_unique(jobs):
+        raise HTTPException(
+            status_code=400, detail='client_key ของรายการห้ามซ้ำกัน')
+    if batch_create and not jobs:
+        if payload.game not in item_finder.GAMES:
+            raise HTTPException(
+                status_code=400, detail='ไม่รู้จักเกม: %s' % payload.game)
+        return {
+            'results': result_slots,
+            'headed': settings.app_env != 'production',
+            'screenshot_b64': None,
+            'created': 0,
+            'planned': len(payload.itemcodes),
+            'logs': [],
+        }
     _prepare(payload.game, jobs, payload.do_save)
     builder = itemcode_runner.ItemCodeBuilder(_collect(logs := []))
     result = await _run_activity(
@@ -1930,6 +2422,18 @@ async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
         request=request, db=db, user=user, tool='create_itemcode',
         action='itemcode.create' if payload.do_save else 'itemcode.preview_open',
         headed=settings.app_env != 'production')
+    if batch_create and any(slot is not None for slot in result_slots):
+        valid_results = iter(result['results'])
+        merged_results = [
+            slot if slot is not None else next(valid_results)
+            for slot in result_slots
+        ]
+        result = dict(
+            result,
+            results=merged_results,
+            created=sum(1 for row in merged_results if row['saved']),
+            planned=len(payload.itemcodes),
+        )
     return dict(result, logs=logs)
 
 
@@ -1984,27 +2488,50 @@ async def events_run(payload: EventRunRequest, request: Request,
     from web import event_runner
 
     settings: Settings = request.app.state.settings
+    if len(payload.events) > MAX_ACTIVITIES:
+        raise HTTPException(
+            status_code=400, detail='Event ทำได้ไม่เกิน 30 รายการต่อครั้ง')
     jobs = []
-    for index, spec in enumerate(payload.events[:MAX_ACTIVITIES]):
-        where = spec.name_th.strip() or 'Event ที่ %d' % (index + 1)
-        job = {'slug': _require_slug(spec.slug, where),
-               'name_th': spec.name_th.strip(), 'name_en': spec.name_en.strip(),
-               'type': spec.kind,
-               'uses_per_user': spec.uses_per_user.strip() or '1',
-               'quantity': spec.quantity.strip() or '0',
-               'remaining': spec.remaining.strip() or '0',
-               'group': spec.group,
-               'rewards': _clean_event_rewards(spec.rewards)}
-        for key, label in (('start_event', 'วันเริ่มกิจกรรม'),
-                           ('end_event', 'วันสิ้นสุดกิจกรรม'),
-                           ('start_claim', 'วันเริ่มรับรางวัล'),
-                           ('end_claim', 'วันสิ้นสุดการรับรางวัล')):
-            job[key] = _require_datetime(getattr(spec, key), label, where)
-        _require_order(job['start_event'], job['end_event'],
-                       ('วันเริ่มกิจกรรม', 'วันสิ้นสุดกิจกรรม'), where)
-        _require_order(job['start_claim'], job['end_claim'],
-                       ('วันเริ่มรับรางวัล', 'วันสิ้นสุดการรับรางวัล'), where)
-        jobs.append(job)
+    validation_detail = None
+    try:
+        for index, spec in enumerate(payload.events, 1):
+            prefix = f'Event ที่ {index}'
+            where = spec.name_th.strip() or prefix
+            job = {
+                'client_key': spec.client_key,
+                'slug': _require_slug(spec.slug, where),
+                'name_th': spec.name_th.strip(),
+                'name_en': spec.name_en.strip(),
+                'type': spec.kind,
+                'uses_per_user': positive_int_text(
+                    spec.uses_per_user, f'{prefix}: จำนวนครั้งต่อผู้ใช้'),
+                'quantity': non_negative_int_text(
+                    spec.quantity, f'{prefix}: จำนวนรางวัลทั้งหมด'),
+                'remaining': non_negative_int_text(
+                    spec.remaining, f'{prefix}: จำนวนคงเหลือ'),
+                'group': spec.group,
+                'rewards': _clean_event_rewards(
+                    spec.rewards, event_number=index),
+            }
+            for key, label in (('start_event', 'วันเริ่มกิจกรรม'),
+                               ('end_event', 'วันสิ้นสุดกิจกรรม'),
+                               ('start_claim', 'วันเริ่มรับรางวัล'),
+                               ('end_claim', 'วันสิ้นสุดการรับรางวัล')):
+                job[key] = _require_datetime(getattr(spec, key), label, where)
+            _require_order(job['start_event'], job['end_event'],
+                           ('วันเริ่มกิจกรรม', 'วันสิ้นสุดกิจกรรม'), where)
+            _require_order(job['start_claim'], job['end_claim'],
+                           ('วันเริ่มรับรางวัล', 'วันสิ้นสุดการรับรางวัล'), where)
+            jobs.append(job)
+    except PayloadValueError as error:
+        validation_detail = error.detail
+        jobs = []
+    if validation_detail is not None:
+        raise HTTPException(
+            status_code=400, detail=validation_detail) from None
+    if not _nonblank_client_keys_are_unique(jobs):
+        raise HTTPException(
+            status_code=400, detail='client_key ของรายการห้ามซ้ำกัน')
     _prepare(payload.game, jobs, payload.do_save)
     builder = event_runner.EventBuilder(_collect(logs := []))
     result = await _run_activity(
@@ -2088,6 +2615,7 @@ def create_app(
     monotonic_clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
+    resolved_settings.validate()
     resolved_database = database or Database(resolved_settings)
     auth_service = AuthService(resolved_settings)
     local_access = LocalAccessService(
@@ -2116,6 +2644,7 @@ def create_app(
         yield
 
     application = FastAPI(title='All for Cabal — Web', lifespan=lifespan)
+    application.add_middleware(RequestSizeLimitMiddleware)
     application.state.settings = resolved_settings
     application.state.database = resolved_database
     application.state.auth_service = auth_service
@@ -2126,6 +2655,7 @@ def create_app(
     application.state.search_coordinator = search_coordinator
     application.state.login_throttle = LoginThrottle(monotonic_clock)
     application.state.pairing_throttle = LoginThrottle(monotonic_clock)
+    application.state.pairing_issue_reservations = PairingIssueReservations()
     application.include_router(router)
     return application
 

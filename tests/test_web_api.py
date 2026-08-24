@@ -2,20 +2,29 @@
 """Authenticated API-level tests for Item Finder web parity endpoints."""
 import asyncio
 import io
+import json
 import os
 import sys
 import tempfile
+import threading
 import time
+import traceback
+from contextlib import suppress
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from sqlalchemy import select  # noqa: E402
 
+import pytest  # noqa: E402
+from starlette.websockets import WebSocketDisconnect  # noqa: E402
+
 import item_finder  # noqa: E402
 from web import item_service, search_runner  # noqa: E402
 from web.models import Job, WorkspaceRecord  # noqa: E402
 from web.search_coordinator import SearchCoordinator  # noqa: E402
+from web import workspaces as workspace_module  # noqa: E402
 from web.workspaces import WorkspaceRepository  # noqa: E402
 
 
@@ -862,6 +871,336 @@ def test_searching_again_with_nothing_missing_does_not_start_a_browser(
     assert seen[-1]['type'] == 'done' and seen[-1]['count'] == 1
     with test_database.session() as db:
         assert len(db.get(WorkspaceRecord, workspace_id).results) == 1
+
+
+def test_start_reservation_blocks_deletion_before_a_job_exists(
+    test_settings, test_database, member, monkeypatch
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    entered = threading.Event()
+    release = threading.Event()
+    original_get_owned = WorkspaceRepository.get_owned
+
+    def blocking_get_owned(repository, owner_user_id, requested_workspace_id):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_get_owned(
+            repository, owner_user_id, requested_workspace_id)
+
+    class NoAztekSession(_StubAztek):
+        def load_storage_state(self, db, user):
+            return None
+
+    monkeypatch.setattr(WorkspaceRepository, 'get_owned', blocking_get_owned)
+    coordinator = SearchCoordinator(
+        test_database, test_settings, NoAztekSession())
+
+    async def emit(_message):
+        return None
+
+    def begin_start():
+        return asyncio.run(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, emit))
+
+    expected_busy = getattr(workspace_module, 'WorkspaceBusy', RuntimeError)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(begin_start)
+        assert entered.wait(timeout=5)
+        try:
+            with test_database.session() as db:
+                assert db.scalar(select(Job).where(
+                    Job.workspace_id == workspace_id)) is None
+            with pytest.raises(expected_busy):
+                with coordinator.deletion_guard(workspace_id):
+                    pass
+        finally:
+            release.set()
+        assert future.result(timeout=5) is False
+
+    with coordinator.deletion_guard(workspace_id):
+        pass
+
+
+def test_deletion_guard_blocks_start_with_exact_terminal_events(
+    test_settings, test_database, member
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+    seen = []
+
+    async def emit(message):
+        seen.append(message)
+
+    with coordinator.deletion_guard(workspace_id):
+        started = asyncio.run(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, emit))
+
+    assert started is False
+    assert seen == [
+        {
+            'type': 'error', 'code': 'workspace_busy',
+            'msg': 'workspace กำลังใช้งานอยู่',
+        },
+        {'type': 'done', 'count': 0, 'not_found': []},
+    ]
+    with test_database.session() as db:
+        assert db.scalar(select(Job).where(
+            Job.workspace_id == workspace_id)) is None
+
+
+def test_start_reservation_releases_after_emit_exception_and_cancellation(
+    test_settings, test_database, member
+):
+    workspace_id = _searchable_workspace(member, test_database)
+
+    class NoAztekSession(_StubAztek):
+        def load_storage_state(self, db, user):
+            return None
+
+    coordinator = SearchCoordinator(
+        test_database, test_settings, NoAztekSession())
+
+    async def raise_emit(_message):
+        raise RuntimeError('emit failed')
+
+    with pytest.raises(RuntimeError, match='emit failed'):
+        asyncio.run(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, raise_emit))
+    with coordinator.deletion_guard(workspace_id):
+        pass
+
+    async def cancel_scenario():
+        emit_entered = asyncio.Event()
+
+        async def wait_emit(_message):
+            emit_entered.set()
+            await asyncio.Future()
+
+        task = asyncio.create_task(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, wait_emit))
+        await emit_entered.wait()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_scenario())
+    with coordinator.deletion_guard(workspace_id):
+        pass
+
+
+def test_live_search_blocks_deletion_until_finalize_has_committed(
+    test_settings, test_database, member, monkeypatch
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+    expected_busy = getattr(workspace_module, 'WorkspaceBusy', RuntimeError)
+
+    async def scenario():
+        release = asyncio.Event()
+        monkeypatch.setattr(
+            search_runner.HeadlessFinder, 'run', _hold_then_find(release))
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'},
+            lambda _message: _noop())
+        with pytest.raises(expected_busy):
+            with coordinator.deletion_guard(workspace_id):
+                pass
+        release.set()
+        await _settle(coordinator, workspace_id)
+        with coordinator.deletion_guard(workspace_id):
+            pass
+
+    asyncio.run(scenario())
+    with test_database.session() as db:
+        job = db.scalar(select(Job).where(Job.workspace_id == workspace_id))
+        assert job.status == 'done'
+
+
+@pytest.mark.parametrize('failure_point', ['finder', 'scheduler'])
+def test_pre_live_failure_terminalizes_queued_job_and_releases_reservation(
+    test_settings, test_database, member, monkeypatch, failure_point
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+    expected_busy = getattr(workspace_module, 'WorkspaceBusy', RuntimeError)
+    original_terminalize = coordinator._fail_unstarted_job
+
+    def terminalize_while_reserved(job_id, error):
+        with pytest.raises(expected_busy):
+            with coordinator.deletion_guard(workspace_id):
+                pass
+        original_terminalize(job_id, error)
+
+    monkeypatch.setattr(
+        coordinator, '_fail_unstarted_job', terminalize_while_reserved)
+
+    if failure_point == 'finder':
+        def fail_finder(*_args, **_kwargs):
+            raise RuntimeError(
+                'finder construction failed secret-cookie-value')
+
+        monkeypatch.setattr(search_runner, 'HeadlessFinder', fail_finder)
+    else:
+        def fail_scheduler(coroutine):
+            coroutine.close()
+            raise RuntimeError(
+                'task scheduling failed secret-cookie-value')
+
+        monkeypatch.setattr(asyncio, 'ensure_future', fail_scheduler)
+
+    seen = []
+
+    async def emit(message):
+        seen.append(message)
+
+    started = asyncio.run(coordinator.start(
+        member.id, workspace_id,
+        {'game': 'CabalM SEA', 'web_mode': 'any'}, emit))
+
+    assert started is False
+    assert seen == [
+        {
+            'type': 'error', 'code': 'search_start_failed',
+            'msg': 'เริ่มการค้นหาไม่สำเร็จ',
+        },
+        {'type': 'done', 'count': 0, 'not_found': []},
+    ]
+    assert 'secret-cookie-value' not in json.dumps(seen, ensure_ascii=False)
+    assert coordinator.live(workspace_id) is None
+    with coordinator.deletion_guard(workspace_id):
+        pass
+    with test_database.session() as db:
+        job = db.scalar(select(Job).where(Job.workspace_id == workspace_id))
+        assert job.status == 'failed'
+        assert job.finished_at is not None
+        assert job.result['reason'] == 'search_start_failed'
+        assert 'secret-cookie-value' not in json.dumps(job.result)
+
+
+@pytest.mark.parametrize('failure_point', ['finder', 'scheduler'])
+def test_pre_live_failure_emit_preserves_websocket_disconnect_without_context(
+    test_settings, test_database, member, monkeypatch, failure_point
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+
+    if failure_point == 'finder':
+        def fail_finder(*_args, **_kwargs):
+            raise RuntimeError('finder failed secret-cookie-value')
+
+        monkeypatch.setattr(search_runner, 'HeadlessFinder', fail_finder)
+    else:
+        def fail_scheduler(coroutine):
+            coroutine.close()
+            raise RuntimeError('scheduler failed secret-cookie-value')
+
+        monkeypatch.setattr(asyncio, 'ensure_future', fail_scheduler)
+
+    async def disconnected_emit(_message):
+        raise WebSocketDisconnect(code=1001)
+
+    with pytest.raises(WebSocketDisconnect) as error:
+        asyncio.run(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, disconnected_emit))
+
+    assert error.value.code == 1001
+    assert error.value.__context__ is None
+    assert error.value.__cause__ is None
+    formatted = ''.join(traceback.format_exception(error.value))
+    assert 'secret-cookie-value' not in formatted
+    assert coordinator.live(workspace_id) is None
+    with coordinator.deletion_guard(workspace_id):
+        pass
+    with test_database.session() as db:
+        job = db.scalar(select(Job).where(Job.workspace_id == workspace_id))
+        assert job.status == 'failed'
+        assert job.result['reason'] == 'search_start_failed'
+        assert 'secret-cookie-value' not in json.dumps(job.result)
+
+
+@pytest.mark.parametrize('failure_point', ['finder', 'scheduler'])
+def test_pre_live_failure_keeps_reservation_through_sanitized_emit(
+    test_settings, test_database, member, monkeypatch, failure_point
+):
+    workspace_id = _searchable_workspace(member, test_database)
+    coordinator = _coordinator(test_settings, test_database)
+    expected_busy = getattr(workspace_module, 'WorkspaceBusy', RuntimeError)
+
+    if failure_point == 'finder':
+        def fail_finder(*_args, **_kwargs):
+            raise RuntimeError('finder failed secret-cookie-value')
+
+        monkeypatch.setattr(search_runner, 'HeadlessFinder', fail_finder)
+    else:
+        def fail_scheduler(coroutine):
+            coroutine.close()
+            raise RuntimeError('scheduler failed secret-cookie-value')
+
+        monkeypatch.setattr(asyncio, 'ensure_future', fail_scheduler)
+
+    first_seen = []
+    second_seen = []
+
+    async def scenario():
+        emit_entered = asyncio.Event()
+        release_emit = asyncio.Event()
+
+        async def paused_emit(message):
+            first_seen.append(message)
+            if message['type'] == 'error':
+                emit_entered.set()
+                await release_emit.wait()
+
+        async def second_emit(message):
+            second_seen.append(message)
+
+        first = asyncio.create_task(coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, paused_emit))
+        await emit_entered.wait()
+
+        second_started = await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any'}, second_emit)
+        assert second_started is False
+        assert second_seen == [
+            {
+                'type': 'error', 'code': 'workspace_busy',
+                'msg': 'workspace กำลังใช้งานอยู่',
+            },
+            {'type': 'done', 'count': 0, 'not_found': []},
+        ]
+        with pytest.raises(expected_busy):
+            with coordinator.deletion_guard(workspace_id):
+                pass
+
+        release_emit.set()
+        assert await first is False
+        with coordinator.deletion_guard(workspace_id):
+            pass
+
+    asyncio.run(scenario())
+
+    assert first_seen == [
+        {
+            'type': 'error', 'code': 'search_start_failed',
+            'msg': 'เริ่มการค้นหาไม่สำเร็จ',
+        },
+        {'type': 'done', 'count': 0, 'not_found': []},
+    ]
+    assert 'secret-cookie-value' not in json.dumps(
+        first_seen + second_seen, ensure_ascii=False)
+    with test_database.session() as db:
+        jobs = db.scalars(select(Job).where(
+            Job.workspace_id == workspace_id)).all()
+        assert len(jobs) == 1
+        assert jobs[0].status == 'failed'
 
 
 def test_stop_route_is_owner_checked(client, other_member, client_for, member,

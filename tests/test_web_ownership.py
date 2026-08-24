@@ -1,8 +1,15 @@
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
+from sqlalchemy import event, select
+from sqlalchemy.exc import OperationalError
 from starlette.websockets import WebSocketDisconnect
 
 from web import app as web_app
-from web.models import PendingImportRecord, WorkspaceRecord
+from web import workspaces as workspace_module
+from web.models import Job, PendingImportRecord, WorkspaceRecord
 from web.workspaces import PendingImportNotFound, WorkspaceNotFound, WorkspaceRepository
 
 
@@ -194,7 +201,7 @@ def test_pending_import_cannot_cross_users_or_attach_to_foreign_workspace(
         repo.apply_pending(member.id, pending.id, ['Selected'])
 
 
-def test_apply_pending_rolls_back_workspace_and_pending_if_delete_fails(
+def test_apply_pending_rolls_back_claim_if_workspace_update_fails(
     db_session, test_database, member, monkeypatch
 ):
     repo = WorkspaceRepository(db_session)
@@ -204,13 +211,11 @@ def test_apply_pending_rolls_back_workspace_and_pending_if_delete_fails(
     )
     db_session.commit()
 
-    def fail_pending_delete(model):
-        if model is PendingImportRecord:
-            raise RuntimeError('pending delete failed')
-        raise AssertionError(f'unexpected delete target: {model}')
+    def fail_workspace_update(*_args, **_kwargs):
+        raise RuntimeError('workspace update failed after claim')
 
-    monkeypatch.setattr('web.workspaces.delete', fail_pending_delete)
-    with pytest.raises(RuntimeError, match='pending delete failed'):
+    monkeypatch.setattr(repo, '_update_workspace', fail_workspace_update)
+    with pytest.raises(RuntimeError, match='workspace update failed after claim'):
         repo.apply_pending(member.id, pending.id, ['One'])
 
     with test_database.session() as fresh_session:
@@ -248,3 +253,317 @@ def test_two_pending_imports_persist_both_merges_across_fresh_sessions(
 
         assert [row['kind'] for row in persisted.criteria] == ['1', '2']
         assert [row['kind'] for row in persisted.occurrences] == ['1', '2']
+
+
+def _workspace_pending_snapshot(database, workspace_id, pending_id):
+    with database.session() as db:
+        workspace = db.get(WorkspaceRecord, workspace_id)
+        pending = db.get(PendingImportRecord, pending_id)
+        return (
+            None if workspace is None else (
+                list(workspace.criteria), list(workspace.occurrences),
+                list(workspace.skipped),
+            ),
+            None if pending is None else (
+                list(pending.sheets), list(pending.skipped),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    'selected_sheets,stored_sheets,exception_name',
+    [
+        ([], [('Plan', [{'kind': '1'}])], 'EmptySheetSelection'),
+        (['Plan', 'Plan'], [('Plan', [{'kind': '1'}])],
+         'DuplicateSheetSelection'),
+        (['Plan'], [('Plan', [{'kind': '1'}]), ('Plan', [{'kind': '2'}])],
+         'DuplicateSheetSelection'),
+        (['plan'], [('Plan', [{'kind': '1'}])], 'UnknownSheetSelection'),
+        (['Missing'], [('Plan', [{'kind': '1'}])], 'UnknownSheetSelection'),
+    ],
+)
+def test_apply_pending_rejects_invalid_exact_sheet_selection_without_mutation(
+    test_database, member, selected_sheets, stored_sheets, exception_name
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(
+            member.id, 'event', 'exact.xlsx', [{'kind': 'old'}])
+        workspace.occurrences = [{'kind': 'old'}]
+        workspace.skipped = ['existing']
+        pending = repository.add_pending(
+            member.id, workspace.id, stored_sheets, ['pending-skip'])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    before = _workspace_pending_snapshot(
+        test_database, workspace_id, pending_id)
+    expected_error = getattr(workspace_module, exception_name, ValueError)
+
+    with pytest.raises(expected_error):
+        with test_database.session() as db:
+            WorkspaceRepository(db).apply_pending(
+                member.id, pending_id, selected_sheets)
+
+    assert _workspace_pending_snapshot(
+        test_database, workspace_id, pending_id) == before
+
+
+def test_apply_pending_two_fresh_sessions_have_exactly_one_winner(
+    test_database, member
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(member.id, 'event', 'race.xlsx')
+        pending = repository.add_pending(
+            member.id, workspace.id,
+            [('Plan', [{'kind': '1', 'sources': ['A']}])], [])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    barrier = threading.Barrier(2)
+
+    def apply_once():
+        barrier.wait(timeout=5)
+        try:
+            with test_database.session() as db:
+                WorkspaceRepository(db).apply_pending(
+                    member.id, pending_id, ['Plan'])
+            return 'success'
+        except PendingImportNotFound:
+            return 'not_found'
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda _index: apply_once(), range(2)))
+
+    assert sorted(outcomes) == ['not_found', 'success']
+    with test_database.session() as db:
+        workspace = db.get(WorkspaceRecord, workspace_id)
+        assert [row['kind'] for row in workspace.criteria] == ['1']
+        assert db.get(PendingImportRecord, pending_id) is None
+
+
+def test_apply_pending_exhausted_real_sqlite_lock_maps_to_workspace_busy(
+    test_database, member
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(member.id, 'event', 'busy.xlsx')
+        pending = repository.add_pending(
+            member.id, workspace.id, [('Plan', [{'kind': '1'}])], [])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    contender = test_database._session_factory()
+    contender.connection().exec_driver_sql('PRAGMA busy_timeout=10')
+    contender.rollback()
+    locker = test_database.engine.connect()
+    locker.exec_driver_sql('BEGIN IMMEDIATE')
+    expected_error = getattr(workspace_module, 'WorkspaceBusy', RuntimeError)
+    try:
+        with pytest.raises(expected_error):
+            WorkspaceRepository(contender).apply_pending(
+                member.id, pending_id, ['Plan'])
+    finally:
+        contender.rollback()
+        contender.close()
+        locker.rollback()
+        locker.close()
+
+    workspace_snapshot, pending_snapshot = _workspace_pending_snapshot(
+        test_database, workspace_id, pending_id)
+    assert workspace_snapshot[0] == []
+    assert pending_snapshot is not None
+
+
+def test_apply_pending_reraises_unrelated_operational_error_after_rollback(
+    test_database, member, monkeypatch
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(member.id, 'event', 'unrelated.xlsx')
+        pending = repository.add_pending(
+            member.id, workspace.id, [('Plan', [{'kind': '1'}])], [])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    original_execute = workspace_module.Session.execute
+
+    def raise_unrelated(session, statement, *args, **kwargs):
+        if getattr(statement, 'is_delete', False):
+            raise OperationalError(
+                'DELETE pending_imports', {},
+                sqlite3.OperationalError('unrelated operational failure'))
+        return original_execute(session, statement, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_module.Session, 'execute', raise_unrelated)
+    with pytest.raises(OperationalError, match='unrelated operational failure'):
+        with test_database.session() as db:
+            WorkspaceRepository(db).apply_pending(
+                member.id, pending_id, ['Plan'])
+
+    workspace_snapshot, pending_snapshot = _workspace_pending_snapshot(
+        test_database, workspace_id, pending_id)
+    assert workspace_snapshot[0] == []
+    assert pending_snapshot is not None
+
+
+def test_workspace_delete_uses_database_cascade_and_set_null_with_loaded_children(
+    test_database, member
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(member.id, 'event', 'history.xlsx')
+        pending = repository.add_pending(
+            member.id, workspace.id, [('Plan', [{'kind': '1'}])], [])
+        job = Job(
+            owner_user_id=member.id, workspace_id=workspace.id,
+            tool='item_finder', status='done', config={})
+        db.add(job)
+        db.flush()
+        pending_id = pending.id
+        job_id = job.id
+        workspace_id = workspace.id
+
+    with test_database.session() as db:
+        workspace = db.get(WorkspaceRecord, workspace_id)
+        assert [row.id for row in workspace.pending_imports] == [pending_id]
+        assert [row.id for row in workspace.jobs] == [job_id]
+        WorkspaceRepository(db).delete_owned(member.id, workspace_id)
+
+    with test_database.session() as db:
+        assert db.get(WorkspaceRecord, workspace_id) is None
+        assert db.get(PendingImportRecord, pending_id) is None
+        db.expire_all()
+        surviving_job = db.get(Job, job_id)
+        assert surviving_job is not None
+        assert surviving_job.workspace_id is None
+
+
+@pytest.mark.parametrize('status', ['queued', 'running'])
+def test_workspace_delete_route_refuses_any_active_job_for_workspace(
+    client, test_database, member, other_member, status
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', f'{status}.xlsx')
+        workspace_id = workspace.id
+        db.add(Job(
+            owner_user_id=other_member.id,
+            workspace_id=workspace_id,
+            tool='item_finder', status=status, config={},
+        ))
+
+    response = client.delete(f'/api/workspaces/{workspace_id}')
+
+    assert response.status_code == 409
+    assert response.json() == {'detail': 'workspace_busy'}
+    with test_database.session() as db:
+        assert db.get(WorkspaceRecord, workspace_id) is not None
+
+
+def test_workspace_delete_route_allows_terminal_jobs_and_preserves_history(
+    client, test_database, member
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', 'terminal.xlsx')
+        workspace_id = workspace.id
+        jobs = [
+            Job(owner_user_id=member.id, workspace_id=workspace_id,
+                tool='item_finder', status=status, config={})
+            for status in ('done', 'failed', 'cancelled')
+        ]
+        db.add_all(jobs)
+        db.flush()
+        job_ids = [job.id for job in jobs]
+
+    assert client.delete(f'/api/workspaces/{workspace_id}').status_code == 204
+    with test_database.session() as db:
+        assert db.get(WorkspaceRecord, workspace_id) is None
+        assert [db.get(Job, job_id).workspace_id for job_id in job_ids] == [
+            None, None, None]
+
+
+def test_cross_owner_delete_returns_404_before_coordinator_guard(
+    client_for, application, test_database, member, other_member, monkeypatch
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', 'private.xlsx')
+        workspace_id = workspace.id
+
+    def forbidden_guard(_workspace_id):
+        raise AssertionError('coordinator state consulted before owner check')
+
+    monkeypatch.setattr(
+        application.state.search_coordinator, 'deletion_guard', forbidden_guard,
+        raising=False)
+
+    response = client_for(other_member).delete(
+        f'/api/workspaces/{workspace_id}')
+    assert response.status_code == 404
+
+
+def test_apply_route_maps_exact_selection_errors_without_mutation(
+    client, test_database, member
+):
+    cases = [
+        ([], 'กรุณาเลือกอย่างน้อย 1 sheet'),
+        (['Plan', 'Plan'], 'เลือก sheet ซ้ำกัน'),
+        (['plan'], 'ไม่พบ sheet ที่เลือก'),
+        (['Missing'], 'ไม่พบ sheet ที่เลือก'),
+    ]
+    for selected, detail in cases:
+        with test_database.session() as db:
+            repository = WorkspaceRepository(db)
+            workspace = repository.create(member.id, 'event', 'route.xlsx')
+            pending = repository.add_pending(
+                member.id, workspace.id, [('Plan', [{'kind': '1'}])], [])
+            workspace_id = workspace.id
+            pending_id = pending.id
+
+        response = client.post('/api/import-plan/apply', json={
+            'pending_id': pending_id, 'selected_sheets': selected,
+        })
+        assert response.status_code == 400
+        assert response.json() == {'detail': detail}
+        workspace_snapshot, pending_snapshot = _workspace_pending_snapshot(
+            test_database, workspace_id, pending_id)
+        assert workspace_snapshot[0] == []
+        assert pending_snapshot is not None
+
+
+def test_apply_route_real_commit_busy_returns_409_and_restores_both_rows(
+    client, test_database, member
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(member.id, 'event', 'commit-busy.xlsx')
+        pending = repository.add_pending(
+            member.id, workspace.id, [('Plan', [{'kind': '1'}])], [])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    def short_busy_timeout(dbapi_connection, _connection_record, _proxy):
+        dbapi_connection.execute('PRAGMA busy_timeout=20')
+
+    event.listen(test_database.engine, 'checkout', short_busy_timeout)
+    reader = test_database.engine.connect()
+    reader.exec_driver_sql('BEGIN')
+    reader.exec_driver_sql('SELECT id FROM workspaces').all()
+    try:
+        response = client.post('/api/import-plan/apply', json={
+            'pending_id': pending_id, 'selected_sheets': ['Plan'],
+        })
+    finally:
+        reader.rollback()
+        reader.close()
+        event.remove(test_database.engine, 'checkout', short_busy_timeout)
+
+    assert response.status_code == 409
+    assert response.json() == {'detail': 'workspace_busy'}
+    workspace_snapshot, pending_snapshot = _workspace_pending_snapshot(
+        test_database, workspace_id, pending_id)
+    assert workspace_snapshot[0] == []
+    assert pending_snapshot is not None

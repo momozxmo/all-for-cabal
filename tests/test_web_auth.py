@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from web import app as web_app
+from web import auth_service as auth_service_module
 from web.auth_service import AuthService
 from web.models import AuditLog, User
 
@@ -184,6 +185,58 @@ def test_login_uses_one_generic_failure_for_unknown_wrong_and_disabled(
         {'detail': AUTH_FAILURE_MESSAGE},
         {'detail': AUTH_FAILURE_MESSAGE},
     ]
+
+
+def test_authenticate_verifies_once_without_disclosing_account_state(
+    test_settings, test_database, monkeypatch
+):
+    application = web_app.create_app(test_settings, test_database)
+    service = application.state.auth_service
+    active = _create_user(application, test_database)
+    disabled = _create_user(application, test_database, 'disabled.user')
+    with test_database.session() as db:
+        db.get(User, disabled.id).is_active = False
+        active_hash = db.get(User, active.id).password_hash
+
+    calls = []
+
+    def recording_verifier(candidate, password_hash):
+        calls.append((candidate, password_hash))
+        return candidate == 'correct horse' and password_hash == active_hash
+
+    monkeypatch.setattr(auth_service_module, 'verify_password', recording_verifier)
+
+    with test_database.session() as db:
+        persisted_active = db.get(User, active.id)
+        assert persisted_active.last_login_at is None
+        successful_attempt = service.authenticate(
+            db, 'member.user', 'correct horse'
+        )
+        successful_login_at = persisted_active.last_login_at
+        failed_attempts = [
+            service.authenticate(db, 'member.user', 'wrong password'),
+            service.authenticate(db, 'unknown.user', 'correct horse'),
+            service.authenticate(db, 'not valid!', 'correct horse'),
+            service.authenticate(db, 'disabled.user', 'correct horse'),
+            service.authenticate(db, 'member.user', None),
+        ]
+
+    assert successful_attempt.id == active.id
+    assert failed_attempts == [None, None, None, None, None]
+    assert successful_login_at is not None
+    assert len(calls) == 6
+    assert calls[:2] == [
+        ('correct horse', active_hash),
+        ('wrong password', active_hash),
+    ]
+    assert [candidate for candidate, _password_hash in calls[2:]] == [
+        '', '', '', '',
+    ]
+    dummy_hashes = [password_hash for _candidate, password_hash in calls[2:]]
+    assert all(password_hash == dummy_hashes[0] for password_hash in dummy_hashes)
+    assert dummy_hashes[0] != active_hash
+    with test_database.session() as db:
+        assert db.get(User, active.id).last_login_at == successful_login_at
 
 
 def test_login_cookie_is_secure_when_settings_require_it(test_settings, test_database):

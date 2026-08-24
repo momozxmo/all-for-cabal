@@ -23,6 +23,47 @@ function log(message, level = 'INFO') {
   $('log').appendChild(line); $('log').scrollTop = $('log').scrollHeight;
 }
 
+const NOTICE_ICONS = Object.freeze({
+  progress: '⏳', success: '✓', warning: '⚠', error: '✕', info: 'ℹ',
+});
+
+/** Show one plain-language result beside the action that caused it. */
+function showNotice(target, tone, title, detail = '', nextStep = '') {
+  const notice = typeof target === 'string' ? $(target) : target;
+  if (!notice) return;
+  const state = Object.hasOwn(NOTICE_ICONS, tone) ? tone : 'info';
+  notice.className = `notice notice-${state}`;
+  notice.hidden = false;
+  notice.setAttribute('role', state === 'error' ? 'alert' : 'status');
+  notice.setAttribute('aria-live', state === 'error' ? 'assertive' : 'polite');
+  notice.tabIndex = -1;
+
+  const head = document.createElement('span'); head.className = 'notice-head';
+  const icon = document.createElement('span'); icon.className = 'notice-icon';
+  icon.setAttribute('aria-hidden', 'true'); icon.textContent = NOTICE_ICONS[state];
+  const heading = document.createElement('span'); heading.className = 'notice-title';
+  heading.textContent = String(title || 'แจ้งให้ทราบ');
+  head.append(icon, heading);
+  notice.replaceChildren(head);
+
+  if (detail) {
+    const body = document.createElement('span'); body.className = 'notice-detail';
+    body.textContent = String(detail); notice.appendChild(body);
+  }
+  if (nextStep) {
+    const next = document.createElement('span'); next.className = 'notice-next';
+    next.textContent = `ทำต่อ: ${nextStep}`; notice.appendChild(next);
+  }
+  if (state === 'error') notice.focus({preventScroll: false});
+}
+
+function clearNotice(target) {
+  const notice = typeof target === 'string' ? $(target) : target;
+  if (!notice) return;
+  notice.hidden = true;
+  notice.replaceChildren();
+}
+
 function paintAztek(status) {
   const badge = $('aztekStatus');
   if (status === 'active') { badge.textContent = 'Aztek: เชื่อมแล้ว'; badge.style.background = '#163b31'; badge.style.color = '#69e0b5'; }

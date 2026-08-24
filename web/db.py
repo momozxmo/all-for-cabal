@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from web.settings import Settings
 
 
+SQLITE_BUSY_TIMEOUT_MS = 250
+
+
 class Database:
     def __init__(self, settings: Settings) -> None:
         connect_args = {}
@@ -34,6 +37,7 @@ class Database:
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute('PRAGMA foreign_keys=ON')
+            cursor.execute(f'PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}')
         finally:
             cursor.close()
 

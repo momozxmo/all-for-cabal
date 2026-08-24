@@ -5,9 +5,28 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterator
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Module collection constructs ``web.app.app``. Keep that construction explicit
+# and independent of any developer shell or gitignored .env file.
+os.environ.update({
+    'APP_ENV': 'development',
+    'DATABASE_URL': 'sqlite:///:memory:',
+    'APP_SECRET_KEY': 'test-collection-signing-secret-000000000000',
+    'AZTEK_SESSION_ENCRYPTION_KEY': base64.urlsafe_b64encode(
+        b'c' * 32
+    ).decode('ascii'),
+    'BOOTSTRAP_ADMIN_USERNAME': '',
+    'BOOTSTRAP_ADMIN_PASSWORD': '',
+    'SESSION_COOKIE_SECURE': 'false',
+    'BROWSER_CONCURRENCY': '1',
+    'LOCAL_DESKTOP_MODE': 'false',
+    'LOCAL_RUNTIME_DIR': '',
+    'LOCAL_LAUNCHER_SECRET': '',
+})
 
 from web import app as web_app
 from web import settings as settings_module
@@ -32,33 +51,33 @@ def ignore_local_env_file(monkeypatch):
 
 
 @pytest.fixture
-def test_settings() -> Iterator[Settings]:
-    # Own temp dir — pytest's tmp_path base can hit Windows scandir permission errors.
-    tmpdir = tempfile.mkdtemp(prefix='afc_test_')
-    db_url = 'sqlite:///%s' % os.path.join(tmpdir, 'test.db').replace('\\', '/')
-    try:
-        yield Settings(
-            app_env='test',
-            database_url=db_url,
-            app_secret_key='test-secret',
-            aztek_encryption_key=base64.urlsafe_b64encode(b'k' * 32).decode('ascii'),
-            bootstrap_admin_username='admin',
-            bootstrap_admin_password='bootstrap-password',
-            session_cookie_secure=False,
-        )
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+def test_settings() -> Settings:
+    return Settings(
+        app_env='test',
+        # This URL also keeps tests that switch only ``app_env`` to production
+        # valid; ``test_database`` injects the isolated SQLite database that the
+        # suite actually uses.
+        database_url='postgresql://test:test@localhost/test',
+        app_secret_key='test-signing-secret-with-at-least-32-chars',
+        aztek_encryption_key=base64.urlsafe_b64encode(b'k' * 32).decode('ascii'),
+        bootstrap_admin_username='admin',
+        bootstrap_admin_password='bootstrap-password',
+        session_cookie_secure=False,
+    )
 
 
 @pytest.fixture
 def test_database(test_settings) -> Iterator[Database]:
-    database = Database(test_settings)
+    tmpdir = tempfile.mkdtemp(prefix='afc_test_db_')
+    db_url = 'sqlite:///%s' % os.path.join(tmpdir, 'test.db').replace('\\', '/')
+    database = Database(replace(test_settings, database_url=db_url))
     Base.metadata.create_all(database.engine)
     try:
         yield database
     finally:
         Base.metadata.drop_all(database.engine)
         database.engine.dispose()
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @pytest.fixture

@@ -1,10 +1,13 @@
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
+from web import app as web_app
 from web.audit import write_audit
-from web.models import AuditLog
+from web.models import AuditLog, PendingImportRecord, WorkspaceRecord
 from web.workspaces import WorkspaceRepository
 
 
@@ -94,6 +97,56 @@ def test_write_audit_uses_the_callers_transaction(db_session):
     assert _audit_rows(db_session) == []
 
 
+def test_password_change_audits_one_sanitized_success_only(
+    client, client_for, member, test_database
+):
+    current_password = 'correct horse'
+    new_password = 'new password for audit'
+    changed = client.post('/api/auth/change-password', json={
+        'current_password': current_password,
+        'new_password': new_password,
+    })
+
+    assert changed.status_code == 204
+    with test_database.session() as db:
+        rows = db.scalars(select(AuditLog).where(
+            AuditLog.action == 'auth.password_changed'
+        )).all()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.status == 'success'
+    assert row.user_id == member.id
+    assert row.resource_type == 'user'
+    assert row.resource_id == member.id
+    assert row.summary == '{}'
+    stored_values = '\n'.join(
+        str(getattr(row, column.name) or '')
+        for column in AuditLog.__table__.columns
+    )
+    assert current_password not in stored_values
+    assert new_password not in stored_values
+
+    authenticated_client = client_for(member)
+    rejected = authenticated_client.post('/api/auth/change-password', json={
+        'current_password': 'wrong current password',
+        'new_password': 'another private password',
+    })
+    short_new_password = authenticated_client.post('/api/auth/change-password', json={
+        'current_password': new_password,
+        'new_password': 'short',
+    })
+
+    assert rejected.status_code == 400
+    assert short_new_password.status_code == 400
+    with test_database.session() as db:
+        successes = db.scalars(select(AuditLog).where(
+            AuditLog.action == 'auth.password_changed',
+            AuditLog.status == 'success',
+        )).all()
+    assert len(successes) == 1
+
+
 def test_workspace_import_export_and_bundle_actions_are_audited(
     client, member, test_database, monkeypatch
 ):
@@ -152,3 +205,114 @@ def test_workspace_import_export_and_bundle_actions_are_audited(
         'workspace.exported_xlsx',
         'bundle.previewed',
     } <= actions
+
+
+def test_apply_audit_failure_after_claim_restores_workspace_and_pending(
+    client, member, test_database, monkeypatch
+):
+    with test_database.session() as db:
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(
+            member.id, 'event', 'audit-rollback.xlsx', [{'kind': 'old'}])
+        pending = repository.add_pending(
+            member.id, workspace.id,
+            [('Plan', [{'kind': 'new', 'sources': ['A']}])], [])
+        workspace_id = workspace.id
+        pending_id = pending.id
+
+    original_write_audit = web_app.write_audit
+
+    def fail_plan_audit(*args, **kwargs):
+        if kwargs.get('action') == 'plan.applied':
+            raise RuntimeError('plan audit failed')
+        return original_write_audit(*args, **kwargs)
+
+    monkeypatch.setattr(web_app, 'write_audit', fail_plan_audit)
+    with pytest.raises(RuntimeError, match='plan audit failed'):
+        client.post('/api/import-plan/apply', json={
+            'pending_id': pending_id, 'selected_sheets': ['Plan'],
+        })
+
+    with test_database.session() as db:
+        unchanged = db.get(WorkspaceRecord, workspace_id)
+        assert unchanged.criteria == [{'kind': 'old'}]
+        assert db.get(PendingImportRecord, pending_id) is not None
+        assert db.scalar(select(AuditLog).where(
+            AuditLog.action == 'plan.applied')) is None
+
+
+def test_workspace_delete_commits_workspace_and_audit_inside_guard(
+    client, application, member, test_database, monkeypatch
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', 'guard-commit.xlsx')
+        workspace_id = workspace.id
+
+    checkpoints = []
+
+    @contextmanager
+    def checking_guard(requested_workspace_id):
+        assert requested_workspace_id == workspace_id
+        checkpoints.append('entered')
+        yield
+        with test_database.session() as db:
+            assert db.get(WorkspaceRecord, workspace_id) is None
+            audit = db.scalar(select(AuditLog).where(
+                AuditLog.action == 'workspace.deleted',
+                AuditLog.resource_id == workspace_id,
+            ))
+            assert audit is not None
+        checkpoints.append('committed-before-exit')
+
+    monkeypatch.setattr(
+        application.state.search_coordinator, 'deletion_guard', checking_guard,
+        raising=False)
+
+    response = client.delete(f'/api/workspaces/{workspace_id}')
+
+    assert response.status_code == 204
+    assert checkpoints == ['entered', 'committed-before-exit']
+
+
+def test_workspace_delete_audit_failure_rolls_back_inside_guard(
+    client, application, member, test_database, monkeypatch
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', 'guard-rollback.xlsx')
+        workspace_id = workspace.id
+
+    checkpoints = []
+
+    @contextmanager
+    def checking_guard(requested_workspace_id):
+        assert requested_workspace_id == workspace_id
+        checkpoints.append('entered')
+        try:
+            yield
+        finally:
+            with test_database.session() as db:
+                assert db.get(WorkspaceRecord, workspace_id) is not None
+                assert db.scalar(select(AuditLog).where(
+                    AuditLog.action == 'workspace.deleted',
+                    AuditLog.resource_id == workspace_id,
+                )) is None
+            checkpoints.append('rolled-back-before-exit')
+
+    original_write_audit = web_app.write_audit
+
+    def fail_delete_audit(*args, **kwargs):
+        if kwargs.get('action') == 'workspace.deleted':
+            raise RuntimeError('delete audit failed')
+        return original_write_audit(*args, **kwargs)
+
+    monkeypatch.setattr(
+        application.state.search_coordinator, 'deletion_guard', checking_guard,
+        raising=False)
+    monkeypatch.setattr(web_app, 'write_audit', fail_delete_audit)
+
+    with pytest.raises(RuntimeError, match='delete audit failed'):
+        client.delete(f'/api/workspaces/{workspace_id}')
+
+    assert checkpoints == ['entered', 'rolled-back-before-exit']

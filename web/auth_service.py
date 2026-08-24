@@ -14,6 +14,7 @@ from web.settings import Settings
 
 _USERNAME_PATTERN = re.compile(r'[a-z0-9._-]{3,80}', re.ASCII)
 _ALLOWED_ROLES = {'admin', 'member'}
+_DUMMY_PASSWORD_HASH = hash_password('not-a-real-password')
 
 
 def _normalize_username(username: str) -> str:
@@ -59,23 +60,26 @@ class AuthService:
         try:
             normalized_username = _normalize_username(username)
         except ValueError:
-            return None
-        if not isinstance(password, str):
-            return None
+            normalized_username = None
 
-        user = db.scalar(
-            select(User).where(User.username == normalized_username)
+        user = (
+            db.scalar(select(User).where(User.username == normalized_username))
+            if normalized_username is not None else None
         )
-        if (
-            user is None
-            or not user.is_active
-            or not verify_password(password, user.password_hash)
-        ):
+        active_user = user if user is not None and user.is_active else None
+        use_real_password_hash = active_user is not None and isinstance(password, str)
+        password_candidate = password if use_real_password_hash else ''
+        password_hash = (
+            active_user.password_hash
+            if use_real_password_hash else _DUMMY_PASSWORD_HASH
+        )
+        verified = verify_password(password_candidate, password_hash)
+        if active_user is None or not verified:
             return None
 
-        user.last_login_at = utc_now()
+        active_user.last_login_at = utc_now()
         db.flush()
-        return user
+        return active_user
 
     def create_session(self, db: Session, user: User) -> str:
         if not user.is_active:

@@ -165,7 +165,7 @@
           <button id="btnCreateOne" class="warn" disabled title="กด “เปิดหน้าเว็บดูก่อน” ตรวจฟอร์มก่อน">🚀 สร้างจริง (อันที่เลือก)</button>
           <button id="btnCreateAll" class="warn" disabled>⚡ สร้างทุกอันในคิว (0)</button>
         </div>
-        <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
+        <div id="runMsg" class="notice" role="status" aria-live="polite" hidden></div>
         <div id="results"></div>
         <div id="shot" style="margin-top:10px"></div>
       </div>
@@ -311,7 +311,7 @@ $('btnQueueDel').onclick = () => { if (!queue.current()) return; queue.removeAct
 $('btnQueueClear').onclick = () => {
   if (!queue.items.length) return;
   if (!confirm(`ล้างคิวทั้งหมด ${queue.items.length} รายการ? (ที่แก้ไว้จะหายหมด)`)) return;
-  queue.clear(); $('results').replaceChildren(); $('runMsg').textContent = ''; select('');
+  queue.clear(); $('results').replaceChildren(); clearNotice('runMsg'); select('');
 };
 
 // ---- ชุดรางวัล ----
@@ -419,7 +419,7 @@ $('planFile').onchange = async event => {
   $('planFile').value = '';
   if (!file) return;
   $('btnImport').disabled = true;
-  $('runMsg').textContent = 'กำลังอ่านไฟล์…';
+  showNotice('runMsg', 'progress', 'กำลังอ่านไฟล์ Event', file.name);
   try {
     const form = new FormData();
     form.append('file', file);
@@ -428,19 +428,18 @@ $('planFile').onchange = async event => {
       '/api/events/import', {method: 'POST', body: form});
     const data = await response.json();
     if (!response.ok) {
-      $('runMsg').textContent = data.detail || 'อ่านไฟล์ไม่สำเร็จ';
+      showNotice('runMsg', 'error', 'อ่านไฟล์ Event ไม่สำเร็จ', data.detail || 'รูปแบบไฟล์ไม่ถูกต้อง', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
       return;
     }
     imported = data.events || [];
     if (!imported.length) {
-      $('runMsg').textContent = 'ไฟล์นี้ไม่มีแท็บ Event ที่อ่านได้';
+      showNotice('runMsg', 'warning', 'ไม่พบ Event ในไฟล์', 'ไม่มี Sheet Event ที่อ่านได้', 'เลือกไฟล์หรือ Sheet อื่น');
       return;
     }
-    $('runMsg').textContent =
-      `อ่านได้ ${imported.length} Event จาก ${(data.sheets || []).length} แท็บ`;
+    showNotice('runMsg', 'success', `อ่านได้ ${imported.length} Event`, `พบจาก ${(data.sheets || []).length} Sheet`, 'เลือก Sheet ที่ต้องการนำเข้าคิว');
     showSheets(data.sheets || []);
   } catch (e) {
-    $('runMsg').textContent = 'อ่านไฟล์ไม่สำเร็จ';
+    showNotice('runMsg', 'error', 'อ่านไฟล์ Event ไม่สำเร็จ', e.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
   } finally {
     $('btnImport').disabled = false;
   }
@@ -606,31 +605,32 @@ async function run(entries, doSave) {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({game: $('game').value, events: entries.map(jobFrom), do_save: doSave})});
     const data = await response.json();
-    if (!response.ok) { $('runMsg').textContent = data.detail || 'ทำรายการไม่สำเร็จ'; return null; }
+    if (!response.ok) { showNotice('runMsg', 'error', doSave ? 'สร้าง Event ไม่สำเร็จ' : 'เปิดตรวจ Event ไม่สำเร็จ', data.detail || 'Aztek ไม่รับข้อมูล', 'แก้ข้อมูลที่ระบุแล้วลองอีกครั้ง'); return null; }
     (data.logs || []).forEach(line => log('[event] ' + line.msg, line.level));
     showShot(data.screenshot_b64);
     return data;
-  } catch (e) { $('runMsg').textContent = 'เชื่อมต่อไม่สำเร็จ'; return null; }
+  } catch (e) { showNotice('runMsg', 'error', 'เชื่อมต่อ Aztek ไม่สำเร็จ', e.message || 'ไม่สามารถเปิดหน้าเว็บได้', 'ตรวจการเชื่อมต่อ Aztek แล้วลองอีกครั้ง'); return null; }
   finally { renderQueue(); }
 }
 
 $('btnPreview').onclick = async () => {
   const entry = queue.current(); if (!entry) return;
-  $('runMsg').textContent = 'กำลังเปิดหน้าเว็บและกรอกฟอร์ม…'; $('results').replaceChildren();
+  showNotice('runMsg', 'progress', 'กำลังเปิด Event เพื่อตรวจสอบ', `กำลังกรอกข้อมูลของ “${entry.name_th || entry.name_en || entry.name}” บน Aztek`); $('results').replaceChildren();
   const data = await run([entry], false); if (!data) return;
   const row = (data.results || [])[0] || {};
   const missing = row.missing || [];
-  $('runMsg').textContent = missing.length
-    ? `⚠️ กรอกแล้วแต่ยังไม่ครบ: ${missing.join(', ')} — แก้แล้วดูใหม่อีกที`
-    : '✓ กรอกฟอร์มครบแล้ว · ' + (row.kept_open
-        ? 'หน้าต่าง Chrome เปิดค้างไว้ให้ตรวจ — ตรวจแล้วกด “สร้างจริง”'
-        : 'ยังไม่กดสร้าง — ตรวจแล้วกด “สร้างจริง”');
+  if (missing.length) {
+    showNotice('runMsg', 'warning', 'กรอก Event แล้วยังไม่ครบ', missing.join(', '), 'แก้ช่องที่ระบุแล้วกด “เปิดเว็บดู” อีกครั้ง');
+  } else {
+    showNotice('runMsg', 'success', 'กรอก Event ครบแล้ว', row.name || entry.name_th || entry.name_en || '',
+      row.kept_open ? 'ตรวจในหน้าต่าง Chrome แล้วกด “สร้างจริง”' : 'ตรวจข้อมูลแล้วกด “สร้างจริง”');
+  }
   $('btnCreateOne').disabled = missing.length > 0;
 };
 
 async function createThese(entries) {
   if (!confirm(`สร้างจริงบน Aztek ${entries.length} Event ใช่ไหม?\n\nกดแล้วสร้างทีละอันจนครบ ย้อนกลับเองไม่ได้`)) return;
-  $('runMsg').textContent = `กำลังสร้าง ${entries.length} รายการ…`;
+  showNotice('runMsg', 'progress', `กำลังสร้าง ${entries.length} Event`, 'ระบบกำลังสร้างทีละรายการบน Aztek');
   $('results').replaceChildren();
   const data = await run(entries, true); if (!data) return;
   renderResults(data.results || []);
@@ -638,9 +638,15 @@ async function createThese(entries) {
   queue.items = queue.items.filter(entry => !made.has(entry.slug));
   queue.active = queue.items.length ? queue.items[0].key : '';
   select(queue.active);
-  $('runMsg').textContent = data.created === data.planned
-    ? `✅ สร้างครบ ${data.created}/${data.planned} — เลขอยู่ในตารางด้านล่าง`
-    : `⚠️ สร้างได้ ${data.created}/${data.planned} — ที่ไม่ผ่านยังอยู่ในคิว`;
+  if (data.created === data.planned) {
+    showNotice('runMsg', 'success', `สร้างครบ ${data.created}/${data.planned} Event`, 'เลข Event อยู่ในตารางด้านล่าง');
+  } else {
+    const failed = (data.results || []).find(row => !row.saved) || {};
+    const reason = failed.error || (failed.missing || []).join(', ') || 'สร้างไม่สำเร็จ';
+    showNotice('runMsg', 'warning', `สร้างได้ ${data.created}/${data.planned} Event`,
+      failed.name ? `${failed.name}: ${reason}` : reason,
+      'แก้รายการที่ไม่ผ่านในคิว แล้วลองสร้างอีกครั้ง');
+  }
 }
 $('btnCreateOne').onclick = () => { const entry = queue.current(); return entry ? createThese([entry]) : null; };
 $('btnCreateAll').onclick = () => queue.items.length ? createThese(queue.items.slice()) : null;

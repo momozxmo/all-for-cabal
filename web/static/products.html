@@ -257,7 +257,7 @@
           <button id="btnCreateOne" class="success" type="button" disabled>🚀 สร้างจริง (อันที่เลือก)</button>
           <button id="btnCreateAll" class="warn" type="button" disabled>⚡ สร้างทุกอันในคิว (0)</button>
         </div>
-        <p id="runMsg" class="hint" role="status" aria-live="polite"></p>
+        <div id="runMsg" class="notice" role="status" aria-live="polite" hidden></div>
         <div id="productResults"></div>
       </div>
     </section>
@@ -1068,14 +1068,14 @@ async function importPlanFile(file) {
   form.append('file', file);
   form.append('mode', 'shop');
   form.append('workspace_id', activeWorkspaceId || '');
-  $('runMsg').textContent = 'กำลังอ่านไฟล์แผน…';
+  showNotice('runMsg', 'progress', 'กำลังอ่านไฟล์ Product', file.name);
   const response = await apiFetch('/api/import-plan', {
     method: 'POST', body: form,
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || 'Import ไฟล์แผนไม่สำเร็จ');
   openProductSheetPicker(data);
-  $('runMsg').textContent = `พบ ${(data.sheets || []).length} Sheet — เลือก Sheet ที่ต้องการ`;
+  showNotice('runMsg', 'success', `พบ ${(data.sheets || []).length} Sheet`, 'อ่านไฟล์ Product แล้ว', 'เลือก Sheet ที่ต้องการนำเข้าคิว');
 }
 
 async function applySelectedSheets() {
@@ -1083,7 +1083,7 @@ async function applySelectedSheets() {
   const selected = [...$('sheetList').querySelectorAll('input:checked')]
     .map(box => box.value);
   if (!selected.length) {
-    $('runMsg').textContent = 'กรุณาเลือกอย่างน้อย 1 Sheet';
+    showNotice('runMsg', 'warning', 'ยังนำเข้า Product ไม่ได้', 'ยังไม่ได้เลือก Sheet', 'เลือกอย่างน้อย 1 Sheet แล้วกดนำเข้า');
     return;
   }
   const response = await apiFetch('/api/import-plan/apply', {
@@ -1100,8 +1100,7 @@ async function applySelectedSheets() {
     || pendingProductImport.workspace_id;
   if ($('sheetDialog').open) $('sheetDialog').close();
   await loadWorkspaceProducts(workspaceId);
-  $('runMsg').textContent =
-    `นำเข้า ${selected.length} Sheet แล้ว — ตรวจ Product ก่อนส่ง`;
+  showNotice('runMsg', 'success', `นำเข้า ${selected.length} Sheet แล้ว`, 'Product ถูกเพิ่มเข้าคิวเรียบร้อย', 'ตรวจข้อมูลแต่ละ Product ก่อนเปิดเว็บดู');
 }
 
 function applyBundleHandoff(payload) {
@@ -1369,12 +1368,12 @@ async function runPreviewProduct() {
     ? (productEditRevisions.get(entry.key) || 0) : 0;
   const problem = runnableError(entry ? [entry] : []);
   if (problem) {
-    $('runMsg').textContent = problem;
+    showNotice('runMsg', 'error', 'ยังเปิดตรวจ Product ไม่ได้', problem, 'แก้ข้อมูลที่ระบุแล้วลองอีกครั้ง');
     return;
   }
   productRunBusy = true;
   paintRunActions();
-  $('runMsg').textContent = 'กำลังเปิดหน้า Product และกรอกข้อมูลเพื่อตรวจสอบ…';
+  showNotice('runMsg', 'progress', 'กำลังเปิด Product เพื่อตรวจสอบ', `กำลังกรอกข้อมูลของ “${entry.name_th || entry.name_en || 'Product'}” บน Aztek`);
   try {
     const data = await responseData(
       await submitProducts([entry], false));
@@ -1389,16 +1388,19 @@ async function runPreviewProduct() {
       previewedProductKeys.delete(entry.key);
     }
     paintRunActions();
-    $('runMsg').textContent = data.results?.[0]?.missing?.length
-      ? 'กรอกแล้ว แต่ยังมีช่องที่ต้องตรวจ'
-      : 'กรอก Product แล้ว — ยังไม่ได้กดสร้าง';
+    const missing = data.results?.[0]?.missing || [];
+    if (missing.length) {
+      showNotice('runMsg', 'warning', 'กรอก Product แล้วยังไม่ครบ', missing.join(', '), 'แก้ช่องที่ระบุแล้วกด “เปิดเว็บดู” อีกครั้ง');
+    } else {
+      showNotice('runMsg', 'success', 'กรอก Product ครบแล้ว', entry.name_th || entry.name_en || 'Product', 'ตรวจข้อมูลแล้วกด “สร้างจริง”');
+    }
   } catch (error) {
     previewedProductKeys.delete(entry.key);
     entry.status = 'failed';
     entry.last_result = {saved: false, made_id: '', missing: [], error: error.message};
     productQueue.save();
     renderQueue();
-    $('runMsg').textContent = error.message;
+    showNotice('runMsg', 'error', 'เปิดตรวจ Product ไม่สำเร็จ', error.message, 'ตรวจข้อมูลและการเชื่อมต่อ Aztek แล้วลองอีกครั้ง');
     log(error.message, 'ERROR');
   } finally {
     productRunBusy = false;
@@ -1409,21 +1411,30 @@ async function runPreviewProduct() {
 async function runCreatedProducts(entries, message) {
   const problem = runnableError(entries);
   if (problem) {
-    $('runMsg').textContent = problem;
+    showNotice('runMsg', 'error', 'ยังสร้าง Product ไม่ได้', problem, 'แก้ข้อมูลที่ระบุแล้วลองอีกครั้ง');
     return;
   }
   if (!confirm(message)) return;
   productRunBusy = true;
   paintRunActions();
-  $('runMsg').textContent = `กำลังสร้าง ${entries.length} Product…`;
+  showNotice('runMsg', 'progress', `กำลังสร้าง ${entries.length} Product`, 'ระบบกำลังสร้างทีละรายการบน Aztek');
   try {
     const data = await responseData(await submitProducts(entries, true));
     appendRunLogs(data);
     applyProductResults(data, true);
-    $('runMsg').textContent =
-      `สร้างสำเร็จ ${data.created || 0}/${data.planned || entries.length} Product`;
+    const created = data.created || 0;
+    const planned = data.planned || entries.length;
+    if (created === planned) {
+      showNotice('runMsg', 'success', `สร้างครบ ${created}/${planned} Product`, 'Product ID อยู่ในตารางด้านล่าง');
+    } else {
+      const failed = (data.results || []).find(row => !row.saved) || {};
+      const reason = failed.error || (failed.missing || []).join(', ') || 'สร้างไม่สำเร็จ';
+      showNotice('runMsg', 'warning', `สร้างได้ ${created}/${planned} Product`,
+        failed.name ? `${failed.name}: ${reason}` : reason,
+        'แก้รายการที่ไม่ผ่านในคิว แล้วลองสร้างอีกครั้ง');
+    }
   } catch (error) {
-    $('runMsg').textContent = error.message;
+    showNotice('runMsg', 'error', 'สร้าง Product ไม่สำเร็จ', error.message, 'ตรวจข้อมูลและการเชื่อมต่อ Aztek แล้วลองอีกครั้ง');
     log(error.message, 'ERROR');
   } finally {
     productRunBusy = false;
@@ -1441,8 +1452,7 @@ function createConfirmation(entries, verb = 'สร้างจริงบน A
 async function runActiveProduct() {
   const entry = productQueue.current();
   if (!entry || entry.product_id || !previewedProductKeys.has(entry.key)) {
-    $('runMsg').textContent =
-      'กรุณาเปิดหน้าเว็บดูก่อน แล้วจึงสร้าง Product อันที่เลือก';
+    showNotice('runMsg', 'warning', 'ยังสร้าง Product อันนี้ไม่ได้', 'รายการนี้ยังไม่ได้เปิดหน้าเว็บตรวจสอบ', 'กด “เปิดเว็บดู” ตรวจข้อมูลก่อน แล้วจึงกดสร้างจริง');
     paintRunActions();
     return;
   }
@@ -1576,13 +1586,13 @@ $('productPlanFile').onchange = async () => {
   if (!file) return;
   try { await importPlanFile(file); }
   catch (error) {
-    $('runMsg').textContent = error.message;
+    showNotice('runMsg', 'error', 'อ่านไฟล์ Product ไม่สำเร็จ', error.message, 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
     log(error.message, 'ERROR');
   }
 };
 $('btnApplySheets').onclick = () =>
   applySelectedSheets().catch(error => {
-    $('runMsg').textContent = error.message;
+    showNotice('runMsg', 'error', 'นำ Sheet เข้าคิวไม่สำเร็จ', error.message, 'เลือก Sheet แล้วลองอีกครั้ง');
     log(error.message, 'ERROR');
   });
 document.querySelectorAll('[data-close]').forEach(

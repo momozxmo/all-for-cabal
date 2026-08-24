@@ -37,6 +37,17 @@
     .field>label{color:var(--muted)}select{width:100%;background:#0e151e;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px}
     .choice{display:flex;flex-wrap:wrap;gap:12px}.choice label{display:inline-flex;align-items:center;gap:6px}.actions{display:flex;flex-wrap:wrap;gap:8px}
     .hint{color:var(--muted);font-size:12px}.ok{color:var(--green)}.error{color:var(--red)}.warning{color:var(--yellow)}
+    .notice{display:grid;gap:3px;padding:10px 12px;border:1px solid var(--edge);border-left-width:4px;
+      border-radius:9px;background:#0d111a;color:var(--ink-dim)}
+    .notice[hidden]{display:none!important}.notice-head{display:flex;align-items:center;gap:8px}
+    .notice-icon{width:18px;text-align:center;font-weight:900}.notice-title{color:var(--ink);font-weight:750}
+    .notice-detail,.notice-next{display:block;padding-left:26px}.notice-next{color:var(--muted);font-size:12px}
+    .notice-progress{border-left-color:var(--arc);background:rgba(109,124,245,.09)}
+    .notice-success{border-left-color:var(--green);background:rgba(63,201,138,.08)}
+    .notice-warning{border-left-color:var(--yellow);background:rgba(224,176,58,.09)}
+    .notice-error{border-left-color:var(--red);background:rgba(239,91,103,.09)}
+    .notice-info{border-left-color:var(--common)}
+    .notice:focus-visible{outline:2px solid var(--arc-bright);outline-offset:2px}
     .summary{background:#0e151e;border:1px solid var(--line);border-radius:8px;padding:10px}.summary strong{color:var(--green)}
     .table-wrap{overflow:auto;max-height:355px;border-top:1px solid var(--line)}table{border-collapse:collapse;min-width:100%;width:max-content}
     th,td{padding:8px 10px;border-right:1px solid #26313e;border-bottom:1px solid #26313e;text-align:left;white-space:nowrap;max-width:520px;overflow:hidden;text-overflow:ellipsis}
@@ -317,6 +328,7 @@
             <button id="btnSearch" class="primary" disabled>🔍 ค้นหาทั้งหมด</button>
             <button id="btnStop" class="danger" disabled>⏹ หยุด</button>
           </div>
+          <div id="finderNotice" class="notice" role="status" aria-live="polite" hidden></div>
           <div class="hint">เว็บรัน Chrome แบบ Headless และใช้ session Aztek ที่เชื่อมไว้ในเครื่องนี้</div>
         </div>
       </section>
@@ -374,6 +386,22 @@
 <script src="/static/game_sync.js"></script>
 <script>
 const $ = id => document.getElementById(id);
+const NOTICE_ICONS=Object.freeze({progress:'⏳',success:'✓',warning:'⚠',error:'✕',info:'ℹ'});
+function showNotice(target,tone,title,detail='',nextStep=''){
+  const notice=typeof target==='string'?$(target):target;if(!notice)return;
+  const state=Object.hasOwn(NOTICE_ICONS,tone)?tone:'info';
+  notice.className=`notice notice-${state}`;notice.hidden=false;
+  notice.setAttribute('role',state==='error'?'alert':'status');
+  notice.setAttribute('aria-live',state==='error'?'assertive':'polite');notice.tabIndex=-1;
+  const head=document.createElement('span');head.className='notice-head';
+  const icon=document.createElement('span');icon.className='notice-icon';icon.setAttribute('aria-hidden','true');icon.textContent=NOTICE_ICONS[state];
+  const heading=document.createElement('span');heading.className='notice-title';heading.textContent=String(title||'แจ้งให้ทราบ');
+  head.append(icon,heading);notice.replaceChildren(head);
+  if(detail){const body=document.createElement('span');body.className='notice-detail';body.textContent=String(detail);notice.appendChild(body);}
+  if(nextStep){const next=document.createElement('span');next.className='notice-next';next.textContent=`ทำต่อ: ${nextStep}`;notice.appendChild(next);}
+  if(state==='error')notice.focus({preventScroll:false});
+}
+function clearNotice(target){const notice=typeof target==='string'?$(target):target;if(!notice)return;notice.hidden=true;notice.replaceChildren();}
 const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'' };
 const sheetPickerSearch = createSheetPickerSearch({
   list:$('sheetList'),input:$('sheetSearch'),count:$('sheetSearchCount'),
@@ -394,6 +422,7 @@ function log(message, level='INFO'){
   const line=document.createElement('div'); line.className=level; line.textContent=`[${new Date().toLocaleTimeString('th-TH')}] ${message}`;
   $('log').appendChild(line); $('log').scrollTop=$('log').scrollHeight;
 }
+
 function deepSummary(row){
   const labels=[['web','เว็บ'],['img','รูป'],['trade','เทรด'],['drill','เจาะ']]; const out=[];
   labels.forEach(([key,label])=>{ if(row[key]==='yes')out.push(label+'✓'); else if(row[key]==='no')out.push(label+'✗'); });
@@ -542,21 +571,22 @@ function useWorkspace(data){ const sourceGroupKey=arguments.length>1?arguments[1
   $('btnToItemCode').disabled=data.mode!=='itemcode';
   $('btnToEvent').disabled=data.mode!=='event';
   $('btnToProduct').disabled=data.mode!=='shop';
-  setBusy(false); const visibleResults=sourceGroupRows(data.results||[],state.searchSourceGroupKey);if(visibleResults.length){state.results=visibleResults;renderResults();} }
+  setBusy(false); const visibleResults=sourceGroupRows(data.results||[],state.searchSourceGroupKey);if(visibleResults.length){state.results=visibleResults;renderResults();}
+  showNotice('finderNotice','success','นำเข้ารายการแล้ว',`${state.criteria.length} รายการจาก ${data.filename||'ไฟล์ที่เลือก'}`,'ตรวจรายการแล้วกดค้นหาบน Aztek'); }
 async function upload(kind,file){ if(!file)return; const form=new FormData(); form.append('file',file);form.append('mode',state.mode);if(state.workspaceId)form.append('workspace_id',state.workspaceId);
-  setBusy(true); try{const response=await apiFetch(kind==='template'?'/api/import-template':'/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
+  setBusy(true);showNotice('finderNotice','progress','กำลังอ่านไฟล์',file.name);try{const response=await apiFetch(kind==='template'?'/api/import-template':'/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
     if(data.needs_sheet_selection){state.pendingId=data.pending_id;openSheetPicker(data.sheets);}else useWorkspace(data);
-  }catch(error){log(error.message,'ERROR');alert(error.message);}finally{setBusy(false);$('templateFile').value='';$('planFile').value='';}}
+  }catch(error){log(error.message,'ERROR');showNotice('finderNotice','error','อ่านไฟล์ไม่สำเร็จ',error.message,'ตรวจไฟล์แล้วลอง Import อีกครั้ง');}finally{setBusy(false);$('templateFile').value='';$('planFile').value='';}}
 $('btnImportTemplate').onclick=()=>$('templateFile').click(); $('templateFile').onchange=event=>upload('template',event.target.files[0]);
 $('btnImportPlan').onclick=()=>$('planFile').click(); $('planFile').onchange=event=>upload('plan',event.target.files[0]);
 
-function openSheetPicker(sheets){const list=$('sheetList');list.replaceChildren();sheets.forEach(sheet=>{const displayName=sheet.name;const label=document.createElement('label');label.className='sheet-row';label.dataset.sheetName=displayName;const input=document.createElement('input');input.type='checkbox';input.value=sheet.name;input.checked=true;const text=document.createElement('span');text.className='sheet-name';text.textContent=` ${displayName} (${sheet.count})`;label.append(input,text);list.appendChild(label);});sheetPickerSearch.refresh(true);$('sheetDialog').showModal();}
-$('btnApplySheets').onclick=async()=>{const selected=[...document.querySelectorAll('#sheetList input:checked')].map(x=>x.value);if(!selected.length){alert('เลือกอย่างน้อย 1 sheet');return;}
-  const response=await apiFetch('/api/import-plan/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pending_id:state.pendingId,selected_sheets:selected})});const data=await response.json();if(!response.ok){alert(data.detail);return;} $('sheetDialog').close();useWorkspace(data);};
+function openSheetPicker(sheets){const list=$('sheetList');list.replaceChildren();sheets.forEach(sheet=>{const displayName=sheet.name;const label=document.createElement('label');label.className='sheet-row';label.dataset.sheetName=displayName;const input=document.createElement('input');input.type='checkbox';input.value=sheet.name;input.checked=true;const text=document.createElement('span');text.className='sheet-name';text.textContent=` ${displayName} (${sheet.count})`;label.append(input,text);list.appendChild(label);});sheetPickerSearch.refresh(true);showNotice('finderNotice','info',`พบ ${sheets.length} Sheet`,'เลือกเฉพาะ Sheet ที่ต้องการนำเข้า');$('sheetDialog').showModal();}
+$('btnApplySheets').onclick=async()=>{const selected=[...document.querySelectorAll('#sheetList input:checked')].map(x=>x.value);if(!selected.length){showNotice('finderNotice','warning','ยังนำเข้าไม่ได้','ยังไม่ได้เลือก Sheet','เลือกอย่างน้อย 1 Sheet แล้วกดนำเข้า');return;}
+  try{const response=await apiFetch('/api/import-plan/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pending_id:state.pendingId,selected_sheets:selected})});const data=await response.json();if(!response.ok){showNotice('finderNotice','error','นำ Sheet เข้าไม่สำเร็จ',data.detail||'ระบบอ่าน Sheet ไม่ได้','เลือก Sheet แล้วลองอีกครั้ง');return;} $('sheetDialog').close();useWorkspace(data);}catch(error){showNotice('finderNotice','error','นำ Sheet เข้าไม่สำเร็จ',error.message,'ตรวจการเชื่อมต่อแล้วลองอีกครั้ง');}};
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 
 async function clearWorkspace(){ if(state.socket)state.socket.close();if(state.workspaceId)await apiFetch('/api/workspaces/'+state.workspaceId,{method:'DELETE'});
-  state.workspaceId='';state.searchSourceGroupKey='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('searchHandoffNotice').hidden=true;$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;$('btnToProduct').disabled=true;setBusy(false);}
+  state.workspaceId='';state.searchSourceGroupKey='';rememberWorkspace('');state.criteria=[];state.results=[];state.selected.clear();renderCriteria();renderResults();renderNotFound([]);$('workspaceSummary').textContent='ล้างรายการแล้ว';$('searchHandoffNotice').hidden=true;$('btnToItemCode').disabled=true;$('btnToEvent').disabled=true;$('btnToProduct').disabled=true;setBusy(false);showNotice('finderNotice','success','ล้างรายการแล้ว','ไม่มีข้อมูลค้างใน Item Finder','Import ไฟล์ใหม่ได้เลย');}
 $('btnClearWorkspace').onclick=clearWorkspace;
 
 function setRowSelected(index,tr,select,on){select.checked=on;on?state.selected.add(index):state.selected.delete(index);tr.classList.toggle('row-selected',on);resultActions();}
@@ -581,14 +611,15 @@ function renderNotFound(rows){const list=$('notFoundList');list.replaceChildren(
 function startSearch(attach,onlyMissing){if(!state.workspaceId)return;
   // A retry keeps what the first pass found; only a fresh run clears the table.
   if(!attach&&!onlyMissing){resetResults();renderNotFound([]);}
-  $('progress').value=0;$('progressText').textContent=attach?'ต่อกลับเข้ากับการค้นหาที่ค้างอยู่…':(onlyMissing?'ค้นซ้ำเฉพาะที่ไม่เจอ…':'กำลังเชื่อมต่อ…');setBusy(true);
+  const searchTitle=attach?'กำลังต่อกับการค้นหาที่ค้างอยู่':(onlyMissing?'กำลังค้นซ้ำเฉพาะรายการที่ไม่เจอ':'กำลังค้นหาบน Aztek');
+  $('progress').value=0;$('progressText').textContent=searchTitle;showNotice('finderNotice','progress',searchTitle,'ระบบกำลังเชื่อมต่อและตรวจทีละรายการ');setBusy(true);
   const protocol=location.protocol==='https:'?'wss:':'ws:';const socket=new WebSocket(`${protocol}//${location.host}/ws/search`);state.socket=socket;
   socket.onopen=()=>socket.send(JSON.stringify({workspace_id:state.workspaceId,source_group_key:state.searchSourceGroupKey,game:$('game').value,web_mode:document.querySelector('input[name=webMode]:checked').value,headed:state.allowHeaded&&$('runHeaded').checked,only_missing:!!onlyMissing}));
-  socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.type==='log')log(message.msg,message.level);else if(message.type==='progress'){const percent=message.total?message.cur/message.total*100:0;$('progress').value=Math.min(100,percent);$('progressText').textContent=`${message.cur}/${message.total} ${message.name||''}`;}
+  socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.type==='log')log(message.msg,message.level);else if(message.type==='progress'){const percent=message.total?message.cur/message.total*100:0;$('progress').value=Math.min(100,percent);$('progressText').textContent=`${message.cur}/${message.total} ${message.name||''}`;showNotice('finderNotice','progress',`กำลังค้นหา ${message.cur}/${message.total}`,message.name||'กำลังตรวจรายการถัดไป');}
     else if(message.type==='reset_results')resetResults();else if(message.type==='result')sourceGroupRows([message.item],state.searchSourceGroupKey).forEach(addResult);
-    else if(message.type==='error'){ if(message.code==='aztek_session_required'||message.code==='aztek_session_expired'){ paintAztek(message.code==='aztek_session_expired'?'expired':'disconnected'); log((message.msg||'ต้องเชื่อมเซสชัน Aztek ก่อน')+' — เปิดหน้า “บัญชี / เชื่อม Aztek”','ERROR'); } else { log(message.msg||'เกิดข้อผิดพลาด','ERROR'); } }
-    else if(message.type==='done'){$('progress').value=100;const review=state.results.filter(r=>r.name_mismatch).length;$('progressText').textContent=`เสร็จ · พบ ${message.count}`+(review?` · ⚠ ตรวจเอง ${review}`:'');renderNotFound(message.not_found||[]);setBusy(false);if(review)log(`⚠ มี ${review} รายการชื่อไม่ตรงกับไฟล์ (ไฮไลต์สีเหลือง) — ตรวจเอง`,'WARNING');}};
-  socket.onerror=()=>log('WebSocket ขัดข้อง','ERROR');socket.onclose=event=>{state.socket=null;setBusy(false); if(event&&event.code===4401){window.location.replace('/login');}};}
+    else if(message.type==='error'){ if(message.code==='aztek_session_required'||message.code==='aztek_session_expired'){ paintAztek(message.code==='aztek_session_expired'?'expired':'disconnected'); log((message.msg||'ต้องเชื่อมเซสชัน Aztek ก่อน')+' — เปิดหน้า “บัญชี / เชื่อม Aztek”','ERROR');showNotice('finderNotice','error','ยังค้นหาบน Aztek ไม่ได้',message.msg||'เซสชัน Aztek ยังไม่พร้อม','เปิดหน้า “บัญชี / เชื่อม Aztek” แล้วลองค้นหาอีกครั้ง'); } else { log(message.msg||'เกิดข้อผิดพลาด','ERROR');showNotice('finderNotice','error','ค้นหาไม่สำเร็จ',message.msg||'เกิดข้อผิดพลาดระหว่างค้นหา','ตรวจ Log แล้วลองค้นหาอีกครั้ง'); } }
+    else if(message.type==='done'){$('progress').value=100;const review=state.results.filter(r=>r.name_mismatch).length;const missing=(message.not_found||[]).length;$('progressText').textContent=`เสร็จ · พบ ${message.count}`+(review?` · ⚠ ตรวจเอง ${review}`:'');renderNotFound(message.not_found||[]);setBusy(false);if(review||missing)showNotice('finderNotice','warning',`ค้นหาเสร็จ · พบ ${message.count} รายการ`,`${missing?`ไม่พบ ${missing} รายการ`:''}${missing&&review?' · ':''}${review?`ชื่อไม่ตรง ${review} รายการ`:''}`,'ตรวจรายการสีเหลืองและรายการที่ไม่พบ');else showNotice('finderNotice','success',`ค้นหาเสร็จ · พบ ${message.count} รายการ`,'พบข้อมูลครบและไม่มีรายการที่ต้องตรวจ');if(review)log(`⚠ มี ${review} รายการชื่อไม่ตรงกับไฟล์ (ไฮไลต์สีเหลือง) — ตรวจเอง`,'WARNING');}};
+  socket.onerror=()=>{log('WebSocket ขัดข้อง','ERROR');showNotice('finderNotice','error','การเชื่อมต่อค้นหาขัดข้อง','ไม่สามารถรับผลจากเซิร์ฟเวอร์ได้','ตรวจการเชื่อมต่อแล้วลองค้นหาอีกครั้ง');};socket.onclose=event=>{state.socket=null;setBusy(false); if(event&&event.code===4401){window.location.replace('/login');}};}
 $('btnSearch').onclick=()=>startSearch(false,false);
 $('btnRetryMissing').onclick=()=>{const n=(state.notFound||[]).length;if(!n)return;
   if(!confirm(`ค้นซ้ำเฉพาะ ${n} รายการที่หาไม่เจอใช่ไหม?\n\nผลที่เจอไปแล้วยังอยู่ครบ`))return;
@@ -600,11 +631,12 @@ $('btnStop').onclick=async()=>{if(!state.workspaceId)return;
   try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/search/stop`,{method:'POST'});
     const d=await r.json();
     log(d.stopped?'สั่งหยุดแล้ว — กำลังปิดงานที่ค้าง':'ไม่มีการค้นหาที่กำลังทำงานอยู่','WARNING');
-  }catch(e){log('สั่งหยุดไม่สำเร็จ','ERROR');$('btnStop').disabled=false;}};
+    showNotice('finderNotice',d.stopped?'warning':'info',d.stopped?'กำลังหยุดการค้นหา':'ไม่มีงานค้นหาที่กำลังทำงาน',d.stopped?'ระบบกำลังปิดงานที่ค้างอยู่':'ไม่ต้องดำเนินการเพิ่ม');
+  }catch(e){log('สั่งหยุดไม่สำเร็จ','ERROR');showNotice('finderNotice','error','สั่งหยุดไม่สำเร็จ',e.message||'ติดต่อเซิร์ฟเวอร์ไม่ได้','ลองกดหยุดอีกครั้ง');$('btnStop').disabled=false;}};
 
 $('btnSelectAll').onclick=()=>{state.selected=new Set(state.results.map((_,i)=>i));document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{tr.classList.add('row-selected');const c=tr.querySelector('input.pick');if(c)c.checked=true;});resultActions();};
 $('btnClearSelection').onclick=()=>{state.selected.clear();document.querySelectorAll('#resultsTable tbody tr').forEach(tr=>{tr.classList.remove('row-selected');const c=tr.querySelector('input.pick');if(c)c.checked=false;});resultActions();};
-async function copyIds(selectedOnly){const indexes=selectedOnly?[...state.selected]:state.results.map((_,i)=>i);if(!indexes.length){alert('ยังไม่ได้เลือกไอเทม');return;}const ids=indexes.map(i=>state.results[i]?.aztek_id).filter(Boolean);await navigator.clipboard.writeText(ids.join(', '));log(`Copied ${ids.length} IDs`,'SUCCESS');}
+async function copyIds(selectedOnly){const indexes=selectedOnly?[...state.selected]:state.results.map((_,i)=>i);if(!indexes.length){showNotice('finderNotice','warning','ยัง Copy ID ไม่ได้','ยังไม่ได้เลือกไอเทม','เลือกอย่างน้อย 1 รายการแล้วลองอีกครั้ง');return;}const ids=indexes.map(i=>state.results[i]?.aztek_id).filter(Boolean);await navigator.clipboard.writeText(ids.join(', '));log(`Copied ${ids.length} IDs`,'SUCCESS');showNotice('finderNotice','success',`Copy แล้ว ${ids.length} ID`,'ID อยู่ใน Clipboard พร้อมวาง');}
 $('btnCopyAll').onclick=()=>copyIds(false);$('btnCopySelected').onclick=()=>copyIds(true);
 function download(format){if(!state.workspaceId)return;const anchor=document.createElement('a');anchor.href=`/api/workspaces/${state.workspaceId}/export.${format}`;anchor.click();}
 $('btnExportXlsx').onclick=()=>download('xlsx');$('btnExportCsv').onclick=()=>download('csv');
@@ -624,7 +656,7 @@ function renderBundleReview(bundles){const list=$('bundleList');list.replaceChil
       cells.forEach(([cls,text])=>{const td=document.createElement('td');td.className=cls;td.textContent=text;tr.appendChild(td);});
       body.appendChild(tr);});
     table.appendChild(body);box.append(head,table);list.appendChild(box);});}
-$('btnBundles').onclick=async()=>{const response=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected]})});const data=await response.json();if(!response.ok){alert(data.detail);return;}renderBundleReview(data.bundles||[]);$('bundleDialog').showModal();};
+$('btnBundles').onclick=async()=>{const response=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected]})});const data=await response.json();if(!response.ok){showNotice('finderNotice','error','รวม Bundle เพื่อรีวิวไม่สำเร็จ',data.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}renderBundleReview(data.bundles||[]);$('bundleDialog').showModal();};
 
 // ---- ส่งบันเดิลไปหน้าสร้าง Bundle ----
 // Item Finder hands the grouped results over and steps out of the way: making
@@ -636,8 +668,8 @@ async function sendToBundlePage(){
   $('btnBundleOpen').disabled=true;
   try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected]})});
     const d=await r.json();
-    if(!r.ok){alert(d.detail||'ส่งไปหน้าสร้างบันเดิลไม่สำเร็จ');return;}
-    if(!(d.bundles||[]).length){alert('ไม่มีไอเทมให้รวมเป็นบันเดิล');return;}
+    if(!r.ok){showNotice('finderNotice','error','ส่งไปหน้า Bundle ไม่สำเร็จ',d.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}
+    if(!(d.bundles||[]).length){showNotice('finderNotice','warning','ยังไม่มี Bundle ให้ส่ง','ไม่มีไอเทมที่รวมเป็น Bundle ได้','เลือกผลลัพธ์อย่างน้อย 1 รายการ');return;}
     // Mode and misses travel with the bundles: which columns are worth reading
     // depends on the mode, and a document row that found no item has to stay
     // visible after leaving this page.
@@ -647,7 +679,7 @@ async function sendToBundlePage(){
       event_drafts:d.event_drafts||[],itemcode_drafts:d.itemcode_drafts||[],
       not_found:d.not_found||[]}));
     window.location.href='/bundles';
-  }catch(e){alert('ส่งไปหน้าสร้างบันเดิลไม่สำเร็จ');}
+  }catch(e){showNotice('finderNotice','error','ส่งไปหน้า Bundle ไม่สำเร็จ',e.message||'ติดต่อเซิร์ฟเวอร์ไม่ได้','ลองส่งอีกครั้ง');}
   finally{resultActions();}}
 $('btnBundleOpen').onclick=sendToBundlePage;
 
@@ -660,12 +692,12 @@ async function sendToItemCodePage(){
   $('btnToItemCode').disabled=true;
   try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/itemcodes`);
     const d=await r.json();
-    if(!r.ok){alert(d.detail||'ส่งไปหน้า Item Code ไม่สำเร็จ');return;}
-    if(!(d.itemcodes||[]).length){alert('ไฟล์นี้ไม่มีเงื่อนไข Item Code ให้ส่งต่อ');return;}
+    if(!r.ok){showNotice('finderNotice','error','ส่งไปหน้า Item Code ไม่สำเร็จ',d.detail||'ระบบอ่านเงื่อนไขไม่ได้','ตรวจไฟล์แล้วลองอีกครั้ง');return;}
+    if(!(d.itemcodes||[]).length){showNotice('finderNotice','warning','ไม่มี Item Code ให้ส่ง','ไฟล์นี้ไม่มีเงื่อนไข Item Code ที่อ่านได้','เลือกไฟล์หรือ Sheet อื่น');return;}
     sessionStorage.setItem('afc.itemcodeHandoff',JSON.stringify({
       game:$('game').value||d.game||'',itemcodes:d.itemcodes}));
     window.location.href='/itemcodes';
-  }catch(e){alert('ส่งไปหน้า Item Code ไม่สำเร็จ');}
+  }catch(e){showNotice('finderNotice','error','ส่งไปหน้า Item Code ไม่สำเร็จ',e.message||'ติดต่อเซิร์ฟเวอร์ไม่ได้','ลองส่งอีกครั้ง');}
   finally{$('btnToItemCode').disabled=!(state.workspaceId&&state.mode==='itemcode');}}
 $('btnToItemCode').onclick=sendToItemCodePage;
 
@@ -677,12 +709,12 @@ async function sendToEventPage(){
   try{const r=await apiFetch(
       `/api/workspaces/${state.workspaceId}/events?game=${encodeURIComponent(game)}`);
     const d=await r.json();
-    if(!r.ok){alert(d.detail||'ส่งไปหน้า Event ไม่สำเร็จ');return;}
-    if(!(d.events||[]).length){alert('ไฟล์นี้ไม่มี Event ให้ส่งต่อ');return;}
+    if(!r.ok){showNotice('finderNotice','error','ส่งไปหน้า Event ไม่สำเร็จ',d.detail||'ระบบอ่าน Event ไม่ได้','ตรวจไฟล์แล้วลองอีกครั้ง');return;}
+    if(!(d.events||[]).length){showNotice('finderNotice','warning','ไม่มี Event ให้ส่ง','ไฟล์นี้ไม่มี Event ที่อ่านได้','เลือกไฟล์หรือ Sheet อื่น');return;}
     sessionStorage.setItem('afc.eventHandoff',JSON.stringify({
       game:game||d.game||'',events:d.events}));
     window.location.href='/events?game='+encodeURIComponent(game);
-  }catch(e){alert('ส่งไปหน้า Event ไม่สำเร็จ');}
+  }catch(e){showNotice('finderNotice','error','ส่งไปหน้า Event ไม่สำเร็จ',e.message||'ติดต่อเซิร์ฟเวอร์ไม่ได้','ลองส่งอีกครั้ง');}
   finally{$('btnToEvent').disabled=!(state.workspaceId&&state.mode==='event');}}
 $('btnToEvent').onclick=sendToEventPage;
 

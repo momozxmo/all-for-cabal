@@ -9,7 +9,9 @@ lets ciphertext or another user's session reach the browser.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 
 import aztek_core as core
 
@@ -18,7 +20,7 @@ from web.audit import write_audit
 from web.browser_gate import BrowserOperationGate
 from web.models import Job, User, utc_now
 from web.security import InvalidEncryptedState
-from web.workspaces import WorkspaceNotFound, WorkspaceRepository
+from web.workspaces import WorkspaceBusy, WorkspaceNotFound, WorkspaceRepository
 
 
 _MAX_LOG_LINES = 500
@@ -71,13 +73,32 @@ class SearchCoordinator:
         # Searches in flight, by workspace. One per workspace: starting a search
         # already wipes that workspace's results, so two at once would fight.
         self._live: dict[str, LiveSearch] = {}
+        self._registry_lock = threading.Lock()
+        self._starting: set[str] = set()
+        self._deleting: set[str] = set()
 
     def live(self, workspace_id: str) -> LiveSearch | None:
-        return self._live.get(workspace_id)
+        with self._registry_lock:
+            return self._live.get(workspace_id)
+
+    @contextmanager
+    def deletion_guard(self, workspace_id: str):
+        with self._registry_lock:
+            if (workspace_id in self._starting
+                    or workspace_id in self._live
+                    or workspace_id in self._deleting):
+                raise WorkspaceBusy()
+            self._deleting.add(workspace_id)
+        try:
+            yield
+        finally:
+            with self._registry_lock:
+                self._deleting.discard(workspace_id)
 
     def stop(self, workspace_id: str) -> bool:
         """Ask a running search to wind up. Closing a page no longer does this."""
-        live = self._live.get(workspace_id)
+        with self._registry_lock:
+            live = self._live.get(workspace_id)
         if live is None:
             return False
         live.finder._cancel = True
@@ -90,7 +111,8 @@ class SearchCoordinator:
         The log so far is replayed before live events, so a page that comes
         back mid-run reads the whole story rather than joining silently.
         """
-        live = self._live.get(workspace_id)
+        with self._registry_lock:
+            live = self._live.get(workspace_id)
         if live is None or live.done:
             return False
         requested_scope = str(source_group_key or '').strip()
@@ -126,6 +148,38 @@ class SearchCoordinator:
 
     async def start(self, user_id: str, workspace_id: str,
                     request_data: dict, emit: Emit) -> bool:
+        source_group_key = str(
+            request_data.get('source_group_key') or '').strip()
+        with self._registry_lock:
+            live = self._live.get(workspace_id)
+            busy = workspace_id in self._starting or workspace_id in self._deleting
+            if live is None and not busy:
+                self._starting.add(workspace_id)
+
+        if live is not None:
+            if live.source_group_key != source_group_key:
+                await emit({'type': 'error', 'code': 'search_scope_mismatch',
+                            'msg': 'การค้นหาที่ค้างอยู่เป็นคนละกลุ่ม Product'})
+                await emit({'type': 'done', 'count': 0, 'not_found': []})
+                return False
+            return True
+        if busy:
+            await emit({
+                'type': 'error', 'code': 'workspace_busy',
+                'msg': 'workspace กำลังใช้งานอยู่',
+            })
+            await emit({'type': 'done', 'count': 0, 'not_found': []})
+            return False
+
+        try:
+            return await self._start_reserved(
+                user_id, workspace_id, request_data, emit)
+        finally:
+            with self._registry_lock:
+                self._starting.discard(workspace_id)
+
+    async def _start_reserved(self, user_id: str, workspace_id: str,
+                              request_data: dict, emit: Emit) -> bool:
         """Set a search going as a task of its own. True if one is now running.
 
         Everything that can refuse the run — no workspace, no Aztek session, a
@@ -134,14 +188,6 @@ class SearchCoordinator:
         """
         source_group_key = str(
             request_data.get('source_group_key') or '').strip()
-        if workspace_id in self._live:
-            # Already running; the caller attaches to it instead.
-            if self._live[workspace_id].source_group_key != source_group_key:
-                await emit({'type': 'error', 'code': 'search_scope_mismatch',
-                            'msg': 'การค้นหาที่ค้างอยู่เป็นคนละกลุ่ม Product'})
-                await emit({'type': 'done', 'count': 0, 'not_found': []})
-                return False
-            return True
         game = str(request_data.get('game') or '')
         web_mode = request_data.get('web_mode')
         wants_headed = bool(request_data.get('headed'))
@@ -241,24 +287,49 @@ class SearchCoordinator:
             job_id = job.id
 
         live = LiveSearch(job_id, None, source_group_key)
-        live.finder = search_runner.HeadlessFinder(
-            lambda msg, level='INFO': live.publish(
-                {'type': 'log', 'msg': msg, 'level': level}),
-            lambda item: live.publish(
-                {'type': 'result', 'item': search_runner.result_view(item)}),
-            lambda cur, total, name: live.publish(
-                {'type': 'progress', 'cur': cur, 'total': total, 'name': name}),
-            occurrences=occurrences,
-            on_reset=lambda: live.publish({'type': 'reset_results'}),
-        )
+        finder_failed = False
+        try:
+            live.finder = search_runner.HeadlessFinder(
+                lambda msg, level='INFO': live.publish(
+                    {'type': 'log', 'msg': msg, 'level': level}),
+                lambda item: live.publish(
+                    {'type': 'result', 'item': search_runner.result_view(item)}),
+                lambda cur, total, name: live.publish(
+                    {'type': 'progress', 'cur': cur, 'total': total, 'name': name}),
+                occurrences=occurrences,
+                on_reset=lambda: live.publish({'type': 'reset_results'}),
+            )
+        except BaseException as error:
+            self._fail_unstarted_job(job_id, error)
+            finder_failed = True
+        if finder_failed:
+            await self._emit_start_failed(emit)
+            return False
         live.publish({'type': 'job', 'job_id': job_id, 'status': 'queued'})
-        self._live[workspace_id] = live
+        with self._registry_lock:
+            self._live[workspace_id] = live
+            self._starting.discard(workspace_id)
         # Not awaited: the run outlives this call, and the caller goes on to
         # attach to it like any other watcher.
-        asyncio.ensure_future(
-            self._drive(live, user_id, workspace_id, job_id, game, data,
-                        storage_state, kept, occurrences, previous_results,
-                        all_occurrences, source_group_key))
+        scheduler_failed = False
+        try:
+            asyncio.ensure_future(
+                self._drive(live, user_id, workspace_id, job_id, game, data,
+                            storage_state, kept, occurrences, previous_results,
+                            all_occurrences, source_group_key))
+        except BaseException as error:
+            try:
+                self._fail_unstarted_job(job_id, error)
+            finally:
+                with self._registry_lock:
+                    if self._live.get(workspace_id) is live:
+                        self._starting.add(workspace_id)
+                        self._live.pop(workspace_id, None)
+                live.finish()
+            scheduler_failed = True
+        if scheduler_failed:
+            await self._emit_start_failed(emit)
+            return False
         return True
 
     async def _drive(self, live: LiveSearch, user_id, workspace_id, job_id,
@@ -333,7 +404,9 @@ class SearchCoordinator:
             finally:
                 # Last of all: until this clears, the workspace reports a search
                 # in progress and a second one is refused.
-                self._live.pop(workspace_id, None)
+                with self._registry_lock:
+                    if self._live.get(workspace_id) is live:
+                        self._live.pop(workspace_id, None)
                 live.finish()
 
     def sweep_interrupted_jobs(self) -> int:
@@ -361,6 +434,25 @@ class SearchCoordinator:
             if job is not None:
                 job.status = 'running'
                 job.started_at = utc_now()
+
+    def _fail_unstarted_job(self, job_id: str, _error: BaseException) -> None:
+        with self._database.session() as db:
+            job = db.get(Job, job_id)
+            if job is not None:
+                job.status = 'failed'
+                job.finished_at = utc_now()
+                job.result = {
+                    'count': 0, 'not_found': [], 'code': 'start_failed',
+                    'reason': 'search_start_failed',
+                }
+
+    @staticmethod
+    async def _emit_start_failed(emit: Emit) -> None:
+        await emit({
+            'type': 'error', 'code': 'search_start_failed',
+            'msg': 'เริ่มการค้นหาไม่สำเร็จ',
+        })
+        await emit({'type': 'done', 'count': 0, 'not_found': []})
 
     def _finalize(self, user_id, workspace_id, job_id, game, outcome,
                   log_lines) -> None:

@@ -22,13 +22,16 @@ from __future__ import annotations
 
 import json
 import secrets
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select, Update
 
 from web.models import AztekSession, PairingToken, User, utc_now
 from web.security import (decrypt_storage_state, encrypt_storage_state,
@@ -50,6 +53,14 @@ class PairingTokenUnavailable(Exception):
     """The pairing token was already used or has expired (maps to HTTP 410)."""
 
 
+class PairingTokenIssueConflict(Exception):
+    """Another issue attempt won the immutable pending-token snapshot."""
+
+
+class PairingBusy(Exception):
+    """The bounded pairing write window was exhausted by SQLite contention."""
+
+
 class InvalidStorageState(ValueError):
     """The browser storage state failed validation (maps to HTTP 422)."""
 
@@ -58,6 +69,23 @@ class InvalidStorageState(ValueError):
 class PairingIssue:
     raw_token: str
     expires_at: datetime
+
+
+@dataclass(frozen=True)
+class PairingIssueAttempt:
+    user_id: str
+    prior_token_id: str | None
+    raw_token: str = dataclass_field(repr=False)
+    token_hash: str = dataclass_field(repr=False)
+    created_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class PairingConsumptionAttempt:
+    token_hash: str = dataclass_field(repr=False)
+    ciphertext: str = dataclass_field(repr=False)
+    account_label: str | None = dataclass_field(repr=False)
 
 
 def _hostname(origin: str) -> str:
@@ -162,32 +190,225 @@ def validate_storage_state(storage_state: Any, settings: Settings) -> None:
         raise InvalidStorageState('storage_state has too many localStorage entries')
 
 
+def is_pairing_sqlite_busy(error: BaseException) -> bool:
+    """Recognize contention only from SQLite's structured driver result code."""
+    if isinstance(error, OperationalError):
+        driver_error = error.orig
+    elif isinstance(error, sqlite3.OperationalError):
+        driver_error = error
+    else:
+        return False
+    code = getattr(driver_error, 'sqlite_errorcode', None)
+    if not isinstance(code, int):
+        return False
+    return (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+def _begin_fresh_pairing_write(db: Session) -> None:
+    """Acquire a route-owned SQLite write transaction on a pristine Session."""
+    if db.new or db.dirty or db.deleted or db.in_transaction():
+        raise RuntimeError('pairing write Session must be fresh')
+    if db.get_bind().dialect.name != 'sqlite':
+        return
+
+    connection = db.connection()
+    driver_connection = connection.connection.driver_connection
+    if driver_connection.in_transaction:
+        raise RuntimeError('pairing write driver transaction must be fresh')
+    connection.exec_driver_sql('BEGIN IMMEDIATE')
+
+
+def _pending_pairing_token_id(db: Session, user_id: str) -> str | None:
+    return db.scalar(select(PairingToken.id).where(
+        PairingToken.user_id == user_id,
+        PairingToken.status == 'pending',
+        PairingToken.used_at.is_(None),
+    ))
+
+
+def _supersede_pairing_token_statement(
+    user_id: str,
+    token_id: str,
+) -> Update:
+    return (
+        update(PairingToken)
+        .where(
+            PairingToken.id == token_id,
+            PairingToken.user_id == user_id,
+            PairingToken.status == 'pending',
+            PairingToken.used_at.is_(None),
+        )
+        .values(status='superseded')
+    )
+
+
+def _claim_pairing_token_statement(
+    token_hash: str,
+    now: datetime,
+) -> Update:
+    return (
+        update(PairingToken)
+        .where(
+            PairingToken.token_hash == token_hash,
+            PairingToken.status == 'pending',
+            PairingToken.used_at.is_(None),
+            PairingToken.expires_at > now,
+        )
+        .values(status='used', used_at=now)
+        .returning(PairingToken.user_id, PairingToken.expires_at)
+    )
+
+
+def _expire_pairing_token_statement(
+    token_hash: str,
+    now: datetime,
+) -> Update:
+    return (
+        update(PairingToken)
+        .where(
+            PairingToken.token_hash == token_hash,
+            PairingToken.status == 'pending',
+            PairingToken.used_at.is_(None),
+            PairingToken.expires_at <= now,
+        )
+        .values(status='expired')
+        .returning(PairingToken.user_id)
+    )
+
+
+def _pairing_user_for_update_statement(user_id: str) -> Select:
+    return select(User).where(User.id == user_id).with_for_update()
+
+
+def _aztek_session_for_update_statement(user_id: str) -> Select:
+    return (
+        select(AztekSession)
+        .where(AztekSession.user_id == user_id)
+        .with_for_update()
+    )
+
+
+def _claim_pairing_token(
+    db: Session,
+    token_hash: str,
+    now: datetime,
+) -> tuple[str, datetime]:
+    claimed = db.execute(
+        _claim_pairing_token_statement(token_hash, now)).first()
+    if claimed is not None:
+        return str(claimed.user_id), claimed.expires_at
+
+    known = db.execute(
+        select(PairingToken.status, PairingToken.used_at,
+               PairingToken.expires_at)
+        .where(PairingToken.token_hash == token_hash)
+    ).first()
+    if known is None:
+        raise PairingTokenNotFound()
+    if (known.status == 'pending' and known.used_at is None
+            and known.expires_at <= now):
+        db.execute(_expire_pairing_token_statement(token_hash, now))
+    raise PairingTokenUnavailable()
+
+
 class AztekSessionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def create_pairing_token(self, db: Session, user: User) -> PairingIssue:
-        """Issue a fresh pairing token, superseding the user's pending ones."""
-        now = utc_now()
-        pending = db.scalars(
-            select(PairingToken).where(
-                PairingToken.user_id == user.id,
-                PairingToken.status == 'pending',
-            )
-        ).all()
-        for token in pending:
-            token.status = 'superseded'
+        """Issue inside the caller's transaction without commit or rollback."""
+        attempt = self._prepare_pairing_issue(db, str(user.id))
+        return self._apply_pairing_issue(db, attempt)
 
+    def _prepare_pairing_issue(
+        self,
+        db: Session,
+        user_id: str,
+    ) -> PairingIssueAttempt:
+        """Snapshot the prior pending ID and generate one immutable candidate."""
+        now = utc_now()
         raw_token = secrets.token_urlsafe(_PAIRING_TOKEN_BYTES)
         expires_at = now + timedelta(seconds=self.settings.pairing_ttl_seconds)
-        db.add(PairingToken(
-            user_id=user.id,
+        return PairingIssueAttempt(
+            user_id=str(user_id),
+            prior_token_id=_pending_pairing_token_id(db, str(user_id)),
+            raw_token=raw_token,
             token_hash=hash_token(raw_token, self.settings),
-            status='pending',
+            created_at=now,
             expires_at=expires_at,
+        )
+
+    def _apply_pairing_issue(
+        self,
+        db: Session,
+        attempt: PairingIssueAttempt,
+    ) -> PairingIssue:
+        """Apply exactly one snapshot/candidate; the caller owns transaction."""
+        if attempt.prior_token_id is not None:
+            changed = db.execute(_supersede_pairing_token_statement(
+                attempt.user_id, attempt.prior_token_id))
+            if changed.rowcount != 1:
+                raise PairingTokenIssueConflict()
+
+        db.add(PairingToken(
+            user_id=attempt.user_id,
+            token_hash=attempt.token_hash,
+            status='pending',
+            created_at=attempt.created_at,
+            expires_at=attempt.expires_at,
         ))
+        integrity_conflict = False
+        try:
+            db.flush()
+        except IntegrityError:
+            integrity_conflict = True
+        if integrity_conflict:
+            raise PairingTokenIssueConflict()
+        return PairingIssue(
+            raw_token=attempt.raw_token,
+            expires_at=attempt.expires_at,
+        )
+
+    def _prepare_pairing_consumption(
+        self,
+        raw_token: str,
+        storage_state: Any,
+        account_label: str | None = None,
+    ) -> PairingConsumptionAttempt:
+        """Validate and encrypt before a route opens its business Session."""
+        validate_storage_state(storage_state, self.settings)
+        ciphertext = encrypt_storage_state(storage_state, self.settings)
+        clean_label = (account_label or '').strip() or None
+        return PairingConsumptionAttempt(
+            token_hash=hash_token(raw_token, self.settings),
+            ciphertext=ciphertext,
+            account_label=clean_label,
+        )
+
+    def _save_encrypted_state(
+        self,
+        db: Session,
+        user_id: str,
+        ciphertext: str,
+        account_label: str | None,
+    ) -> AztekSession:
+        """Persist only already-encrypted state, replacing the user's one row."""
+        session = db.scalar(_aztek_session_for_update_statement(user_id))
+        if session is None:
+            session = AztekSession(
+                user_id=user_id,
+                encrypted_state=ciphertext,
+                account_label=account_label,
+                status='active',
+            )
+            db.add(session)
+        else:
+            session.encrypted_state = ciphertext
+            session.account_label = account_label
+            session.status = 'active'
+            session.last_validated_at = None
         db.flush()
-        return PairingIssue(raw_token=raw_token, expires_at=expires_at)
+        return session
 
     def save_storage_state(
         self,
@@ -200,25 +421,8 @@ class AztekSessionService:
         validate_storage_state(storage_state, self.settings)
         ciphertext = encrypt_storage_state(storage_state, self.settings)
         clean_label = (account_label or '').strip() or None
-
-        session = db.scalar(
-            select(AztekSession).where(AztekSession.user_id == user_id)
-        )
-        if session is None:
-            session = AztekSession(
-                user_id=user_id,
-                encrypted_state=ciphertext,
-                account_label=clean_label,
-                status='active',
-            )
-            db.add(session)
-        else:
-            session.encrypted_state = ciphertext
-            session.account_label = clean_label
-            session.status = 'active'
-            session.last_validated_at = None
-        db.flush()
-        return session
+        return self._save_encrypted_state(
+            db, str(user_id), ciphertext, clean_label)
 
     def consume_pairing_token(
         self,
@@ -227,31 +431,24 @@ class AztekSessionService:
         storage_state: Any,
         account_label: str | None = None,
     ) -> AztekSession:
-        """Validate and store an encrypted session, marking the token used."""
-        record = db.scalar(
-            select(PairingToken).where(
-                PairingToken.token_hash == hash_token(raw_token, self.settings)
-            )
-        )
-        if record is None:
-            raise PairingTokenNotFound()
+        """Consume inside the caller's transaction without commit/rollback."""
+        attempt = self._prepare_pairing_consumption(
+            raw_token, storage_state, account_label)
+        return self._apply_pairing_consumption(db, attempt)
 
-        now = utc_now()
-        if record.status != 'pending' or record.used_at is not None:
+    def _apply_pairing_consumption(
+        self,
+        db: Session,
+        attempt: PairingConsumptionAttempt,
+    ) -> AztekSession:
+        """Atomically claim then save encrypted state in one transaction."""
+        user_id, _expires_at = _claim_pairing_token(
+            db, attempt.token_hash, utc_now())
+        user = db.scalar(_pairing_user_for_update_statement(user_id))
+        if user is None:
             raise PairingTokenUnavailable()
-        if record.expires_at <= now:
-            record.status = 'expired'
-            db.flush()
-            raise PairingTokenUnavailable()
-
-        # Raises InvalidStorageState before the token is consumed.
-        session = self.save_storage_state(
-            db, record.user_id, storage_state, account_label)
-
-        record.status = 'used'
-        record.used_at = now
-        db.flush()
-        return session
+        return self._save_encrypted_state(
+            db, user_id, attempt.ciphertext, attempt.account_label)
 
     def get_status(self, db: Session, user: User) -> dict[str, Any]:
         """Return connection status only — never the ciphertext."""
