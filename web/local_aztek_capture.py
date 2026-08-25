@@ -7,7 +7,8 @@ from urllib.parse import urlsplit
 from playwright.async_api import async_playwright
 
 from web import browser_launch, search_runner
-from web.aztek_sessions import validate_storage_state
+from web.aztek_sessions import (filter_captured_storage_state,
+                                validate_storage_state)
 from web.browser_gate import BrowserOperationGate
 from web.settings import Settings
 
@@ -92,7 +93,8 @@ class LocalAztekCaptureService:
                     if not await self._is_authenticated_app(page):
                         raise LocalCaptureLoginRequired()
 
-                    storage_state = await context.storage_state()
+                    storage_state = filter_captured_storage_state(
+                        await context.storage_state(), self.settings)
                     validate_storage_state(storage_state, self.settings)
                     return storage_state
                 finally:

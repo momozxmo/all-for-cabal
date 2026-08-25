@@ -186,6 +186,34 @@ def test_capture_returns_complete_http_only_state_after_live_app_check(
     assert fake.browser.closed is True
 
 
+def test_capture_discards_external_login_artifacts_before_validation(
+        test_settings):
+    """Identity-provider state must not invalidate a valid Aztek session."""
+    page = FakePage(
+        [LOGIN_URL, AZTEK_ITEMS_URL],
+        wait_urls=[AZTEK_ITEMS_URL],
+    )
+    captured = complete_storage_state()
+    captured['cookies'].append({
+        'name': 'external-login',
+        'value': 'irrelevant-provider-value',
+        'domain': '.identity-provider.example',
+        'path': '/',
+        'httpOnly': True,
+        'secure': True,
+        'sameSite': 'Lax',
+    })
+    captured['origins'].append({
+        'origin': 'https://identity-provider.example',
+        'localStorage': [{'name': 'temporary-login', 'value': 'irrelevant'}],
+    })
+    fake = FakePlaywright(page, captured)
+
+    result = run_capture(test_settings, fake)
+
+    assert result == complete_storage_state()
+
+
 def test_capture_waits_through_transient_aztek_page_and_ipa_login(
         test_settings):
     """The pre-SSO Aztek shell must not close Chromium when IPA appears."""

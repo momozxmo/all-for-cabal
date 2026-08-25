@@ -146,6 +146,40 @@ def _cookie_domain_allowed_for_any(domain: Any, hosts: tuple[str, ...]) -> bool:
     return any(_cookie_domain_allowed(domain, host) for host in hosts)
 
 
+def filter_captured_storage_state(
+    storage_state: Any,
+    settings: Settings,
+) -> Any:
+    """Keep only Aztek/SSO state from a trusted Local browser capture.
+
+    A manual login may visit an external identity provider whose temporary
+    cookies and localStorage are included by Playwright. Those entries are not
+    needed after the Aztek app itself has passed the authenticated probe.
+    Pairing payloads do not use this filter and remain strictly rejected when
+    they contain off-origin state.
+    """
+    if not isinstance(storage_state, dict):
+        return storage_state
+    cookies = storage_state.get('cookies')
+    origins = storage_state.get('origins')
+    if not isinstance(cookies, list) or not isinstance(origins, list):
+        return storage_state
+
+    hosts = _allowed_hosts(settings)
+    return {
+        'cookies': [
+            cookie for cookie in cookies
+            if isinstance(cookie, dict)
+            and _cookie_domain_allowed_for_any(cookie.get('domain', ''), hosts)
+        ],
+        'origins': [
+            origin for origin in origins
+            if isinstance(origin, dict)
+            and _origin_allowed(origin.get('origin'), settings)
+        ],
+    }
+
+
 def validate_storage_state(storage_state: Any, settings: Settings) -> None:
     """Reject storage state that is malformed, oversized, or off-origin."""
     if not isinstance(storage_state, dict):
