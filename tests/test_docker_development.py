@@ -63,3 +63,14 @@ def test_installer_build_remains_native_and_docker_free():
     assert 'pyinstaller' in installer
     assert 'iscc' in installer
     assert 'docker' not in installer
+
+
+def test_docker_documentation_explains_commands_and_release_boundary():
+    guide = read('docs/DEVELOPMENT_DOCKER.md')
+    for command in ('start', 'test', 'logs', 'stop'):
+        assert r'.\scripts\docker_dev.ps1 ' + command in guide
+    assert 'scripts/build_local_installer.ps1' in guide
+    assert 'Docker' in read('README.md')
+    assert 'VPN' in guide
+    assert 'IPA' in guide
+    assert 'ไม่สร้างข้อมูลจริง' in guide
