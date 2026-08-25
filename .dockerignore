@@ -1,10 +1,6 @@
 # Never bake local runtime data, secrets, or the desktop build into the image.
 .git
-.claude/
-.codex-tmp/
-.codex_tmp/
-.superpowers/
-.understand-anything/
+.gitignore
 dist/
 build/
 artifacts/
@@ -14,16 +10,11 @@ build-cache/
 .local-runtime/
 runtime-local/
 *.chrome_profile/
-.env*
-!.env.docker.example
+.env
+*.env
 *.db
 *.sqlite
 *.sqlite3
 __pycache__/
 *.pyc
 .pytest_cache/
-tmp/
-*.xlsx
-*.xls
-*.pptx
-*.docx

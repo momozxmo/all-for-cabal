@@ -280,10 +280,6 @@ python -m playwright install chromium
 python all_for_cabal.py
 ```
 
-### Docker สำหรับผู้พัฒนา
-
-ผู้พัฒนาสามารถรัน FastAPI, Playwright/Chromium และ tests ใน Docker โดยที่ขั้นตอนสร้าง Windows Setup สำหรับทีมยังเหมือนเดิม ดูคำสั่งและข้อจำกัดด้าน VPN/IPA ที่ [คู่มือพัฒนาด้วย Docker](docs/DEVELOPMENT_DOCKER.md)
-
 ## Build เป็น .exe ตัวเดียว
 
 ดับเบิลคลิก `build.bat` หรือรัน:

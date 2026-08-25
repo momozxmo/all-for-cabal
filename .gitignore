@@ -26,7 +26,6 @@ UserskoomoDocumentsCrazyall for cabal/
 .local-runtime/
 runtime-local/
 .env
-.env.docker.local
 *.db
 *.sqlite
 *.sqlite3
