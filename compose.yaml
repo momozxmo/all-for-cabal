@@ -1,0 +1,33 @@
+name: all-for-cabal-dev
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - .env.docker.local
+    environment:
+      APP_ENV: development
+      BROWSER_CONCURRENCY: "1"
+      DATABASE_URL: sqlite:////data/all_for_cabal_web.db
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - all-for-cabal-dev-data:/data
+    init: true
+    ipc: host
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  all-for-cabal-dev-data:

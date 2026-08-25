@@ -1,0 +1,14 @@
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /app
+
+COPY requirements.txt constraints-docker.txt ./
+RUN python -m pip install --no-cache-dir -c constraints-docker.txt -r requirements.txt
+
+COPY . .
+
+CMD ["python", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
