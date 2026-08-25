@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Static and visible contracts for the Product operator page."""
 from pathlib import Path
+import re
 
 from playwright.sync_api import sync_playwright
 
@@ -17,10 +18,13 @@ SHEET_PICKER_JS = ROOT / 'web' / 'static' / 'sheet_picker.js'
 
 
 def _page_html(path):
-    return path.read_text(encoding='utf-8').replace(
-        '<script src="/static/console.js"></script>',
-        '<script>%s</script>' % CONSOLE_JS.read_text(encoding='utf-8'),
-    ).replace(
+    html = re.sub(
+        r'<script src="/static/console\.js(?:\?[^\"]*)?"></script>',
+        lambda _match: '<script>%s</script>' %
+        CONSOLE_JS.read_text(encoding='utf-8'),
+        path.read_text(encoding='utf-8'),
+    )
+    return html.replace(
         '<script src="/static/game_sync.js"></script>',
         '<script>%s</script>' % GAME_SYNC_JS.read_text(encoding='utf-8'),
     ).replace(
@@ -58,7 +62,7 @@ def _route_live_game_tools(context, workspace=None):
             route.fulfill(
                 status=200, content_type='text/html; charset=utf-8',
                 body=tool_pages[url].read_text(encoding='utf-8'))
-        elif url.endswith('/static/console.js'):
+        elif '/static/console.js' in url:
             route.fulfill(
                 content_type='application/javascript',
                 body=CONSOLE_JS.read_text(encoding='utf-8'))

@@ -2,6 +2,7 @@
 """Browser-level regression tests for the shared 24-hour calendar."""
 from datetime import datetime
 from pathlib import Path
+import re
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
@@ -23,9 +24,10 @@ def _tool_page(browser, path):
     """Load a real tool page with its real shared script, without a web server."""
     html = path.read_text(encoding='utf-8')
     shared = JS.read_text(encoding='utf-8')
-    html = html.replace(
-        '<script src="/static/console.js"></script>',
-        '<script>%s</script>' % shared,
+    html = re.sub(
+        r'<script src="/static/console\.js(?:\?[^\"]*)?"></script>',
+        lambda _match: '<script>%s</script>' % shared,
+        html,
     )
     html = html.replace(
         '<script src="/static/sheet_picker.js"></script>',
@@ -148,6 +150,50 @@ def test_shared_notice_announces_each_non_error_state_politely():
         browser.close()
 
 
+def test_itemcode_upgrade_loads_current_notice_script_when_old_url_is_cached():
+    """An upgraded page must not reuse console.js from the previous release."""
+    shared = JS.read_text(encoding='utf-8')
+    notice_start = shared.index('const NOTICE_ICONS')
+    notice_end = shared.index('function paintAztek')
+    stale_shared = shared[:notice_start] + shared[notice_end:]
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        def fulfill(route):
+            url = route.request.url
+            if url == 'http://tool.test/itemcodes':
+                route.fulfill(body=ITEMCODES.read_text(encoding='utf-8'),
+                              content_type='text/html')
+            elif url.startswith('http://tool.test/static/console.js'):
+                body = shared if '?' in url else stale_shared
+                route.fulfill(body=body, content_type='text/javascript')
+            elif url.endswith('/static/console.css'):
+                route.fulfill(body=CSS.read_text(encoding='utf-8'),
+                              content_type='text/css')
+            elif url.endswith('/static/sheet_picker.js'):
+                route.fulfill(body=SHEET_PICKER_JS.read_text(encoding='utf-8'),
+                              content_type='text/javascript')
+            elif url.endswith('/static/game_sync.js'):
+                route.fulfill(body='', content_type='text/javascript')
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'local.owner',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalM TH']})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            else:
+                route.fulfill(status=404, body='not found')
+
+        page.route('**/*', fulfill)
+        page.goto('http://tool.test/itemcodes', wait_until='domcontentloaded')
+
+        assert page.evaluate("typeof showNotice") == 'function'
+        browser.close()
+
+
 def _bundle_page(context):
     """Serve the real Bundle page on one origin so localStorage can reload."""
     page = context.new_page()
@@ -187,7 +233,7 @@ def _itemcode_page(context, submitted):
         elif url.endswith('/static/console.css'):
             route.fulfill(body=CSS.read_text(encoding='utf-8'),
                           content_type='text/css')
-        elif url.endswith('/static/console.js'):
+        elif '/static/console.js' in url:
             route.fulfill(body=JS.read_text(encoding='utf-8'),
                           content_type='text/javascript')
         elif url.endswith('/static/sheet_picker.js'):

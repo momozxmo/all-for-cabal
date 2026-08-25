@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Visible browser regressions for searchable workbook sheet pickers."""
 from pathlib import Path
+import re
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -81,9 +82,11 @@ def _real_page_html(page_name):
     )
     if '/static/sheet_picker.css' not in html:
         html = html.replace('</head>', '<style>%s</style></head>' % _shared_css())
-    html = html.replace(
-        '<script src="/static/console.js"></script>',
-        '<script>%s</script>' % CONSOLE_JS.read_text(encoding='utf-8'),
+    html = re.sub(
+        r'<script src="/static/console\.js(?:\?[^\"]*)?"></script>',
+        lambda _match: '<script>%s</script>' %
+        CONSOLE_JS.read_text(encoding='utf-8'),
+        html,
     )
     helper_tag = '<script src="/static/sheet_picker.js"></script>'
     if helper_tag in html:
