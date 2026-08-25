@@ -20,10 +20,16 @@ the runners make.
 """
 import re
 
-# The calendar caption reads in English regardless of the page's own language
-# ("July 2026"), so the month is matched against this list rather than parsed.
+# The calendar caption reads in English regardless of the page's own language.
+# Aztek may render it as one label ("July 2026") or split month and year into
+# separate labels ("Jul", "2026"), so both month forms are recognised.
 MONTHS = ('January', 'February', 'March', 'April', 'May', 'June', 'July',
           'August', 'September', 'October', 'November', 'December')
+_MONTH_INDEX = {
+    alias.casefold(): index
+    for index, month in enumerate(MONTHS)
+    for alias in (month, month[:3])
+}
 
 # What an unset date button says.
 DATE_PLACEHOLDER = 'เลือกวันและเวลา'
@@ -150,16 +156,21 @@ async def select_after_label(page, label, value, log=None):
 async def _show_month(page, day, log=None):
     """Page the calendar until the month holding ``day`` is on screen."""
     want = int(day[:4]) * 12 + int(day[5:7]) - 1
-    caption = page.locator('.rdp-caption_label').first
+    captions = page.locator('.rdp-caption_label')
     arrows = page.locator('.rdp-months nav button')
     for _ in range(36):
-        text = (await caption.inner_text()).strip()
+        caption_texts = []
+        for index in range(await captions.count()):
+            caption_texts.append(
+                (await captions.nth(index).inner_text()).strip())
+        text = ' '.join(caption_texts).strip()
         name, _sep, year = text.rpartition(' ')
-        if name not in MONTHS or not year.isdigit():
+        month_index = _MONTH_INDEX.get(name.casefold())
+        if month_index is None or not year.isdigit():
             if log:
                 log('อ่านเดือนในปฏิทินไม่ออก: %r' % text, 'WARNING')
             return False
-        shown = int(year) * 12 + MONTHS.index(name)
+        shown = int(year) * 12 + month_index
         if shown == want:
             return True
         await arrows.nth(0 if shown > want else 1).click()

@@ -82,6 +82,42 @@ def test_the_calendar_is_not_even_opened_for_an_unreadable_date():
     assert Trigger.clicked is False
 
 
+def test_the_aztek_calendar_accepts_an_abbreviated_english_month():
+    """Aztek splits its current caption into separate ``Aug`` and year spans."""
+    class Caption:
+        def __init__(self, text):
+            self.text = text
+
+        async def inner_text(self):
+            return self.text
+
+    class Captions:
+        texts = ('Aug', '2026')
+
+        @property
+        def first(self):
+            return Caption(self.texts[0])
+
+        async def count(self):
+            return len(self.texts)
+
+        def nth(self, index):
+            return Caption(self.texts[index])
+
+    class Page:
+        def locator(self, selector):
+            if selector == '.rdp-caption_label':
+                return Captions()
+            return object()
+
+    logs = []
+
+    assert asyncio.run(aztek_form._show_month(
+        Page(), '2026-08-26', lambda message, level: logs.append(
+            (message, level)))) is True
+    assert logs == []
+
+
 # ------------------------------- code types -------------------------------
 
 @pytest.mark.parametrize('given, expected', [
