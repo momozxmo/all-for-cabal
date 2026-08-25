@@ -40,10 +40,8 @@ class WindowsMutex:
         name: str = MUTEX_NAME,
         *,
         kernel32=None,
-        last_error: Callable[[], int] | None = None,
+        last_error: Callable[[], int] = ctypes.get_last_error,
     ) -> None:
-        if last_error is None:
-            last_error = getattr(ctypes, 'get_last_error', lambda: 0)
         if kernel32 is None:
             kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
             kernel32.CreateMutexW.argtypes = [
@@ -57,10 +55,7 @@ class WindowsMutex:
         self._kernel32 = kernel32
         self._handle = kernel32.CreateMutexW(None, False, name)
         if not self._handle:
-            error_code = last_error()
-            if hasattr(ctypes, 'WinError'):
-                raise ctypes.WinError(error_code)
-            raise OSError(error_code, 'CreateMutexW failed')
+            raise ctypes.WinError(ctypes.get_last_error())
         self.already_exists = last_error() == ERROR_ALREADY_EXISTS
 
     def close(self) -> None:

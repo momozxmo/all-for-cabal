@@ -504,14 +504,10 @@ def test_pairing_issue_auth_session_closes_before_business_session(
     original_session = test_database.session
     events = []
     active = set()
-    opened_sessions = []
 
     @contextmanager
     def tracked_session():
         with original_session() as db:
-            # Retain closed Session objects until the assertion so CPython
-            # cannot recycle an object id between sequential contexts.
-            opened_sessions.append(db)
             identity = id(db)
             events.append(('open', identity, tuple(active)))
             active.add(identity)
