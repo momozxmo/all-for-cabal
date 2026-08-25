@@ -6,9 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt constraints-docker.txt ./
-RUN python -m pip install --no-cache-dir -c constraints-docker.txt -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-tk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements-test.txt constraints-docker.txt ./
+RUN python -m pip install --no-cache-dir -c constraints-docker.txt -r requirements.txt -r requirements-test.txt
 
 COPY . .
 
-CMD ["python", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m alembic upgrade head && exec python -m uvicorn web.app:app --host 0.0.0.0 --port 8000"]

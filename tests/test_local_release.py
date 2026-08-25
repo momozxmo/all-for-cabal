@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 
@@ -128,6 +129,10 @@ def test_build_script_installs_browser_runs_tests_and_verifies_release():
         assert fragment in script
 
 
+@pytest.mark.skipif(
+    os.name != 'nt',
+    reason='the release cache reset script is Windows-only',
+)
 def test_browser_cache_reset_removes_stale_revisions_without_touching_siblings(
     tmp_path,
 ):
@@ -161,6 +166,10 @@ def test_browser_cache_reset_removes_stale_revisions_without_touching_siblings(
     assert sibling.read_text(encoding='utf-8') == 'keep'
 
 
+@pytest.mark.skipif(
+    os.name != 'nt',
+    reason='the release cache sanitizer script is Windows-only',
+)
 def test_browser_cache_sanitizer_removes_runtime_logs_only(tmp_path):
     build_cache = tmp_path / 'build-cache'
     browser_cache = build_cache / 'ms-playwright'

@@ -1,6 +1,5 @@
 # Never bake local runtime data, secrets, or the desktop build into the image.
 .git
-.gitignore
 .claude/
 .codex-tmp/
 .codex_tmp/

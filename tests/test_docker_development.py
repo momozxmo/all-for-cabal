@@ -16,7 +16,36 @@ def test_dockerfile_pins_matching_playwright_image_and_constraint():
         'pip install --no-cache-dir -c constraints-docker.txt '
         '-r requirements.txt'
     ) in dockerfile
-    assert constraints.strip() == 'playwright==1.60.0'
+    assert 'playwright==1.60.0' in constraints.splitlines()
+
+
+def test_dockerfile_installs_tkinter_required_by_imported_desktop_modules():
+    dockerfile = read('Dockerfile.dev')
+    assert 'apt-get install -y --no-install-recommends python3-tk' in dockerfile
+
+
+def test_dockerfile_migrates_the_persistent_database_before_startup():
+    dockerfile = read('Dockerfile.dev')
+    assert 'python -m alembic upgrade head' in dockerfile
+    assert 'exec python -m uvicorn web.app:app' in dockerfile
+
+
+def test_docker_image_uses_the_verified_core_and_test_dependencies():
+    dockerfile = read('Dockerfile.dev')
+    constraints = read('constraints-docker.txt')
+    test_requirements = read('requirements-test.txt')
+    for dependency in (
+        'playwright==1.60.0',
+        'fastapi==0.128.7',
+        'starlette==0.52.1',
+        'uvicorn==0.40.0',
+        'SQLAlchemy==2.0.51',
+    ):
+        assert dependency in constraints
+    assert 'pytest==8.4.*' in test_requirements
+    assert 'httpx==0.28.*' in test_requirements
+    assert 'requirements-test.txt' in dockerfile
+    assert '-r requirements-test.txt' in dockerfile
 
 
 def test_compose_is_loopback_only_single_browser_and_persistent():
