@@ -43,3 +43,23 @@ def test_docker_build_context_excludes_private_and_generated_state():
 def test_generated_docker_environment_is_gitignored():
     ignored = read('.gitignore')
     assert '.env.docker.local' in ignored
+
+
+def test_docker_script_has_safe_lifecycle_actions_and_cli_fallback():
+    script = read('scripts/docker_dev.ps1')
+    for action in ('start', 'test', 'logs', 'stop'):
+        assert "'%s'" % action in script
+    assert 'Programs\\DockerDesktop\\resources\\bin\\docker.exe' in script
+    assert '.env.docker.local' in script
+    assert 'RandomNumberGenerator' in script
+    assert 'compose up --build --detach' not in script
+    assert "@('compose', 'up', '--build', '-d')" in script
+    assert "@('compose', 'down')" in script
+    assert "@('compose', 'down', '-v')" not in script
+
+
+def test_installer_build_remains_native_and_docker_free():
+    installer = read('scripts/build_local_installer.ps1').lower()
+    assert 'pyinstaller' in installer
+    assert 'iscc' in installer
+    assert 'docker' not in installer
