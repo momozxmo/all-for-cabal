@@ -64,6 +64,19 @@
     .idtable{width:100%;margin-top:10px}
     .idtable td,.idtable th{white-space:normal}
     tr.r-ok td{background:#12301f}tr.r-fail td{background:#301518}tr.r-noid td{background:#302a12}
+    .wr-preview-dialog{width:min(1380px,96vw);max-height:90vh}
+    .wr-preview-scroll{overflow:auto;max-height:62vh;margin:12px 0}
+    .wr-preview-table{width:100%;min-width:1180px;border-collapse:collapse}
+    .wr-preview-table th,.wr-preview-table td{padding:8px;border-bottom:1px solid var(--edge);
+      vertical-align:top;white-space:normal}
+    .wr-preview-table th{position:sticky;top:0;background:var(--panel);z-index:1}
+    .wr-preview-table tr.wr-incomplete td{background:#2f2915}
+    .wr-preview-table tr.wr-disabled td{opacity:.72}
+    .wr-status{display:grid;gap:4px;min-width:180px}
+    .wr-status .ok{color:var(--green)}
+    .wr-status .warn{color:var(--yellow)}
+    .wr-preview-summary{display:flex;align-items:center;justify-content:space-between;
+      gap:12px;flex-wrap:wrap}
     @media(max-width:1100px){
       .itemcode-layout{grid-template-columns:1fr}
       .formgrid{grid-template-columns:repeat(2,1fr)}
@@ -102,11 +115,13 @@
           <label>เกม / เซิร์ฟ<select id="game"></select></label>
           <label>Item Code ในคิว <span id="queueCount" class="count">0</span><select id="queuePick"></select></label>
           <button id="btnImport" class="primary" title="อ่านไฟล์แผนแล้วเลือกแท็บที่จะเอา">📂 Import ไฟล์แผน</button>
+          <button id="btnImportWr" class="primary" title="อ่าน Master Code Block แล้วตรวจใน Mastercode WR Preview">📥 Import Mastercode WR</button>
           <button id="btnQueueNew" class="success">+ Item Code ใหม่</button>
           <button id="btnQueueDel">✕ เอาออก</button>
           <button id="btnQueueClear" class="danger">ล้างคิว</button>
         </div>
         <input id="planFile" class="hidden" type="file" accept=".xlsx,.xlsm">
+        <input id="wrFile" class="hidden" type="file" accept=".xlsx,.xlsm">
         <p class="hint" id="queueHint">ยังไม่มีอะไรในคิว — กด “📂 Import ไฟล์แผน” เพื่อดูข้อมูลในไฟล์ก่อน
           หรือ “+ Item Code ใหม่” เพื่อกรอกเอง</p>
       </div>
@@ -184,8 +199,8 @@
 <!-- A plan file holds dozens of activities and a run is usually about a few of
      them, so nothing enters the queue until the operator has picked. -->
 <dialog id="sheetDialog">
-  <h3>เลือกแท็บที่จะเอา <span id="sheetTotal" class="hint"></span></h3>
-  <p class="hint">ติ๊กเฉพาะแท็บที่ต้องทำ — แต่ละตารางของรางวัลในแท็บ = 1 Item Code</p>
+  <h3><span id="sheetDialogTitle">เลือกแท็บที่จะเอา</span> <span id="sheetTotal" class="hint"></span></h3>
+  <p class="hint" id="sheetDialogHint">ติ๊กเฉพาะแท็บที่ต้องทำ — แต่ละตารางของรางวัลในแท็บ = 1 Item Code</p>
   <div class="sheet-search-tools">
     <input id="sheetSearch" type="search" placeholder="ค้นหาชื่อ Sheet..." autocomplete="off">
     <span id="sheetSearchCount" class="sheet-search-status" aria-live="polite"></span>
@@ -202,6 +217,30 @@
   </div>
 </dialog>
 
+<dialog id="wrPreviewDialog" class="wr-preview-dialog">
+  <h3>Mastercode WR Preview</h3>
+  <p class="hint">ตรวจข้อมูลจากไฟล์ก่อนเพิ่มเข้าคิว ขั้นตอนนี้ไม่เปิดเว็บและไม่สร้างข้อมูลบน Aztek</p>
+  <div class="wr-preview-summary">
+    <span id="wrPreviewCount" class="hint"></span>
+    <strong id="wrCapacity"></strong>
+  </div>
+  <div class="wr-preview-scroll">
+    <table id="wrPreviewTable" class="wr-preview-table">
+      <thead><tr>
+        <th>เลือก</th><th>Sheet / Block</th><th>เกม</th>
+        <th>Mastercode WR Name</th><th>เริ่ม</th><th>สิ้นสุด</th>
+        <th>Mastercode</th><th>Bundle ID</th><th>Usage Limit</th>
+        <th>ความพร้อม</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="actions">
+    <button id="btnWrAdd" class="primary" type="button">เพิ่มรายการที่เลือกเข้าคิว</button>
+    <button data-close="wrPreviewDialog" type="button">ปิด</button>
+  </div>
+</dialog>
+
 <script src="/static/console.js?v=20260825-notice"></script>
 <script src="/static/sheet_picker.js"></script>
 <script src="/static/game_sync.js"></script>
@@ -209,6 +248,9 @@
 const queue = new Queue('afc.itemcodeQueue');
 let pendingGame = '';
 let activeRewardIndex = 0;
+let pendingImportMode = 'plan';
+let wrPending = null;
+let wrPreviewRows = [];
 const sheetPickerSearch = createSheetPickerSearch({
   list: $('sheetList'), input: $('sheetSearch'), count: $('sheetSearchCount'),
   empty: $('sheetSearchEmpty'), selectAllButton: $('btnSheetAll'),
@@ -293,6 +335,10 @@ Object.entries(FIELDS).forEach(([id, field]) => {
   $(id).oninput = () => {
     const entry = queue.current(); if (!entry) return;
     entry[field] = $(id).value;
+    if (entry.wr_source_id && (field === 'name_th' || field === 'name_en')) {
+      entry.wr_auto_names = false;
+    }
+    if (entry.wr_source_id && field === 'slug') entry.wr_auto_slug = false;
     // The queue picker shows the name, so it has to follow the field.
     if (field === 'name_th') { entry.name = $(id).value || 'Item Code'; $('editorWhich').textContent = entry.name; }
     renderQueue();
@@ -317,7 +363,9 @@ $('btnSlug').onclick = () => {
   const made = slugForGame(
     $('nameEn').value || $('nameTh').value, $('game').value);
   if (!made) { log('ชื่ออังกฤษว่างหรือเป็นภาษาไทยล้วน — พิมพ์ slug เอง', 'WARNING'); return; }
-  $('slug').value = entry.slug = made; renderQueue();
+  $('slug').value = entry.slug = made;
+  if (entry.wr_source_id) entry.wr_auto_slug = false;
+  renderQueue();
 };
 
 $('queuePick').onchange = () => select($('queuePick').value);
@@ -400,8 +448,12 @@ function setCard(entry, reward, index) {
 
   const grid = document.createElement('div'); grid.className = 'formgrid';
   grid.append(
-    field('ชื่อรางวัล (ไทย) *', input(reward.name_th, 'text', v => { reward.name_th = v; queue.save(); }), 'wide'),
-    field('ชื่อรางวัล (อังกฤษ) *', input(reward.name_en, 'text', v => { reward.name_en = v; queue.save(); }), 'wide'),
+    field('ชื่อรางวัล (ไทย) *', input(reward.name_th, 'text', v => {
+      reward.name_th = v; if (entry.wr_source_id) entry.wr_auto_names = false; queue.save();
+    }, {'data-reward-name': 'th'}), 'wide'),
+    field('ชื่อรางวัล (อังกฤษ) *', input(reward.name_en, 'text', v => {
+      reward.name_en = v; if (entry.wr_source_id) entry.wr_auto_names = false; queue.save();
+    }, {'data-reward-name': 'en'}), 'wide'),
     field('ใช้ต่อ 1 User', input(reward.uses_per_user, 'number', v => { reward.uses_per_user = v; queue.save(); }, {min: '1'})),
     field('Bundle ID *', input(reward.bundle_id, 'text', v => { reward.bundle_id = v; queue.save(); }, {inputmode: 'numeric'})));
 
@@ -430,7 +482,14 @@ function setCard(entry, reward, index) {
   const codes = document.createElement('textarea');
   codes.rows = 4; codes.value = reward.code_list || '';
   codes.placeholder = 'CODE001\nCODE002';
-  codes.oninput = () => { reward.code_list = codes.value; queue.save(); };
+  codes.dataset.wrFixCode = 'true';
+  codes.oninput = () => {
+    reward.code_list = codes.value;
+    if (index === 0 && entry.wr_source_id) {
+      updateWrMastercode(entry, codes.value);
+    }
+    queue.save();
+  };
   grid.append(field('รายการ Code (1 บรรทัด = 1 Code) *', codes, 'full fix-only'));
   grid.append(
     field('prefix ของโค้ด', input(reward.prefix, 'text', v => { reward.prefix = v; queue.save(); }, {placeholder: 'เช่น GWEN'}), 'wide server-only'),
@@ -467,8 +526,10 @@ function drainPlan() {
 function entryFromDraft(draft, game) {
   const entry = blankCode(draft.name_th || draft.group || '');
   ['name_th', 'name_en', 'slug', 'uses_per_user', 'limited', 'quantity',
-   'remaining', 'start_time', 'end_time', 'group']
+   'remaining', 'start_time', 'end_time', 'group', 'source_mode']
     .forEach(field => { if (draft[field] !== undefined) entry[field] = draft[field]; });
+  Object.keys(draft).filter(field => field.startsWith('wr_'))
+    .forEach(field => { entry[field] = draft[field]; });
   if (entry.slug) entry.slug = slugForGame(
     entry.slug, game || $('game').value || pendingGame);
   entry.rewards = (draft.rewards || []).map(
@@ -529,6 +590,7 @@ function drainHandoff() {
 let imported = [];
 
 $('btnImport').onclick = () => $('planFile').click();
+$('btnImportWr').onclick = () => $('wrFile').click();
 $('planFile').onchange = async event => {
   const file = event.target.files[0];
   $('planFile').value = '';
@@ -547,13 +609,53 @@ $('planFile').onchange = async event => {
     showNotice('runMsg', 'success', `อ่านได้ ${imported.length} Item Code`, `พบจาก ${(data.sheets || []).length} Sheet`, 'เลือก Sheet ที่ต้องการนำเข้าคิว');
     log(`อ่าน "${file.name}": ${(data.sheets || []).length} แท็บ · ${imported.length} Item Code`, 'SUCCESS');
     (data.skipped || []).slice(0, 5).forEach(name => log('ข้ามแถวที่อ่าน ItemKind ไม่ได้: ' + name, 'WARNING'));
-    showSheets(data.sheets || []);
+    showSheets(data.sheets || [], 'plan');
   } catch (e) { showNotice('runMsg', 'error', 'อ่านไฟล์ Item Code ไม่สำเร็จ', e.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง'); }
   finally { $('btnImport').disabled = false; }
 };
 
-function showSheets(sheets) {
+$('wrFile').onchange = async event => {
+  const file = event.target.files[0];
+  $('wrFile').value = '';
+  if (!file) return;
+  $('btnImportWr').disabled = true;
+  showNotice('runMsg', 'progress', 'กำลังอ่าน Mastercode WR', file.name);
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('game', $('game').value);
+    form.append('import_mode', 'mastercode_wr');
+    const response = await apiFetch('/api/itemcodes/import', {
+      method: 'POST', body: form});
+    const data = await response.json();
+    if (!response.ok) {
+      showNotice('runMsg', 'error', 'อ่าน Mastercode WR ไม่สำเร็จ',
+        data.detail || 'รูปแบบไฟล์ไม่ถูกต้อง', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
+      return;
+    }
+    wrPending = {pending_id: data.pending_id, workspace_id: data.workspace_id};
+    showNotice('runMsg', 'success',
+      `พบ Master Code Block จาก ${(data.sheets || []).length} Sheet`,
+      'เลือก Sheet เพื่อเปิด Mastercode WR Preview');
+    showSheets(data.sheets || [], 'mastercode_wr');
+  } catch (error) {
+    showNotice('runMsg', 'error', 'อ่าน Mastercode WR ไม่สำเร็จ',
+      error.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
+  } finally {
+    $('btnImportWr').disabled = false;
+  }
+};
+
+function showSheets(sheets, mode) {
+  pendingImportMode = mode || 'plan';
   const list = $('sheetList'); list.replaceChildren();
+  const isWr = pendingImportMode === 'mastercode_wr';
+  $('sheetDialogTitle').textContent = isWr
+    ? 'เลือก Sheet สำหรับ Mastercode WR Preview' : 'เลือกแท็บที่จะเอา';
+  $('sheetDialogHint').textContent = isWr
+    ? 'เลือกชื่อ Sheet จริงก่อน ระบบจะแสดงทุก Master Code Block ให้ตรวจอีกครั้ง'
+    : 'ติ๊กเฉพาะแท็บที่ต้องทำ — แต่ละตารางของรางวัลในแท็บ = 1 Item Code';
+  $('btnSheetTake').textContent = isWr ? 'เปิด Mastercode WR Preview' : 'เอาเข้าคิว';
   $('sheetTotal').textContent = `${sheets.length} แท็บ`;
   sheets.forEach(sheet => {
     const displayName = sheet.name;
@@ -571,13 +673,168 @@ function showSheets(sheets) {
   sheetPickerSearch.refresh(true);
   $('sheetDialog').showModal();
 }
-$('btnSheetTake').onclick = () => {
+$('btnSheetTake').onclick = async () => {
   const wanted = new Set([...$('sheetList').querySelectorAll('input')]
     .filter(box => box.checked).map(box => box.value));
+  if (!wanted.size) { log('ยังไม่ได้เลือกแท็บไหนเลย', 'WARNING'); return; }
+  if (pendingImportMode === 'mastercode_wr') {
+    if (!wrPending || !wrPending.pending_id) {
+      showNotice('runMsg', 'error', 'เปิด Mastercode WR Preview ไม่สำเร็จ',
+        'ไม่พบไฟล์ที่รอเลือก Sheet', 'Import Mastercode WR ใหม่อีกครั้ง');
+      return;
+    }
+    $('btnSheetTake').disabled = true;
+    try {
+      const response = await apiFetch('/api/itemcodes/import/apply', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          pending_id: wrPending.pending_id,
+          selected_sheets: [...wanted], game: $('game').value})});
+      const data = await response.json();
+      if (!response.ok) {
+        showNotice('runMsg', 'error', 'เปิด Mastercode WR Preview ไม่สำเร็จ',
+          data.detail || 'เลือก Sheet ไม่สำเร็จ', 'Import Mastercode WR ใหม่อีกครั้ง');
+        return;
+      }
+      $('sheetDialog').close();
+      wrPending = null;
+      openWrPreview(data.preview_rows || []);
+    } catch (error) {
+      showNotice('runMsg', 'error', 'เปิด Mastercode WR Preview ไม่สำเร็จ',
+        error.message || 'ระบบอ่านข้อมูลไม่ได้', 'ลอง Import Mastercode WR ใหม่');
+    } finally {
+      $('btnSheetTake').disabled = false;
+    }
+    return;
+  }
   const taken = imported.filter(draft => wanted.has(draft.sheet));
   if (!taken.length) { log('ยังไม่ได้เลือกแท็บไหนเลย', 'WARNING'); return; }
   $('sheetDialog').close();
   addDrafts(taken, `ไฟล์แผน (${wanted.size} แท็บ)`, $('game').value);
+};
+
+function updateWrMastercode(entry, codeText) {
+  const mastercode = String(codeText || '').split(/\r?\n/)
+    .map(value => value.trim()).find(Boolean) || '';
+  const name = `${entry.wr_sequence}. ${entry.wr_base_header} - `
+    + (mastercode || '[ยังไม่มี Mastercode]');
+  if (entry.wr_auto_names !== false) {
+    entry.name_th = name; entry.name_en = name; entry.name = name;
+    entry.rewards.forEach(reward => {
+      reward.name_th = name; reward.name_en = name;
+    });
+    if (queue.current() === entry) {
+      $('nameTh').value = name; $('nameEn').value = name;
+      $('editorWhich').textContent = name;
+      document.querySelectorAll('[data-reward-name="th"], [data-reward-name="en"]')
+        .forEach(input => { input.value = name; });
+    }
+  }
+  if (entry.wr_auto_slug !== false) {
+    entry.slug = slugForGame(name, entry.wr_game || $('game').value);
+    if (queue.current() === entry) $('slug').value = entry.slug;
+  }
+  renderQueue();
+}
+
+function syncWrPreviewEligibility() {
+  const currentGame = $('game').value;
+  wrPreviewRows.forEach(row => {
+    const matches = !!row.game && row.game === currentGame;
+    row.selectable = matches;
+    if (!matches) row.selected = false;
+    row.disabled_reason = !row.game
+      ? 'ไม่รู้จัก Game ในไฟล์'
+      : matches ? ''
+        : `เกมในไฟล์เป็น ${row.game} แต่หน้าปัจจุบันเลือก ${currentGame}`;
+  });
+}
+
+function renderWrPreview() {
+  const body = $('wrPreviewTable').tBodies[0]; body.replaceChildren();
+  wrPreviewRows.forEach((row, index) => {
+    const tr = document.createElement('tr');
+    if (!row.ready) tr.classList.add('wr-incomplete');
+    if (!row.selectable) tr.classList.add('wr-disabled');
+    const tick = document.createElement('input');
+    tick.type = 'checkbox'; tick.checked = !!row.selected;
+    tick.disabled = !row.selectable; tick.dataset.wrIndex = String(index);
+    tick.onchange = () => { row.selected = tick.checked; };
+    const status = document.createElement('div'); status.className = 'wr-status';
+    const outcome = document.createElement('span');
+    outcome.className = row.ready ? 'ok' : 'warn';
+    outcome.textContent = row.ready ? 'พร้อมเข้าคิว' : `ยังไม่ครบ: ${(row.issues || []).join(', ')}`;
+    status.appendChild(outcome);
+    [...(row.warnings || []), row.disabled_reason || ''].filter(Boolean)
+      .forEach(message => {
+        const note = document.createElement('span'); note.className = 'warn';
+        note.textContent = message; status.appendChild(note);
+      });
+    const values = [
+      tick, `${row.sheet || ''} / ${row.block || ''}`, row.game || 'ไม่รู้จักเกม',
+      row.name || '', displayStamp(row.start_time || ''),
+      displayStamp(row.end_time || ''), row.mastercode || '—',
+      row.bundle_id || '—', row.usage_limit || '—', status,
+    ];
+    values.forEach(value => {
+      const td = document.createElement('td');
+      if (value instanceof Node) td.appendChild(value); else td.textContent = value;
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  $('wrPreviewCount').textContent = `${wrPreviewRows.length} Master Code Block`;
+  $('wrCapacity').textContent = `เหลือที่ว่าง ${Math.max(0, 30 - queue.items.length)} รายการ`;
+}
+
+function openWrPreview(rows) {
+  wrPreviewRows = Array.isArray(rows) ? rows : [];
+  syncWrPreviewEligibility();
+  renderWrPreview();
+  if (!$('wrPreviewDialog').open) $('wrPreviewDialog').showModal();
+}
+
+$('game').addEventListener('change', () => {
+  if (!$('wrPreviewDialog').open) return;
+  syncWrPreviewEligibility();
+  renderWrPreview();
+});
+
+$('btnWrAdd').onclick = () => {
+  const selected = [...$('wrPreviewTable').querySelectorAll('tbody input:checked')]
+    .map(input => wrPreviewRows[Number(input.dataset.wrIndex)]).filter(Boolean);
+  if (!selected.length) {
+    showNotice('runMsg', 'warning', 'ยังไม่ได้เลือกรายการ',
+      'เลือกอย่างน้อย 1 Master Code Block', 'ติ๊กรายการที่ต้องการเพิ่มเข้าคิว');
+    return;
+  }
+  const currentGame = $('game').value;
+  const mismatch = selected.find(row => !row.game || row.game !== currentGame);
+  if (mismatch) {
+    showNotice('runMsg', 'error', 'เกมของ Mastercode WR ไม่ตรงกับหน้าปัจจุบัน',
+      `รายการนี้เป็น ${mismatch.game || 'เกมที่ไม่รู้จัก'} แต่หน้าปัจจุบันเลือก ${currentGame}`,
+      `เลือกเกมให้ตรงกับไฟล์แล้วลองอีกครั้ง`);
+    syncWrPreviewEligibility();
+    renderWrPreview();
+    return;
+  }
+  const capacity = Math.max(0, 30 - queue.items.length);
+  if (selected.length > capacity) {
+    showNotice('runMsg', 'error', 'คิว Item Code เต็มเกินกำหนด',
+      `เลือกได้อีกไม่เกิน ${capacity} รายการ`, 'ลดจำนวนที่เลือกแล้วลองอีกครั้ง');
+    return;
+  }
+  const existing = new Set(queue.items.map(entry => entry.wr_source_id).filter(Boolean));
+  const duplicate = selected.find(row => existing.has(row.source_id));
+  if (duplicate) {
+    showNotice('runMsg', 'warning', 'Master Code Block นี้อยู่ในคิวแล้ว',
+      `${duplicate.sheet} / ${duplicate.block}`, 'เลือกเฉพาะรายการที่ยังไม่อยู่ในคิว');
+    return;
+  }
+  $('wrPreviewDialog').close();
+  addDrafts(selected.map(row => row.draft), ' Mastercode WR Preview', $('game').value);
+  showNotice('runMsg', 'success', `เพิ่มเข้าคิว ${selected.length} Item Code`,
+    'ยังไม่มีการเปิดเว็บหรือสร้างข้อมูลบน Aztek', 'ตรวจและแก้ข้อมูลก่อนเปิดหน้าเว็บดู');
 };
 document.querySelectorAll('[data-close]').forEach(
   button => button.onclick = () => $(button.dataset.close).close());
@@ -605,6 +862,7 @@ function jobFrom(entry) {
           remaining: entry.limited ? String(entry.remaining || '') : '',
           start_time: withSeconds(entry.start_time),
           end_time: withSeconds(entry.end_time), group: entry.group || '',
+          source_mode: entry.source_mode || '',
           rewards: entry.rewards};
 }
 
@@ -629,6 +887,15 @@ function renderResults(results) {
 }
 
 async function run(entries, doSave) {
+  const currentGame = $('game').value;
+  const mismatch = entries.find(
+    entry => entry.wr_game && entry.wr_game !== currentGame);
+  if (mismatch) {
+    showNotice('runMsg', 'error', 'เกมของ Mastercode WR ไม่ตรงกับหน้าปัจจุบัน',
+      `รายการนี้เป็น ${mismatch.wr_game} แต่หน้าปัจจุบันเลือก ${currentGame}`,
+      `เปลี่ยนเกมกลับเป็น ${mismatch.wr_game} แล้วลองอีกครั้ง`);
+    return null;
+  }
   ['btnPreview', 'btnCreateOne', 'btnCreateAll'].forEach(id => $(id).disabled = true);
   $('shot').replaceChildren();
   try {

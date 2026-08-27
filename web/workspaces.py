@@ -248,6 +248,55 @@ class WorkspaceRepository:
                 raise WorkspaceBusy() from error
             raise
 
+    def claim_pending_rows(
+        self, owner_user_id: str, pending_id: str,
+        selected_sheets: list[str],
+    ) -> tuple[str, list[dict], list]:
+        """Consume an owner-scoped pending import without merging a workspace.
+
+        Mastercode WR needs the established pending/exact-sheet safety but its
+        selected rows go to an import preview, not into Item Finder results.
+        """
+        if not isinstance(selected_sheets, list) or not selected_sheets:
+            raise EmptySheetSelection()
+        if (not all(isinstance(name, str) for name in selected_sheets)
+                or len(selected_sheets) != len(set(selected_sheets))):
+            raise DuplicateSheetSelection()
+
+        _acquire_sqlite_write(self._session)
+        try:
+            with self._session.begin_nested():
+                claimed = self._session.execute(
+                    delete(PendingImportRecord).where(
+                        PendingImportRecord.id == pending_id,
+                        PendingImportRecord.owner_user_id == owner_user_id,
+                    ).returning(
+                        PendingImportRecord.workspace_id,
+                        PendingImportRecord.sheets,
+                        PendingImportRecord.skipped,
+                    )
+                ).mappings().one_or_none()
+                if claimed is None:
+                    raise PendingImportNotFound()
+                sheets = copy.deepcopy(claimed['sheets'])
+                available = [name for name, _rows in sheets]
+                if len(available) != len(set(available)):
+                    raise DuplicateSheetSelection()
+                unknown = [name for name in selected_sheets
+                           if name not in set(available)]
+                if unknown:
+                    raise UnknownSheetSelection(unknown[0])
+                wanted = set(selected_sheets)
+                rows = [dict(row) for name, sheet_rows in sheets
+                        if name in wanted for row in sheet_rows]
+                return (claimed['workspace_id'], rows,
+                        copy.deepcopy(claimed['skipped']))
+        except OperationalError as error:
+            self._session.rollback()
+            if is_sqlite_busy(error):
+                raise WorkspaceBusy() from error
+            raise
+
     def save_results(
         self, owner_user_id: str, workspace_id: str, *, game: str, results: list,
         not_found: list,

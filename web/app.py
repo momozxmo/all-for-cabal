@@ -84,6 +84,10 @@ class ApplyPlanRequest(BaseModel):
     selected_sheets: list[str]
 
 
+class ItemCodeImportApplyRequest(ApplyPlanRequest):
+    game: str = Field(min_length=1, max_length=64)
+
+
 class BundleRequest(BaseModel):
     selected_indexes: list[int] = Field(default_factory=list)
     source_group_key: str = Field(default='', max_length=240)
@@ -139,6 +143,7 @@ class ItemCodeSpec(BaseModel):
     # Which bundle group this came from, so a page that handed it over can show
     # the outcome against the right row.
     group: str = Field(default='', max_length=200)
+    source_mode: Literal['', 'mastercode_wr'] = ''
     rewards: list[dict] = Field(default_factory=list)
 
 
@@ -2147,6 +2152,7 @@ def _clean_itemcode_rewards(
     raw: list[dict],
     *,
     itemcode_number: int = 1,
+    mastercode_wr: bool = False,
 ) -> list[dict]:
     """Validate every Item Code reward set and preserve its position."""
     from web import itemcode_runner
@@ -2163,6 +2169,10 @@ def _clean_itemcode_rewards(
             entry.get('code_type'))
         reward['code_list'] = str(entry.get('code_list') or '')
         reward['prefix'] = str(entry.get('prefix') or '').strip()
+        if mastercode_wr and not reward['limited']:
+            raise _safe_failure(
+                f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
+                'Mastercode WR ต้องเปิดจำกัดจำนวน (Usage Limit)')
         if reward['code_type'] == '2':
             reward['num_codes'] = positive_int_text(
                 entry.get('num_codes'),
@@ -2170,6 +2180,10 @@ def _clean_itemcode_rewards(
                 'จำนวนโค้ด')
         else:
             reward['num_codes'] = ''
+            if mastercode_wr and not reward['code_list'].strip():
+                raise _safe_failure(
+                    f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
+                    'รายการ Code ต้องมีอย่างน้อย 1 Code')
         cleaned.append(reward)
     return cleaned
 
@@ -2271,6 +2285,7 @@ def _prepare(payload_game, jobs, do_save):
 @router.post('/api/itemcodes/import')
 async def itemcodes_import(request: Request, file: UploadFile = File(...),
                            game: str = Form(''),
+                           import_mode: str = Form('plan'),
                            user: User = Depends(require_user),
                            db: Session = Depends(get_db)):
     """Read a plan file straight into Item Code drafts, tab by tab.
@@ -2280,7 +2295,60 @@ async def itemcodes_import(request: Request, file: UploadFile = File(...),
     before deciding whether any items need finding at all. Drafts carry the
     sheet they came from so the page can offer the tabs to pick from.
     """
-    from web import itemcode_plan
+    from web import itemcode_plan, itemcode_wr
+
+    if import_mode == 'mastercode_wr':
+        path = await _temporary_upload(file)
+        try:
+            digest = hashlib.sha256()
+            with open(path, 'rb') as workbook_stream:
+                for chunk in iter(lambda: workbook_stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            workbook_fingerprint = digest.hexdigest()
+            sheets = await asyncio.to_thread(itemcode_wr.parse_workbook, path)
+            for _sheet_name, rows in sheets:
+                for row in rows:
+                    row['workbook_fingerprint'] = workbook_fingerprint
+                    row['wr_import_mode'] = 'mastercode_wr'
+        except Exception as error:
+            raise HTTPException(
+                status_code=400,
+                detail='อ่านไฟล์ Mastercode WR ไม่สำเร็จ: %s' % error)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if not sheets:
+            raise HTTPException(
+                status_code=400,
+                detail='ไม่พบ Master Code Block ในไฟล์นี้')
+        repository = WorkspaceRepository(db)
+        workspace = repository.create(
+            user.id, 'itemcode', file.filename or 'mastercode-wr.xlsx')
+        pending = repository.add_pending(user.id, workspace.id, sheets, [])
+        write_audit(
+            db, user_id=user.id, action='itemcode.wr_imported',
+            status='success',
+            summary={'filename': file.filename or 'mastercode-wr.xlsx',
+                     'sheets': len(sheets),
+                     'blocks': sum(len(rows) for _name, rows in sheets)},
+            tool='create_itemcode', resource_type='workspace',
+            resource_id=workspace.id, request=request,
+        )
+        return {
+            'import_mode': 'mastercode_wr',
+            'workspace_id': workspace.id,
+            'pending_id': pending.id,
+            'needs_sheet_selection': True,
+            'sheets': [
+                {'name': name, 'display_name': name, 'count': len(rows)}
+                for name, rows in sheets
+            ],
+            'skipped': [],
+        }
+    if import_mode != 'plan':
+        raise HTTPException(status_code=400, detail='ไม่รู้จักโหมด Import Item Code')
 
     path = await _temporary_upload(file)
     try:
@@ -2326,6 +2394,63 @@ async def itemcodes_import(request: Request, file: UploadFile = File(...),
     return {'sheets': counts, 'itemcodes': drafts, 'skipped': list(skipped or [])}
 
 
+@router.post('/api/itemcodes/import/apply')
+def itemcodes_import_apply(
+    payload: ItemCodeImportApplyRequest, request: Request,
+    user: User = Depends(require_user), db: Session = Depends(get_db),
+):
+    """Select exact WR sheets and return preview rows without opening Aztek."""
+    from web import itemcode_wr
+
+    if payload.game not in item_finder.GAMES:
+        raise HTTPException(status_code=400,
+                            detail='ไม่รู้จักเกม: %s' % payload.game)
+    pending_id = payload.pending_id.strip()
+    if not pending_id or not payload.selected_sheets:
+        raise HTTPException(status_code=400,
+                            detail='กรุณาเลือกอย่างน้อย 1 sheet')
+    repository = WorkspaceRepository(db)
+    try:
+        workspace_id, rows, skipped = repository.claim_pending_rows(
+            user.id, pending_id, payload.selected_sheets)
+        if not rows or any(
+                row.get('wr_import_mode') != 'mastercode_wr' for row in rows):
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail='ไฟล์ที่รอเลือกไม่ใช่ Mastercode WR')
+        preview = itemcode_wr.prepare_preview(
+            rows, pending_id=pending_id, page_game=payload.game)
+        write_audit(
+            db, user_id=user.id, action='itemcode.wr_applied',
+            status='success',
+            summary={'sheets': len(payload.selected_sheets),
+                     'blocks': len(preview), 'game': payload.game},
+            tool='create_itemcode', resource_type='workspace',
+            resource_id=workspace_id, request=request,
+        )
+        db.commit()
+    except EmptySheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400,
+                            detail='กรุณาเลือกอย่างน้อย 1 sheet')
+    except DuplicateSheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='เลือก sheet ซ้ำกัน')
+    except UnknownSheetSelection:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='ไม่พบ sheet ที่เลือก')
+    except (PendingImportNotFound, WorkspaceNotFound):
+        db.rollback()
+        raise HTTPException(
+            status_code=404, detail='ไม่พบไฟล์นำเข้าที่รอเลือก sheet')
+    except WorkspaceBusy:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='workspace_busy')
+    return {'import_mode': 'mastercode_wr', 'preview_rows': preview,
+            'skipped': skipped}
+
+
 @router.post('/api/itemcodes/run')
 async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
                         user: User = Depends(require_user),
@@ -2347,6 +2472,10 @@ async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
             prefix = f'Item Code ที่ {index}'
             where = spec.name_th.strip() or prefix
             limited = spec.limited
+            if spec.source_mode == 'mastercode_wr' and not limited:
+                raise _safe_failure(
+                    f'{prefix}: Mastercode WR ต้องเปิดจำกัดจำนวน '
+                    '(Usage Limit)')
             uses_per_user = positive_int_text(
                 spec.uses_per_user, f'{prefix}: จำนวนครั้งต่อผู้ใช้')
             if limited:
@@ -2373,7 +2502,8 @@ async def itemcodes_run(payload: ItemCodeRunRequest, request: Request,
                     spec.end_time, 'เวลาสิ้นสุด', where),
                 'group': spec.group,
                 'rewards': _clean_itemcode_rewards(
-                    spec.rewards, itemcode_number=index),
+                    spec.rewards, itemcode_number=index,
+                    mastercode_wr=(spec.source_mode == 'mastercode_wr')),
             }
             _require_order(job['start_time'], job['end_time'],
                            ('เวลาเริ่มใช้งาน', 'เวลาสิ้นสุด'), where)
