@@ -48,6 +48,7 @@ def _draft(name, *, mastercode='ALPHA001', bundle_id='224728',
         'quantity': usage_limit, 'remaining': usage_limit,
         'start_time': '2026-07-12T00:00:00',
         'end_time': '2026-07-12T23:59:59', 'group': '',
+        'source_mode': 'mastercode_wr',
         'rewards': [{
             'name_th': name, 'name_en': name, 'uses_per_user': '1',
             'limited': bool(usage_limit), 'quantity': usage_limit,
@@ -63,23 +64,48 @@ def _draft(name, *, mastercode='ALPHA001', bundle_id='224728',
 
 
 def _row(name, *, game='CabalM TH', ready=True, selectable=True,
-         selected=True, mastercode='ALPHA001', bundle_id='224728',
-         usage_limit='200', source_id='pending:0:1:2'):
+          selected=True, mastercode='ALPHA001', bundle_id='224728',
+          usage_limit='200', source_id='pending:0:1:2',
+          sheet='12.07 M', block='Code 1', warnings=None):
     issues = [] if ready else ['ยังไม่มี Mastercode']
     return {
-        'source_id': source_id, 'sheet': '12.07 M', 'block': 'Code 1',
+        'source_id': source_id, 'sheet': sheet, 'block': block,
         'game': game, 'name': name,
         'start_time': '2026-07-12T00:00:00',
         'end_time': '2026-07-12T23:59:59',
         'mastercode': mastercode, 'bundle_id': bundle_id,
         'usage_limit': usage_limit, 'ready': ready,
         'selectable': selectable, 'selected': selected,
-        'issues': issues, 'warnings': [],
+        'issues': issues, 'warnings': list(warnings or []),
         'disabled_reason': '' if selectable else 'เกมไม่ตรงกับหน้าปัจจุบัน',
         'draft': _draft(
             name, mastercode=mastercode, bundle_id=bundle_id,
             usage_limit=usage_limit, source_id=source_id),
     }
+
+
+def test_mastercode_wr_preview_shows_daily_sequence_order_and_overlap_warning():
+    overlap = 'Same-Day Game Overlap: พบหลาย Sheet ในวันและเกมเดียวกัน'
+    rows = [
+        _row('1. Master Code 12/07/26 - Code 1 - FIRST'),
+        _row('2. Master Code 12/07/26 - Code 2 - SECOND',
+             source_id='pending:1:1:2', sheet=' Second Daily',
+             block='Code 2', warnings=[overlap]),
+    ]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _page(browser)
+        page.evaluate('rows => openWrPreview(rows)', rows)
+
+        names = page.locator(
+            '#wrPreviewTable tbody tr td:nth-child(4)').all_inner_texts()
+        assert names == [
+            '1. Master Code 12/07/26 - Code 1 - FIRST',
+            '2. Master Code 12/07/26 - Code 2 - SECOND',
+        ]
+        assert overlap in page.locator(
+            '#wrPreviewTable tbody tr').nth(1).inner_text()
+        browser.close()
 
 
 def test_mastercode_wr_import_selects_sheets_previews_and_adds_without_run():
@@ -198,7 +224,11 @@ def test_mastercode_wr_incomplete_draft_auto_updates_until_manual_override():
         check.check()
         page.locator('#btnWrAdd').click()
 
-        codes = page.locator('#rsets textarea')
+        code_kind = page.locator('#rsets select')
+        assert code_kind.input_value() == '1'
+        assert code_kind.is_disabled()
+        codes = page.locator('#rsets [data-wr-fix-code="true"]')
+        assert codes.evaluate('element => element.tagName') == 'INPUT'
         codes.fill('NEWCODE')
         assert page.locator('#nameTh').input_value().endswith('- NEWCODE')
         assert page.locator('#nameEn').input_value().endswith('- NEWCODE')

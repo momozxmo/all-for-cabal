@@ -176,42 +176,56 @@ class WorkspaceRepository:
         self._session.flush()
         return pending
 
-    def apply_pending(
-        self, owner_user_id: str, pending_id: str, selected_sheets: list[str],
-    ) -> WorkspaceRecord:
+    @staticmethod
+    def _selected_sheet_names(
+        selected_sheets: list[str],
+    ) -> tuple[list[str], set[str]]:
         if not isinstance(selected_sheets, list) or not selected_sheets:
             raise EmptySheetSelection()
         if (not all(isinstance(name, str) for name in selected_sheets)
                 or len(selected_sheets) != len(set(selected_sheets))):
             raise DuplicateSheetSelection()
+        return selected_sheets, set(selected_sheets)
+
+    def _claim_pending_record(
+        self, owner_user_id: str, pending_id: str,
+        selected_sheets: list[str],
+    ) -> tuple[str, list, list]:
+        claimed = self._session.execute(
+            delete(PendingImportRecord).where(
+                PendingImportRecord.id == pending_id,
+                PendingImportRecord.owner_user_id == owner_user_id,
+            ).returning(
+                PendingImportRecord.workspace_id,
+                PendingImportRecord.sheets,
+                PendingImportRecord.skipped,
+            )
+        ).mappings().one_or_none()
+        if claimed is None:
+            raise PendingImportNotFound()
+        sheets = copy.deepcopy(claimed['sheets'])
+        available = [name for name, _rows in sheets]
+        if len(available) != len(set(available)):
+            raise DuplicateSheetSelection()
+        available_set = set(available)
+        unknown = [name for name in selected_sheets
+                   if name not in available_set]
+        if unknown:
+            raise UnknownSheetSelection(unknown[0])
+        return (claimed['workspace_id'], sheets,
+                copy.deepcopy(claimed['skipped']))
+
+    def apply_pending(
+        self, owner_user_id: str, pending_id: str, selected_sheets: list[str],
+    ) -> WorkspaceRecord:
+        selected_sheets, selected = self._selected_sheet_names(selected_sheets)
 
         _acquire_sqlite_write(self._session)
         try:
             with self._session.begin_nested():
-                claimed = self._session.execute(
-                    delete(PendingImportRecord).where(
-                        PendingImportRecord.id == pending_id,
-                        PendingImportRecord.owner_user_id == owner_user_id,
-                    ).returning(
-                        PendingImportRecord.workspace_id,
-                        PendingImportRecord.sheets,
-                        PendingImportRecord.skipped,
-                    )
-                ).mappings().one_or_none()
-                if claimed is None:
-                    raise PendingImportNotFound()
-
-                workspace_id = claimed['workspace_id']
-                sheets = copy.deepcopy(claimed['sheets'])
-                pending_skipped = copy.deepcopy(claimed['skipped'])
-                available = [sheet_name for sheet_name, _rows in sheets]
-                if len(available) != len(set(available)):
-                    raise DuplicateSheetSelection()
-                available_set = set(available)
-                unknown = [
-                    name for name in selected_sheets if name not in available_set]
-                if unknown:
-                    raise UnknownSheetSelection(unknown[0])
+                workspace_id, sheets, pending_skipped = \
+                    self._claim_pending_record(
+                        owner_user_id, pending_id, selected_sheets)
 
                 workspace = self._session.scalar(
                     select(WorkspaceRecord).where(
@@ -222,7 +236,6 @@ class WorkspaceRepository:
                 if workspace is None:
                     raise PendingImportNotFound()
 
-                selected = set(selected_sheets)
                 items = []
                 for sheet_name, rows in sheets:
                     if sheet_name in selected:
@@ -257,40 +270,17 @@ class WorkspaceRepository:
         Mastercode WR needs the established pending/exact-sheet safety but its
         selected rows go to an import preview, not into Item Finder results.
         """
-        if not isinstance(selected_sheets, list) or not selected_sheets:
-            raise EmptySheetSelection()
-        if (not all(isinstance(name, str) for name in selected_sheets)
-                or len(selected_sheets) != len(set(selected_sheets))):
-            raise DuplicateSheetSelection()
+        selected_sheets, wanted = self._selected_sheet_names(selected_sheets)
 
         _acquire_sqlite_write(self._session)
         try:
             with self._session.begin_nested():
-                claimed = self._session.execute(
-                    delete(PendingImportRecord).where(
-                        PendingImportRecord.id == pending_id,
-                        PendingImportRecord.owner_user_id == owner_user_id,
-                    ).returning(
-                        PendingImportRecord.workspace_id,
-                        PendingImportRecord.sheets,
-                        PendingImportRecord.skipped,
-                    )
-                ).mappings().one_or_none()
-                if claimed is None:
-                    raise PendingImportNotFound()
-                sheets = copy.deepcopy(claimed['sheets'])
-                available = [name for name, _rows in sheets]
-                if len(available) != len(set(available)):
-                    raise DuplicateSheetSelection()
-                unknown = [name for name in selected_sheets
-                           if name not in set(available)]
-                if unknown:
-                    raise UnknownSheetSelection(unknown[0])
-                wanted = set(selected_sheets)
+                workspace_id, sheets, pending_skipped = \
+                    self._claim_pending_record(
+                        owner_user_id, pending_id, selected_sheets)
                 rows = [dict(row) for name, sheet_rows in sheets
                         if name in wanted for row in sheet_rows]
-                return (claimed['workspace_id'], rows,
-                        copy.deepcopy(claimed['skipped']))
+                return workspace_id, rows, pending_skipped
         except OperationalError as error:
             self._session.rollback()
             if is_sqlite_busy(error):

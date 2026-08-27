@@ -366,3 +366,25 @@ def test_mastercode_wr_requires_usage_limit_at_itemcode_and_reward(client):
     })
     assert reward_response.status_code == 400
     assert 'Usage Limit' in reward_response.json()['detail']
+
+
+def test_mastercode_wr_requires_exactly_one_fix_code(client):
+    started = _upload_wr(client, _wr_workbook_bytes())
+    draft = _apply_wr(
+        client, started['pending_id'], ['12.07 M'])[0]['draft']
+
+    draft['rewards'][0]['code_type'] = '2'
+    draft['rewards'][0]['num_codes'] = '1'
+    generated_response = client.post('/api/itemcodes/run', json={
+        'game': MTH, 'itemcodes': [draft], 'do_save': False,
+    })
+    assert generated_response.status_code == 400
+    assert 'Fix Codes' in generated_response.json()['detail']
+
+    draft['rewards'][0]['code_type'] = '1'
+    draft['rewards'][0]['code_list'] = 'ALPHA001\nBETA002'
+    multiple_response = client.post('/api/itemcodes/run', json={
+        'game': MTH, 'itemcodes': [draft], 'do_save': False,
+    })
+    assert multiple_response.status_code == 400
+    assert '1 Code' in multiple_response.json()['detail']

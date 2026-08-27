@@ -208,7 +208,7 @@ def test_authenticate_accepts_valid_credentials_and_rejects_invalid_or_disabled(
     ) is None
 
 
-def test_session_token_is_stored_as_hmac_hash(
+def test_session_token_is_stored_as_hmac_hash_and_resolution_is_read_only(
     auth_service, db_session, member, settings
 ):
     raw = auth_service.create_session(db_session, member)
@@ -221,6 +221,11 @@ def test_session_token_is_stored_as_hmac_hash(
     assert record.token_hash == security.hash_token(raw, settings)
     assert record.expires_at > utc_now() + timedelta(minutes=59)
     assert auth_service.resolve_session(db_session, raw).id == member.id
+    assert record.last_seen_at is None
+
+    assert auth_service.resolve_session(
+        db_session, raw, touch=True
+    ).id == member.id
     assert record.last_seen_at is not None
 
 

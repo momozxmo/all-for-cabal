@@ -126,7 +126,7 @@ def resolve_pairing_principal(
 ) -> PairingPrincipalSnapshot | None:
     """Resolve auth in its own committed/closed Session and detach the ID."""
     with database.session() as db:
-        user = auth_service.resolve_session(db, raw_web_session)
+        user = auth_service.resolve_session(db, raw_web_session, touch=True)
         user_id = None if user is None else str(user.id)
     if user_id is None:
         return None

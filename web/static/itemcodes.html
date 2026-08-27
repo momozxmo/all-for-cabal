@@ -429,6 +429,8 @@ function input(value, type, oninput, attrs) {
 }
 
 function setCard(entry, reward, index) {
+  const isMastercodeWr = entry.source_mode === 'mastercode_wr';
+  if (isMastercodeWr) reward.code_type = '1';
   const card = document.createElement('div');
   card.className = 'rset';
   card.dataset.code = reward.code_type || '1';
@@ -476,12 +478,19 @@ function setCard(entry, reward, index) {
       option.value = value; option.textContent = text; kind.appendChild(option);
     });
   kind.value = reward.code_type || '1';
+  kind.disabled = isMastercodeWr;
   kind.onchange = () => { reward.code_type = kind.value; card.dataset.code = kind.value; queue.save(); };
   grid.append(field('ประเภทของ Code', kind, 'wide'));
 
-  const codes = document.createElement('textarea');
-  codes.rows = 4; codes.value = reward.code_list || '';
-  codes.placeholder = 'CODE001\nCODE002';
+  const codes = document.createElement(isMastercodeWr ? 'input' : 'textarea');
+  if (isMastercodeWr) {
+    codes.type = 'text';
+    codes.placeholder = 'Mastercode';
+  } else {
+    codes.rows = 4;
+    codes.placeholder = 'CODE001\nCODE002';
+  }
+  codes.value = reward.code_list || '';
   codes.dataset.wrFixCode = 'true';
   codes.oninput = () => {
     reward.code_list = codes.value;
@@ -591,59 +600,64 @@ let imported = [];
 
 $('btnImport').onclick = () => $('planFile').click();
 $('btnImportWr').onclick = () => $('wrFile').click();
-$('planFile').onchange = async event => {
+
+async function uploadItemcodeFile(
+  event, {buttonId, mode, progressTitle, errorTitle}) {
   const file = event.target.files[0];
-  $('planFile').value = '';
-  if (!file) return;
-  $('btnImport').disabled = true;
-  showNotice('runMsg', 'progress', 'กำลังอ่านไฟล์แผน', file.name);
+  event.target.value = '';
+  if (!file) return null;
+  $(buttonId).disabled = true;
+  showNotice('runMsg', 'progress', progressTitle, file.name);
   try {
     const form = new FormData();
     form.append('file', file);
     form.append('game', $('game').value);
+    if (mode !== 'plan') form.append('import_mode', mode);
     const response = await apiFetch('/api/itemcodes/import', {method: 'POST', body: form});
     const data = await response.json();
-    if (!response.ok) { showNotice('runMsg', 'error', 'อ่านไฟล์ Item Code ไม่สำเร็จ', data.detail || 'รูปแบบไฟล์ไม่ถูกต้อง', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง'); return; }
-    imported = data.itemcodes || [];
-    if (!imported.length) { showNotice('runMsg', 'warning', 'ไม่พบ Item Code ในไฟล์', 'ไม่มีเงื่อนไข Item Code ที่อ่านได้', 'เลือกไฟล์หรือ Sheet อื่น'); return; }
-    showNotice('runMsg', 'success', `อ่านได้ ${imported.length} Item Code`, `พบจาก ${(data.sheets || []).length} Sheet`, 'เลือก Sheet ที่ต้องการนำเข้าคิว');
-    log(`อ่าน "${file.name}": ${(data.sheets || []).length} แท็บ · ${imported.length} Item Code`, 'SUCCESS');
-    (data.skipped || []).slice(0, 5).forEach(name => log('ข้ามแถวที่อ่าน ItemKind ไม่ได้: ' + name, 'WARNING'));
-    showSheets(data.sheets || [], 'plan');
-  } catch (e) { showNotice('runMsg', 'error', 'อ่านไฟล์ Item Code ไม่สำเร็จ', e.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง'); }
-  finally { $('btnImport').disabled = false; }
+    if (!response.ok) {
+      showNotice('runMsg', 'error', errorTitle,
+        data.detail || 'รูปแบบไฟล์ไม่ถูกต้อง', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
+      return null;
+    }
+    return {file, data};
+  } catch (error) {
+    showNotice('runMsg', 'error', errorTitle,
+      error.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
+    return null;
+  } finally {
+    $(buttonId).disabled = false;
+  }
+}
+
+$('planFile').onchange = async event => {
+  const uploaded = await uploadItemcodeFile(event, {
+    buttonId: 'btnImport', mode: 'plan', progressTitle: 'กำลังอ่านไฟล์แผน',
+    errorTitle: 'อ่านไฟล์ Item Code ไม่สำเร็จ',
+  });
+  if (!uploaded) return;
+  const {file, data} = uploaded;
+  imported = data.itemcodes || [];
+  if (!imported.length) { showNotice('runMsg', 'warning', 'ไม่พบ Item Code ในไฟล์', 'ไม่มีเงื่อนไข Item Code ที่อ่านได้', 'เลือกไฟล์หรือ Sheet อื่น'); return; }
+  showNotice('runMsg', 'success', `อ่านได้ ${imported.length} Item Code`, `พบจาก ${(data.sheets || []).length} Sheet`, 'เลือก Sheet ที่ต้องการนำเข้าคิว');
+  log(`อ่าน "${file.name}": ${(data.sheets || []).length} แท็บ · ${imported.length} Item Code`, 'SUCCESS');
+  (data.skipped || []).slice(0, 5).forEach(name => log('ข้ามแถวที่อ่าน ItemKind ไม่ได้: ' + name, 'WARNING'));
+  showSheets(data.sheets || [], 'plan');
 };
 
 $('wrFile').onchange = async event => {
-  const file = event.target.files[0];
-  $('wrFile').value = '';
-  if (!file) return;
-  $('btnImportWr').disabled = true;
-  showNotice('runMsg', 'progress', 'กำลังอ่าน Mastercode WR', file.name);
-  try {
-    const form = new FormData();
-    form.append('file', file);
-    form.append('game', $('game').value);
-    form.append('import_mode', 'mastercode_wr');
-    const response = await apiFetch('/api/itemcodes/import', {
-      method: 'POST', body: form});
-    const data = await response.json();
-    if (!response.ok) {
-      showNotice('runMsg', 'error', 'อ่าน Mastercode WR ไม่สำเร็จ',
-        data.detail || 'รูปแบบไฟล์ไม่ถูกต้อง', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
-      return;
-    }
-    wrPending = {pending_id: data.pending_id, workspace_id: data.workspace_id};
-    showNotice('runMsg', 'success',
-      `พบ Master Code Block จาก ${(data.sheets || []).length} Sheet`,
-      'เลือก Sheet เพื่อเปิด Mastercode WR Preview');
-    showSheets(data.sheets || [], 'mastercode_wr');
-  } catch (error) {
-    showNotice('runMsg', 'error', 'อ่าน Mastercode WR ไม่สำเร็จ',
-      error.message || 'ระบบอ่านไฟล์ไม่ได้', 'ตรวจไฟล์แล้วลอง Import อีกครั้ง');
-  } finally {
-    $('btnImportWr').disabled = false;
-  }
+  const uploaded = await uploadItemcodeFile(event, {
+    buttonId: 'btnImportWr', mode: 'mastercode_wr',
+    progressTitle: 'กำลังอ่าน Mastercode WR',
+    errorTitle: 'อ่าน Mastercode WR ไม่สำเร็จ',
+  });
+  if (!uploaded) return;
+  const {data} = uploaded;
+  wrPending = {pending_id: data.pending_id, workspace_id: data.workspace_id};
+  showNotice('runMsg', 'success',
+    `พบ Master Code Block จาก ${(data.sheets || []).length} Sheet`,
+    'เลือก Sheet เพื่อเปิด Mastercode WR Preview');
+  showSheets(data.sheets || [], 'mastercode_wr');
 };
 
 function showSheets(sheets, mode) {

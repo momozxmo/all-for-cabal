@@ -97,7 +97,9 @@ class AuthService:
         db.flush()
         return raw_token
 
-    def resolve_session(self, db: Session, raw_token: str) -> User | None:
+    def resolve_session(
+        self, db: Session, raw_token: str, *, touch: bool = False
+    ) -> User | None:
         if not isinstance(raw_token, str) or not raw_token:
             return None
         record = db.scalar(
@@ -114,8 +116,9 @@ class AuthService:
         ):
             return None
 
-        record.last_seen_at = now
-        db.flush()
+        if touch:
+            record.last_seen_at = now
+            db.flush()
         return record.user
 
     def revoke_session(self, db: Session, raw_token: str) -> None:

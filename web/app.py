@@ -2173,6 +2173,20 @@ def _clean_itemcode_rewards(
             raise _safe_failure(
                 f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
                 'Mastercode WR ต้องเปิดจำกัดจำนวน (Usage Limit)')
+        if mastercode_wr:
+            if reward['code_type'] != '1':
+                raise _safe_failure(
+                    f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
+                    'Mastercode WR ต้องใช้ประเภท Fix Codes')
+            fixed_codes = [
+                code.strip() for code in reward['code_list'].splitlines()
+                if code.strip()
+            ]
+            if len(fixed_codes) != 1:
+                raise _safe_failure(
+                    f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
+                    'Mastercode WR ต้องมีรายการ Code เพียง 1 Code')
+            reward['code_list'] = fixed_codes[0]
         if reward['code_type'] == '2':
             reward['num_codes'] = positive_int_text(
                 entry.get('num_codes'),
@@ -2180,10 +2194,6 @@ def _clean_itemcode_rewards(
                 'จำนวนโค้ด')
         else:
             reward['num_codes'] = ''
-            if mastercode_wr and not reward['code_list'].strip():
-                raise _safe_failure(
-                    f'Item Code ที่ {itemcode_number}: ชุดรางวัลที่ {row}: '
-                    'รายการ Code ต้องมีอย่างน้อย 1 Code')
         cleaned.append(reward)
     return cleaned
 
