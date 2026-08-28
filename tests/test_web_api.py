@@ -187,7 +187,7 @@ def test_workspace_results_export_and_bundle_preview(client, member, test_databa
 
     response = client.post(
         f'/api/workspaces/{workspace_id}/bundles',
-        json={'selected_indexes': [0, 1, 2, 3]},
+        json={'selected_indexes': []},
     )
     assert response.status_code == 200, response.text
     bundles = response.json()['bundles']

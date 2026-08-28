@@ -666,7 +666,7 @@ $('btnBundles').onclick=async()=>{const response=await apiFetch(`/api/workspaces
 async function sendToBundlePage(){
   if(!state.workspaceId)return;
   $('btnBundleOpen').disabled=true;
-  try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected]})});
+  try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[]})});
     const d=await r.json();
     if(!r.ok){showNotice('finderNotice','error','ส่งไปหน้า Bundle ไม่สำเร็จ',d.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}
     if(!(d.bundles||[]).length){showNotice('finderNotice','warning','ยังไม่มี Bundle ให้ส่ง','ไม่มีไอเทมที่รวมเป็น Bundle ได้','เลือกผลลัพธ์อย่างน้อย 1 รายการ');return;}

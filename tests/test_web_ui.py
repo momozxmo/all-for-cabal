@@ -72,6 +72,15 @@ def test_item_finder_hands_bundles_over_rather_than_building_them():
     assert '/api/bundles/run' not in HTML
 
 
+def test_bundle_queue_handoff_sends_every_result_not_checkbox_selection():
+    """The queue handoff is the all-results action; checkboxes only filter review."""
+    handoff = HTML.split('async function sendToBundlePage()', 1)[1].split(
+        "$('btnBundleOpen').onclick=sendToBundlePage", 1)[0]
+
+    assert 'selected_indexes:[]' in handoff
+    assert 'selected_indexes:[...state.selected]' not in handoff
+
+
 def test_item_finder_can_send_selected_event_sheets_directly():
     assert 'id="btnToEvent"' in HTML
     assert '/events?game=' in HTML

@@ -504,10 +504,15 @@ def test_pairing_issue_auth_session_closes_before_business_session(
     original_session = test_database.session
     events = []
     active = set()
+    opened_sessions = []
 
     @contextmanager
     def tracked_session():
         with original_session() as db:
+            # Keep every session alive until the assertions finish. Otherwise
+            # CPython may reuse a closed session's id for a later session and
+            # make this distinct-session check fail nondeterministically.
+            opened_sessions.append(db)
             identity = id(db)
             events.append(('open', identity, tuple(active)))
             active.add(identity)
@@ -526,7 +531,8 @@ def test_pairing_issue_auth_session_closes_before_business_session(
     assert response.json() == {'detail': 'pairing_token_conflict'}
     opened = [event for event in events if event[0] == 'open']
     assert len(opened) == 3
-    assert len({event[1] for event in opened}) == 3
+    assert len(opened_sessions) == 3
+    assert len({id(db) for db in opened_sessions}) == 3
     assert all(event[2] == () for event in opened)
     assert active == set()
     assert application.state.pairing_issue_reservations.reserved_user_ids == ()

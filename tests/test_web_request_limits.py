@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
 import tempfile
 
@@ -149,21 +150,46 @@ def test_declared_boundary_plus_one_is_rejected_before_wrapped_app(path, limit):
     )
 
     assert recorded.calls == []
-    assert sent == [
-        {
-            'type': 'http.response.start',
-            'status': 413,
-            'headers': [(b'content-type', b'application/json')],
-        },
-        {
-            'type': 'http.response.body',
-            'body': (
-                b'{"detail":"request_too_large","limit_bytes":'
-                + str(limit).encode('ascii')
-                + b'}'
-            ),
-        },
-    ]
+    assert sent[0] == {
+        'type': 'http.response.start',
+        'status': 413,
+        'headers': [(b'content-type', b'application/json')],
+    }
+    assert json.loads(sent[-1]['body'])['limit_bytes'] == limit
+
+
+def test_item_finder_accepts_the_real_19mb_workbook_request_body():
+    """A normal large workbook must reach the import route, not stop at 413."""
+    recorded = RecordingApp()
+    body = b'x' * 19_268_900
+
+    sent = _run(
+        RequestSizeLimitMiddleware(recorded),
+        _scope('POST', '/api/import-plan', str(len(body))),
+        [{'type': 'http.request', 'body': body, 'more_body': False}],
+    )
+
+    assert [message['status'] for message in sent
+            if message['type'] == 'http.response.start'] == [204]
+    assert sum(len(message['body']) for message in recorded.calls[0]) == len(body)
+
+
+@pytest.mark.parametrize('path', WORKBOOK_PATHS)
+def test_workbook_over_32mb_is_rejected_with_plain_thai_guidance(path):
+    recorded = RecordingApp()
+
+    sent = _run(
+        RequestSizeLimitMiddleware(recorded),
+        _scope('POST', path, '33554433'),
+        [],
+    )
+
+    assert recorded.calls == []
+    assert json.loads(sent[-1]['body']) == {
+        'detail': 'ไฟล์ Excel ใหญ่เกิน 32 MB',
+        'code': 'request_too_large',
+        'limit_bytes': 33554432,
+    }
 
 
 def test_valid_thousands_digit_content_length_is_rejected_as_too_large():
@@ -467,6 +493,7 @@ def _mkstemp_factory(directory):
 
 def test_temporary_upload_accepts_exact_maximum_in_bounded_chunks(monkeypatch):
     app_module = importlib.import_module('web.app')
+    file_limit = 2 * 1024 * 1024
     with tempfile.TemporaryDirectory(dir=os.getcwd()) as directory:
         monkeypatch.setattr(
             app_module.tempfile,
@@ -474,19 +501,19 @@ def test_temporary_upload_accepts_exact_maximum_in_bounded_chunks(monkeypatch):
             _mkstemp_factory(directory),
         )
         upload = FakeUpload(
-            [b'x' * (1024 * 1024) for _ in range(16)] + [b'']
+            [b'x' * (1024 * 1024) for _ in range(2)] + [b'']
         )
 
-        path = asyncio.run(app_module._temporary_upload(upload, WORKBOOK_BODY_MAX))
+        path = asyncio.run(app_module._temporary_upload(upload, file_limit))
 
         assert os.path.exists(path)
-        assert os.path.getsize(path) == WORKBOOK_BODY_MAX
-        assert upload.read_sizes == [1024 * 1024] * 17
+        assert os.path.getsize(path) == file_limit
+        assert upload.read_sizes == [1024 * 1024] * 3
         os.unlink(path)
 
 
 @pytest.mark.parametrize(('chunks', 'expected_exception'), [
-    ([b'x' * (1024 * 1024) for _ in range(16)] + [b'y'], HTTPException),
+    ([b'x' * (1024 * 1024) for _ in range(2)] + [b'y'], HTTPException),
     ([RuntimeError('read failed')], RuntimeError),
     ([asyncio.CancelledError()], asyncio.CancelledError),
 ])
@@ -505,7 +532,7 @@ def test_temporary_upload_removes_partial_file_after_limit_or_read_failure(
         upload = FakeUpload(chunks)
 
         with pytest.raises(expected_exception) as exception:
-            asyncio.run(app_module._temporary_upload(upload, WORKBOOK_BODY_MAX))
+            asyncio.run(app_module._temporary_upload(upload, 2 * 1024 * 1024))
 
         if expected_exception is HTTPException:
             assert exception.value.status_code == 413

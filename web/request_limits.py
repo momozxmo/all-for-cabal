@@ -8,7 +8,7 @@ from typing import Any
 
 
 PAIR_BODY_MAX = 307200
-WORKBOOK_BODY_MAX = 16777216
+WORKBOOK_BODY_MAX = 33554432
 PRODUCT_BODY_MAX = 67108864
 MUTATION_BODY_MAX = 2097152
 COALESCE_FRAME_BYTES = 64 * 1024
@@ -70,6 +70,16 @@ async def _send_json(send: Callable[[dict[str, Any]], Awaitable[None]], status: 
     await send({'type': 'http.response.body', 'body': body})
 
 
+def _too_large_payload(path: str, limit: int) -> dict[str, Any]:
+    if path in WORKBOOK_PATHS:
+        return {
+            'detail': 'ไฟล์ Excel ใหญ่เกิน 32 MB',
+            'code': 'request_too_large',
+            'limit_bytes': limit,
+        }
+    return {'detail': 'request_too_large', 'limit_bytes': limit}
+
+
 class RequestSizeLimitMiddleware:
     """Count complete mutation bodies before handing the request to FastAPI."""
 
@@ -92,10 +102,7 @@ class RequestSizeLimitMiddleware:
             await _send_json(send, 400, {'detail': 'invalid_content_length'})
             return
         if declared is not None and _decimal_exceeds(declared, limit):
-            await _send_json(send, 413, {
-                'detail': 'request_too_large',
-                'limit_bytes': limit,
-            })
+            await _send_json(send, 413, _too_large_payload(scope['path'], limit))
             return
 
         parts = deque()
@@ -113,10 +120,8 @@ class RequestSizeLimitMiddleware:
             chunk = message.get('body', b'')
             chunk_size = len(chunk)
             if chunk_size > limit - size:
-                await _send_json(send, 413, {
-                    'detail': 'request_too_large',
-                    'limit_bytes': limit,
-                })
+                await _send_json(
+                    send, 413, _too_large_payload(scope['path'], limit))
                 return
             size += chunk_size
             view = memoryview(chunk)
