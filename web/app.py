@@ -1478,7 +1478,12 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
         rows = [workspace.results[index] for index in sorted(set(indexes))
                 if isinstance(index, int) and 0 <= index < len(workspace.results)]
     else:
-        rows = workspace.results
+        # The send-all handoff follows document occurrences, not the already
+        # rendered result rows.  Rebuilding here also repairs saved workspaces
+        # from older versions where a shared item's second row kept the first
+        # bundle's derived group_key after a retry.
+        rows = item_service.regroup_results(
+            workspace.results, workspace.occurrences)
     if not rows and source_group_key:
         criteria = item_service.rows_for_source_group(
             workspace.criteria, source_group_key)

@@ -198,6 +198,46 @@ def test_workspace_results_export_and_bundle_preview(client, member, test_databa
     ]
 
 
+def test_bundle_handoff_repairs_stale_shared_item_memberships(
+        client, member, test_database):
+    """Send-all rebuilds groups from occurrences, including saved workspaces."""
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'shop', 'plan.xlsx')
+        workspace.group_meta = {
+            'G1': {'activity': 'Shop'}, 'G2': {'activity': 'Shop'},
+        }
+        workspace.occurrences = [
+            {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+             'sources': ['G1']},
+            {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+             'sources': ['G2']},
+        ]
+        # This is the real bad shape: sources changed during regrouping, but a
+        # public key derived from the first occurrence survived on both rows.
+        workspace.results = [
+            {'aztek_id': '10', 'item_name': 'Shared', 'item_kind': '1',
+             'item_option': '', 'duration_index': '',
+             'sources': ['G1'], 'group_keys': ['G1']},
+            {'aztek_id': '10', 'item_name': 'Shared', 'item_kind': '1',
+             'item_option': '', 'duration_index': '',
+             'sources': ['G2'], 'group_keys': ['G1']},
+        ]
+        workspace_id = workspace.id
+
+    response = client.post(
+        f'/api/workspaces/{workspace_id}/bundles',
+        json={'selected_indexes': []},
+    )
+
+    assert response.status_code == 200, response.text
+    bundles = response.json()['bundles']
+    assert [bundle['group_key'] for bundle in bundles] == ['G1', 'G2']
+    assert [[item['id'] for item in bundle['items']] for bundle in bundles] == [
+        ['10'], ['10'],
+    ]
+
+
 def test_workspace_restore_keeps_a_persisted_item_description(
         client, member, test_database):
     with test_database.session() as db:

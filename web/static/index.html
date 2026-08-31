@@ -71,13 +71,14 @@
        through a dark console — worst of all on the dropdown, where it sat right
        against the menu border. Both spellings are set: newer Chrome honours the
        standard properties and then ignores the ::-webkit- rules entirely. */
-    *{scrollbar-width:thin;scrollbar-color:var(--raise) transparent}
-    ::-webkit-scrollbar{width:10px;height:10px}
-    ::-webkit-scrollbar-track{background:transparent}
-    ::-webkit-scrollbar-thumb{background:var(--raise);background-clip:content-box;
-      border:2px solid transparent;border-radius:8px}
-    ::-webkit-scrollbar-thumb:hover{background:var(--edge);background-clip:content-box}
-    ::-webkit-scrollbar-corner{background:transparent}
+    *{scrollbar-width:auto;scrollbar-color:var(--faint) var(--obsidian)}
+    ::-webkit-scrollbar{width:16px;height:16px}
+    ::-webkit-scrollbar-track{background:var(--obsidian)}
+    ::-webkit-scrollbar-thumb{background:var(--faint);background-clip:content-box;
+      border:3px solid transparent;border-radius:10px}
+    ::-webkit-scrollbar-thumb:hover{background:var(--arc);background-clip:content-box}
+    ::-webkit-scrollbar-thumb:active{background:var(--arc-bright);background-clip:content-box}
+    ::-webkit-scrollbar-corner{background:var(--obsidian)}
     body{font-family:var(--sans);background:
         radial-gradient(1100px 480px at 85% -10%,rgba(109,124,245,.09),transparent 60%),
         radial-gradient(720px 420px at 5% 108%,rgba(224,166,60,.05),transparent 55%),var(--void)}

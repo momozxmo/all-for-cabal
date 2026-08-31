@@ -61,6 +61,36 @@ def _standalone_page(browser, path):
     return page
 
 
+def test_scrollbars_keep_a_large_desktop_drag_target():
+    """Scrollable tool sections expose a full-size scrollbar, not thin mode."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        index_css = '\n'.join(re.findall(
+            r'<style>(.*?)</style>', INDEX.read_text(encoding='utf-8'), re.S))
+        for label, stylesheet in (
+                ('shared tool pages', CSS.read_text(encoding='utf-8')),
+                ('Item Finder', index_css)):
+            page = browser.new_page()
+            page.set_content(
+                '<style>%s</style>'
+                '<div id="scroll" style="width:120px;height:80px;overflow:auto">'
+                '<div style="width:400px;height:300px"></div></div>'
+                % stylesheet,
+            )
+
+            styles = page.locator('#scroll').evaluate("""element => ({
+              standard: getComputedStyle(element).scrollbarWidth,
+              width: getComputedStyle(element, '::-webkit-scrollbar').width,
+              height: getComputedStyle(element, '::-webkit-scrollbar').height
+            })""")
+
+            assert styles == {
+                'standard': 'auto', 'width': '16px', 'height': '16px',
+            }, label
+            page.close()
+        browser.close()
+
+
 def test_creation_pages_show_actionable_accessible_errors():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

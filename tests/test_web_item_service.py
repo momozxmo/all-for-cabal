@@ -113,6 +113,32 @@ def test_regroup_results_follows_document_occurrences():
     assert rows[0]['file_name'] == 'A-file'
 
 
+def test_regroup_results_replaces_a_stale_legacy_group_key():
+    """A retry must not pin every shared item to its first bundle.
+
+    Older Shop workspaces have readable ``sources`` but no explicit
+    ``group_keys`` on their occurrences.  A public result can already carry a
+    derived key from its first occurrence, so regrouping must derive the key
+    again for every occurrence instead of copying that stale value.
+    """
+    found = [{
+        'aztek_id': '10', 'item_kind': '1', 'item_option': '',
+        'duration_index': '', 'item_name': 'Shared',
+        'sources': ['G1'], 'group_keys': ['G1'],
+    }]
+    occurrences = [
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+         'sources': ['G1']},
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'Shared',
+         'sources': ['G2']},
+    ]
+
+    rows = svc.regroup_results(found, occurrences)
+
+    assert [row['sources'] for row in rows] == [['G1'], ['G2']]
+    assert [row['group_keys'] for row in rows] == [['G1'], ['G2']]
+
+
 def test_regroup_and_bundles_carry_amt_as_qty():
     # The imported 'Amt' column must flow occurrence -> row -> bundle qty.
     found = [{'aztek_id': '10', 'item_kind': '1', 'item_option': '2',

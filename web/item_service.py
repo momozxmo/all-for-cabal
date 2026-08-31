@@ -470,10 +470,18 @@ def regroup_results(results, occurrences):
                str(occurrence.get('dur', '') or '').strip())
         for found_row in found.get(key, []):
             row = dict(found_row)
-            row['sources'] = list(occurrence.get('sources') or [])
+            occurrence_sources = list(occurrence.get('sources') or [])
+            row['sources'] = occurrence_sources
             if 'group_keys' in occurrence:
                 row['group_keys'] = list(
                     occurrence.get('group_keys') or [])
+            else:
+                # Legacy Shop occurrences use the readable source itself as
+                # their stable group identity.  A public result may already
+                # carry a key derived from its first occurrence (especially
+                # after retry/restore); keeping it here pins every later copy
+                # to the first bundle even though ``sources`` was updated.
+                row['group_keys'] = list(occurrence_sources)
             row['file_name'] = occurrence.get('name', '') or ''
             # Carry the quantity ('Amt' column) from the imported row so the
             # bundle dialog can auto-fill qty instead of defaulting to 1.
