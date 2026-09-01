@@ -63,6 +63,7 @@ _COLLAPSED_CARD_CHEVRONS = (
     '[data-rfd-draggable-id] button[aria-expanded="false"], '
     '[data-rbd-draggable-id] button[aria-expanded="false"], '
     '[draggable="true"] button[aria-expanded="false"], '
+    'button[aria-expanded="false"][aria-label="ขยาย"], '
     'button[aria-expanded="false"][aria-label*="Expand"], '
     'button[aria-expanded="false"][title*="Expand"]')
 

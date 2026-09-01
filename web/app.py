@@ -53,7 +53,8 @@ from web.pairing_http import (PairingIssueReservations, PairingParseResult,  # n
                               resolve_pairing_principal)
 from web.request_limits import RequestSizeLimitMiddleware, WORKBOOK_BODY_MAX  # noqa: E402
 from web.search_coordinator import SearchCoordinator  # noqa: E402
-from web.security import hash_password, verify_password  # noqa: E402
+from web.security import (InvalidEncryptedState, hash_password,  # noqa: E402
+                          verify_password)
 from web.settings import Settings  # noqa: E402
 from web.validation import (PayloadValueError, non_negative_int_text,  # noqa: E402
                             optional_text, plain_decimal_text,
@@ -869,8 +870,11 @@ async def capture_local_aztek_session(
 
     try:
         session_service = request.app.state.aztek_session_service
-        seed_state = session_service.load_storage_state_for_reconnect(
-            db, user)
+        try:
+            seed_state = session_service.load_storage_state_for_reconnect(
+                db, user)
+        except InvalidEncryptedState:
+            seed_state = None
         storage_state = await request.app.state.local_aztek_capture.capture(
             seed_state)
         session = session_service.save_storage_state(

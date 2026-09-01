@@ -116,6 +116,31 @@ def test_local_capture_seeds_browser_with_expired_encrypted_session(
     assert capture.seed_state == old_state
 
 
+def test_local_capture_reconnects_without_seed_when_saved_session_is_unreadable(
+        test_settings, test_database):
+    application = local_application(test_settings, test_database)
+    client = signed_in_local_client(application)
+    with test_database.session() as db:
+        owner = db.scalar(select(User).where(User.username == 'local.owner'))
+        saved = application.state.aztek_session_service.save_storage_state(
+            db, owner.id, storage_state('old-cookie'), 'old')
+        saved.encrypted_state = saved.encrypted_state[:-1] + (
+            'A' if saved.encrypted_state[-1] != 'A' else 'B')
+
+    capture = SuccessfulCapture(storage_state('fresh-cookie'))
+    application.state.local_aztek_capture = capture
+
+    response = client.post('/api/aztek/local-capture')
+
+    assert response.status_code == 200
+    assert capture.seed_state is None
+    with test_database.session() as db:
+        session = db.scalar(select(AztekSession))
+        assert security.decrypt_storage_state(
+            session.encrypted_state, application.state.settings
+        ) == storage_state('fresh-cookie')
+
+
 def test_hosted_mode_rejects_local_capture_before_browser_runs(
         application, client):
     capture = SuccessfulCapture(storage_state())

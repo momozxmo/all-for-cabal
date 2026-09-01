@@ -710,6 +710,61 @@ def test_collapsed_rfd_player_experience_card_expands_once_across_two_passes():
     }
 
 
+def test_real_player_exp_card_opens_for_blank_tier():
+    """The v2 card has no draggable data attribute around its expand button."""
+    async def exercise():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.set_content('''
+              <div class="flex rounded-sm border bg-card border-border">
+                <button role="button" aria-label="ลากเพื่อเรียงลำดับ"></button>
+                <div class="flex flex-1 min-w-0 flex-col">
+                  <div class="flex items-center gap-2 p-2">
+                    <button id="chevron" type="button"
+                            class="flex flex-1 min-w-0 items-center gap-2 text-left"
+                            aria-label="ขยาย" aria-expanded="false">
+                      <span>Player Experience - PC</span>
+                      <span>PLAYER_EXPERIENCE</span>
+                      <span>x6</span>
+                      <svg class="lucide lucide-chevron-down"></svg>
+                    </button>
+                    <button id="delete" type="button" aria-label="ลบรายการ">
+                      <svg class="lucide lucide-trash-2"></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <script>
+                window.chevronClicks = 0;
+                document.getElementById('chevron').addEventListener('click', () => {
+                  window.chevronClicks += 1;
+                  document.getElementById('chevron').setAttribute('aria-expanded', 'true');
+                  document.querySelector('.flex-1.min-w-0.flex-col').insertAdjacentHTML(
+                    'beforeend',
+                    '<select><option value="">Select tier</option><option value="Common">Common</option></select>');
+                });
+              </script>
+            ''')
+            builder = _builder()
+            filled = await builder._fill_blank_tiers(page)
+            tier = page.locator('select')
+            result = {
+                'filled': filled,
+                'complete': builder._blank_tiers_complete,
+                'clicks': await page.evaluate('window.chevronClicks'),
+                'tier': await tier.input_value() if await tier.count() else None,
+                'delete_count': await page.locator('#delete').count(),
+            }
+            await browser.close()
+            return result
+
+    assert asyncio.run(exercise()) == {
+        'filled': 1, 'complete': True, 'clicks': 1,
+        'tier': 'Common', 'delete_count': 1,
+    }
+
+
 def test_rfd_fallback_expands_every_live_collapsed_card_without_index_shift():
     """Clicking card 1 removes it from the live matcher; card 2 must still open."""
     async def exercise():
