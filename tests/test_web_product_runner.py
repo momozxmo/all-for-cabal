@@ -150,6 +150,12 @@ def test_option_rows_keep_live_value_slug_and_label():
     ]
 
 
+def test_product_option_fetch_rejects_an_empty_live_catalog():
+    with pytest.raises(RuntimeError, match='Category'):
+        product_runner._require_product_options(
+            {'categories': []}, {'categories'})
+
+
 def test_product_options_read_custom_popovers_not_purchase_limit_select():
     async def scenario():
         async with async_playwright() as playwright:
@@ -175,6 +181,50 @@ def test_product_options_read_custom_popovers_not_purchase_limit_select():
             {'id': 'currency-92', 'slug': 'cabal-force-gem',
              'label': 'Force Gem'},
         ],
+    }
+
+
+def test_product_options_wait_for_late_category_popover():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                await page.set_content(r'''
+                  <label>หมวดหมู่ *</label>
+                  <label>รูปแบบการจำกัดการซื้อ</label>
+                  <select><option value="NONE">ไม่จำกัด</option></select>
+                  <script>
+                  setTimeout(() => {
+                    const trigger = document.createElement('button');
+                    trigger.dataset.slot = 'popover-trigger';
+                    trigger.textContent = 'เลือก Category';
+                    trigger.onclick = () => {
+                      const dialog = document.createElement('div');
+                      dialog.setAttribute('role', 'dialog');
+                      const option = document.createElement('button');
+                      option.setAttribute('role', 'option');
+                      option.setAttribute(
+                        'data-value',
+                        'Main Shop - Highlight\u0000category-8');
+                      option.textContent = 'Main Shop - Highlight';
+                      dialog.appendChild(option);
+                      document.body.appendChild(dialog);
+                    };
+                    document.body.appendChild(trigger);
+                  }, 100);
+                  </script>
+                ''')
+                return await product_runner._harvest_product_options(
+                    page, {'categories'})
+            finally:
+                await browser.close()
+
+    assert asyncio.run(scenario()) == {
+        'categories': [{
+            'id': 'category-8', 'slug': '',
+            'label': 'Main Shop - Highlight',
+        }],
     }
 
 
@@ -264,7 +314,16 @@ def test_product_builder_selects_multiple_bundles_and_primary(monkeypatch):
           const row = document.createElement('div');
           row.className = 'selected-bundle-card';
           row.innerHTML = `<span>#${value}</span><label>
-            <input type="radio" name="primaryBundle"> Primary</label>`;
+            <button type="button" role="checkbox"
+              aria-checked="false"></button> Primary</label>`;
+          const primary = row.querySelector('[role="checkbox"]');
+          primary.onclick = () => {
+            list.querySelectorAll('[role="checkbox"]').forEach(button =>
+              button.setAttribute('aria-checked', 'false'));
+            primary.setAttribute('aria-checked', 'true');
+          };
+          if (!list.children.length)
+            primary.setAttribute('aria-checked', 'true');
           list.appendChild(row);
           document.querySelector('#bundleCount').textContent =
             `${list.children.length}/20 Bundles`;
@@ -290,7 +349,8 @@ def test_product_builder_selects_multiple_bundles_and_primary(monkeypatch):
                         'bundle_id': '223931',
                     }, missing)
                 checked = await page.locator(
-                    '.selected-bundle-card input:checked').evaluate_all(
+                    '.selected-bundle-card [role="checkbox"]'
+                    '[aria-checked="true"]').evaluate_all(
                         '(nodes) => nodes.map(node => '
                         'node.closest("div").querySelector("span").textContent)')
                 return missing, checked
@@ -575,10 +635,12 @@ class _Locator:
     def filter(self, **kwargs):
         return self
 
-    def nth(self, _index):
-        return self
+    def nth(self, index):
+        return _Locator(self.page, '%s >> nth=%d' % (self.selector, index))
 
     async def count(self):
+        if self.selector in self.page.absent_text:
+            return 0
         if 'data-slot="popover-trigger"' in self.selector:
             return 0
         return 1
@@ -605,6 +667,7 @@ class _Page:
         self.selects = []
         self.files = []
         self.clicks = []
+        self.absent_text = set()
 
     def locator(self, selector):
         return _Locator(self, selector)
@@ -712,10 +775,10 @@ def test_product_images_are_uploaded_only_from_memory_payloads():
         page, {'images': images}, missing))
 
     assert [selector for selector, _payload in page.files] == [
-        'input[name="thumbnail_th"]',
-        'input[name="banner_th"]',
-        'input[name="thumbnail_en"]',
-        'input[name="banner_en"]',
+        'input[type="file"] >> nth=0',
+        'input[type="file"] >> nth=1',
+        'input[type="file"] >> nth=2',
+        'input[type="file"] >> nth=3',
     ]
     assert all(payload['buffer'] == b'pixels'
                for _selector, payload in page.files)
@@ -737,7 +800,7 @@ def test_product_details_fill_only_nonempty_languages():
     assert calls == [('en', 'English details')]
 
 
-def test_product_display_dates_limit_and_tags_use_stable_helpers(
+def test_product_display_and_limit_use_current_aztek_fields(
         monkeypatch):
     page = _Page()
     switches = []
@@ -775,20 +838,54 @@ def test_product_display_dates_limit_and_tags_use_stable_helpers(
         'limit_type': 'PLAYER', 'limit_quantity': '10',
         'limit_reset_interval_days': '7',
         'limit_reset_at': '2026-07-31 09:15:00',
-        'tags': ['SALE', 'LIMITED'], 'bundle_id': '223553',
+        'bundle_id': '223553',
     }
     asyncio.run(builder._fill_display(page, spec, missing))
     asyncio.run(builder._fill_limit(page, spec, missing))
-    asyncio.run(builder._fill_tags(page, spec))
 
     assert switches[:3] == [
-        ('เปิดใช้งาน', True), ('โหมดทดสอบ', False), ('ซ่อน', True)]
-    assert ('วันเริ่มขาย', spec['start_at']) in dates
-    assert ('วันสิ้นสุด', spec['end_at']) in dates
-    assert ('ประเภทการจำกัด', 'PLAYER') in selects
-    assert 'SALE' in page.clicks and 'LIMITED' in page.clicks
+        ('เปิดใช้งาน', True), ('โหมดทดสอบ', False),
+        ('ซ่อนสินค้า', True)]
+    assert ('เวลาเริ่มขาย (GMT+7)', spec['start_at']) in dates
+    assert ('เวลาหยุดขาย (GMT+7)', spec['end_at']) in dates
+    assert ('รูปแบบการจำกัดการซื้อ', 'PLAYER') in selects
+    assert ('input[name="limit_per"]', '10') in fills
+    assert ('วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)',
+            spec['limit_reset_at']) in dates
     assert ('input[name="position"]', '3') in fills
     assert missing == []
+
+
+def test_product_unlimited_limit_maps_to_aztek_none(monkeypatch):
+    selects = []
+
+    async def fake_select(_page, label, value, *_args, **_kwargs):
+        selects.append((label, value))
+        return True
+
+    monkeypatch.setattr(aztek_form, 'select_after_label', fake_select)
+    missing = []
+    asyncio.run(_builder()._fill_limit(
+        _Page(), {'limit_type': 'UNLIMITED'}, missing))
+
+    assert selects == [('รูปแบบการจำกัดการซื้อ', 'NONE')]
+    assert missing == []
+
+
+def test_product_tags_are_missing_when_aztek_has_no_tag_control():
+    logs = []
+    builder = product_runner.ProductBuilder(
+        lambda message, level='INFO': logs.append((level, message)))
+    page = _Page()
+    page.absent_text.update({'HOT', 'SALE'})
+    missing = []
+
+    asyncio.run(builder._fill_tags(
+        page, {'tags': ['HOT', 'SALE']}, missing))
+
+    assert missing == ['Tags (Aztek ไม่มีช่อง)']
+    assert page.clicks == []
+    assert any('Aztek ไม่มีช่อง Tags' in message for _level, message in logs)
 
 
 @pytest.mark.parametrize('field, label', [

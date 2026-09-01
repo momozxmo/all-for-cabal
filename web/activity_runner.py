@@ -9,7 +9,9 @@ which field lives in :mod:`web.itemcode_runner` and :mod:`web.event_runner`.
 A preview never saves. ``run`` fills and stops; only ``run_many`` writes, and
 only because the caller asked it to.
 """
+import asyncio
 import re
+from contextlib import suppress
 
 from playwright.async_api import async_playwright
 
@@ -18,6 +20,10 @@ import new_tool
 from web import browser_launch
 from web.create_flow import click_create_and_wait_for_write
 from web.search_runner import to_web_url
+
+
+class PreviewTargetLost(RuntimeError):
+    """Playwright lost the preview target while the form was being filled."""
 
 
 def create_url(game, path):
@@ -148,6 +154,44 @@ class ActivityBuilder:
         if any(part in page.url.lower() for part in ('/login', '/signin')):
             raise RuntimeError('session หมดอายุ (โดนเด้งไปหน้า login)')
 
+    async def _fill_preview(self, page, browser, spec):
+        """Fill until complete or stop as soon as Playwright loses the target."""
+        loop = asyncio.get_running_loop()
+        target_lost = loop.create_future()
+        listeners = []
+
+        def watch(source, event, reason):
+            def signal(*_args):
+                if not target_lost.done():
+                    target_lost.set_result(reason)
+
+            source.on(event, signal)
+            listeners.append((source, event, signal))
+
+        watch(page, 'close', 'page closed')
+        watch(page, 'crash', 'page crashed')
+        watch(browser, 'disconnected', 'browser disconnected')
+        fill_task = asyncio.create_task(self.fill_form(page, spec))
+        try:
+            done, _pending = await asyncio.wait(
+                (fill_task, target_lost),
+                return_when=asyncio.FIRST_COMPLETED)
+            if target_lost in done:
+                fill_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await fill_task
+                raise PreviewTargetLost(target_lost.result())
+            missing = await fill_task
+            if page.is_closed() or not browser.is_connected():
+                raise PreviewTargetLost('target unavailable')
+            return missing
+        finally:
+            for source, event, listener in listeners:
+                try:
+                    source.remove_listener(event, listener)
+                except Exception:
+                    pass
+
     async def run(self, game, spec, storage_state, *, headed=False,
                   keep_open_key=None):
         """Fill one form and stop. Nothing is created here, ever.
@@ -159,37 +203,57 @@ class ActivityBuilder:
         self.log('เปิดหน้าสร้าง%s: %s' % (self.KIND, url), 'STEP')
         if keep_open_key:
             await close_kept(keep_open_key)
-        pw = await async_playwright().start()
-        browser = await pw.chromium.launch(**browser_launch.launch_kwargs(headed))
-        context = await browser.new_context(
-            **browser_launch.context_kwargs(headed, storage_state=storage_state))
-        page = await context.new_page()
-        shot = None
-        missing = []
-        keep = False
-        try:
-            await self._open(page, url)
-            missing = await self.fill_form(page, spec)
-            keep = bool(keep_open_key) and headed
-            if not keep:
-                try:
-                    shot = await page.screenshot(full_page=True)
-                except Exception:
-                    shot = None
-            if missing:
-                self.log('กรอกฟอร์มแล้ว แต่ยังไม่ครบ: %s' % ', '.join(missing),
-                         'WARNING')
-            else:
-                self.log('กรอกฟอร์มเสร็จ (ยังไม่กดสร้าง)', 'SUCCESS')
-        finally:
-            if keep:
-                _KEPT[keep_open_key] = (pw, browser, context)
-                self.log('เปิดหน้าต่างค้างไว้ให้ตรวจ — ปิดเองได้ '
-                         'หรือจะปิดให้เองตอนเปิดครั้งถัดไป', 'INFO')
-            else:
-                await _shutdown(pw, browser, context)
-        return {'url': url, 'screenshot': shot, 'missing': missing,
-                'kept_open': keep}
+        for attempt in range(2):
+            pw = await async_playwright().start()
+            browser = await pw.chromium.launch(
+                **browser_launch.launch_kwargs(headed))
+            context = await browser.new_context(
+                **browser_launch.context_kwargs(
+                    headed, storage_state=storage_state))
+            page = await context.new_page()
+            shot = None
+            missing = []
+            keep = False
+            retry = False
+            try:
+                await self._open(page, url)
+                missing = await self._fill_preview(
+                    page, browser, spec)
+                keep = bool(keep_open_key) and headed
+                if not keep:
+                    try:
+                        shot = await page.screenshot(full_page=True)
+                    except Exception:
+                        shot = None
+                if missing:
+                    self.log('กรอกฟอร์มแล้ว แต่ยังไม่ครบ: %s'
+                             % ', '.join(missing), 'WARNING')
+                else:
+                    self.log('กรอกฟอร์มเสร็จ (ยังไม่กดสร้าง)', 'SUCCESS')
+            except PreviewTargetLost as exc:
+                if attempt == 0:
+                    retry = True
+                    self.log(
+                        'การควบคุมหน้า Aztek หลุด (%s) — '
+                        'ลองเปิดใหม่อัตโนมัติ 1 ครั้ง' % exc,
+                        'WARNING')
+                else:
+                    raise RuntimeError(
+                        'การควบคุมหน้า Aztek หลุด 2 ครั้ง — '
+                        'ยังไม่มีข้อมูลถูกสร้าง') from exc
+            finally:
+                if keep:
+                    _KEPT[keep_open_key] = (pw, browser, context)
+                    self.log('เปิดหน้าต่างค้างไว้ให้ตรวจ — ปิดเองได้ '
+                             'หรือจะปิดให้เองตอนเปิดครั้งถัดไป', 'INFO')
+                else:
+                    await _shutdown(pw, browser, context)
+            if retry:
+                continue
+            return {'url': url, 'screenshot': shot, 'missing': missing,
+                    'kept_open': keep}
+
+        raise RuntimeError('เปิด Preview ไม่สำเร็จ')
 
     async def run_many(self, game, specs, storage_state, *, headed=False):
         """Create every one of them in a single browser session.

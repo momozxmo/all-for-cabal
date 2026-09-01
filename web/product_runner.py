@@ -18,6 +18,10 @@ from web.search_runner import to_web_url
 
 
 OPTION_KINDS = frozenset({'currencies', 'categories'})
+OPTION_LABELS = {
+    'categories': 'Category',
+    'currencies': 'Currency',
+}
 
 
 def product_create_url(game):
@@ -48,6 +52,16 @@ def _clean_option_rows(rows):
     return output
 
 
+def _require_product_options(options, wanted):
+    missing = [OPTION_LABELS[kind] for kind in wanted
+               if not options.get(kind)]
+    if missing:
+        raise RuntimeError(
+            'ไม่พบตัวเลือก %s — หน้า Product อาจยังโหลดไม่ครบ'
+            % ', '.join(missing))
+    return options
+
+
 async def _read_options(select):
     rows = await select.locator('option').evaluate_all(
         """nodes => nodes.map(node => ({
@@ -61,6 +75,16 @@ def _category_trigger(page):
     return page.locator(
         'button[data-slot="popover-trigger"]').filter(
             has_text='เลือก Category').first
+
+
+async def _ready_category_trigger(page):
+    """Wait for the async Category catalog before falling back."""
+    trigger = _category_trigger(page)
+    try:
+        await trigger.wait_for(state='visible', timeout=8000)
+    except Exception:
+        pass
+    return trigger
 
 
 def _currency_trigger(original_price):
@@ -142,7 +166,7 @@ async def _currency_select(page):
 async def _harvest_product_options(page, wanted):
     options = {}
     if 'categories' in wanted:
-        trigger = _category_trigger(page)
+        trigger = await _ready_category_trigger(page)
         if await trigger.count():
             options['categories'] = await _read_popover_options(
                 page, trigger)
@@ -178,11 +202,14 @@ async def fetch_options(game, storage_state, kinds):
         try:
             await page.goto(
                 url, wait_until='domcontentloaded', timeout=30000)
+            await page.locator('input[name="th_name"]').wait_for(
+                state='visible', timeout=20000)
             await page.wait_for_timeout(2500)
             if any(part in page.url.lower()
                    for part in ('/login', '/signin')):
                 raise RuntimeError('Aztek session expired')
-            return await _harvest_product_options(page, wanted)
+            return _require_product_options(
+                await _harvest_product_options(page, wanted), wanted)
         finally:
             await context.close()
             await browser.close()
@@ -221,7 +248,7 @@ class ProductBuilder(ActivityBuilder):
         if not category_id:
             missing.append('หมวดหมู่')
         else:
-            trigger = _category_trigger(page)
+            trigger = await _ready_category_trigger(page)
             if await trigger.count():
                 selected = await _select_popover_option(
                     page, trigger, category_id)
@@ -261,15 +288,15 @@ class ProductBuilder(ActivityBuilder):
 
     async def _fill_images(self, page, spec, missing):
         images = spec.get('images') or {}
-        for slot in (
+        for index, slot in enumerate((
             'thumbnail_th', 'banner_th', 'thumbnail_en', 'banner_en',
-        ):
+        )):
             image = images.get(slot)
             if not image:
                 continue
             try:
-                await page.locator(
-                    'input[name="%s"]' % slot).first.set_input_files({
+                await page.locator('input[type="file"]').nth(
+                    index).set_input_files({
                         'name': image['name'],
                         'mimeType': image['content_type'],
                         'buffer': image['bytes'],
@@ -344,39 +371,41 @@ class ProductBuilder(ActivityBuilder):
         for label, field, default in (
             ('เปิดใช้งาน', 'is_enabled', False),
             ('โหมดทดสอบ', 'is_test_mode', True),
-            ('ซ่อน', 'is_hidden', False),
+            ('ซ่อนสินค้า', 'is_hidden', False),
         ):
             await aztek_form.set_switch(
                 page, label, bool(spec.get(field, default)), self.log)
         await aztek_form.fill(
             page, 'input[name="position"]',
             spec.get('position', '0'), self.log, 'ตำแหน่ง')
-        for label, field in (
-            ('วันเริ่มขาย', 'start_at'),
-            ('วันสิ้นสุด', 'end_at'),
+        for label, field, missing_label in (
+            ('เวลาเริ่มขาย (GMT+7)', 'start_at', 'วันเริ่มขาย'),
+            ('เวลาหยุดขาย (GMT+7)', 'end_at', 'วันสิ้นสุด'),
         ):
             value = str(spec.get(field) or '').strip()
             if not value:
-                missing.append(label)
+                missing.append(missing_label)
                 continue
             if not await aztek_form.set_datetime(
                     page, _date_trigger(page, label), value,
                     self.log, label=label):
-                missing.append(label)
+                missing.append(missing_label)
 
     async def _fill_limit(self, page, spec, missing):
         limit_type = str(spec.get('limit_type') or '').strip()
         if not limit_type:
             missing.append('ประเภทการจำกัด')
             return
+        aztek_limit_type = (
+            'NONE' if limit_type == 'UNLIMITED' else limit_type)
         if not await aztek_form.select_after_label(
-                page, 'ประเภทการจำกัด', limit_type, self.log):
+                page, 'รูปแบบการจำกัดการซื้อ', aztek_limit_type, self.log):
             missing.append('ประเภทการจำกัด')
         if limit_type == 'UNLIMITED':
             return
         quantity = str(spec.get('limit_quantity') or '').strip()
         ok = await aztek_form.fill(
-            page, 'input[name="limit_quantity"]', quantity,
+            page, 'input[name="limit_per"]', quantity,
             self.log, 'จำนวนที่ซื้อได้')
         if not quantity or not ok:
             missing.append('จำนวนที่ซื้อได้')
@@ -388,19 +417,33 @@ class ProductBuilder(ActivityBuilder):
                 interval, self.log, 'รีเซ็ตทุกกี่วัน')
         reset_at = str(spec.get('limit_reset_at') or '').strip()
         if reset_at and not await aztek_form.set_datetime(
-                page, _date_trigger(page, 'รีเซ็ตล่าสุด'), reset_at,
-                self.log, label='รีเซ็ตล่าสุด'):
+                page, _date_trigger(
+                    page,
+                    'วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)'),
+                reset_at, self.log,
+                label='วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)'):
             missing.append('รีเซ็ตล่าสุด')
 
-    async def _fill_tags(self, page, spec):
+    async def _fill_tags(self, page, spec, missing):
         approved = {'EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE'}
-        for tag in spec.get('tags') or []:
-            if tag not in approved:
-                continue
+        tags = [tag for tag in spec.get('tags') or [] if tag in approved]
+        if not tags:
+            return
+        controls = [page.get_by_text(tag, exact=True).first for tag in tags]
+        if not any([await control.count() for control in controls]):
+            missing.append('Tags (Aztek ไม่มีช่อง)')
+            self.log(
+                'Aztek ไม่มีช่อง Tags ในหน้าสร้าง Product ปัจจุบัน '
+                'จึงยังไม่ส่งข้อมูล Tag',
+                'WARNING')
+            return
+        for tag, control in zip(tags, controls):
             try:
-                await page.get_by_text(tag, exact=True).first.click(
-                    timeout=6000)
+                if not await control.count():
+                    raise RuntimeError('ไม่พบตัวเลือก')
+                await control.click(timeout=6000)
             except Exception as exc:
+                missing.append('Tag %s' % tag)
                 self.log('เลือก Tag %s ไม่สำเร็จ: %s' % (tag, exc), 'WARNING')
 
     async def _fill_bundles(self, page, spec, missing):
@@ -430,13 +473,14 @@ class ProductBuilder(ActivityBuilder):
         primary_text = section.get_by_text(
             '#%s' % primary_id, exact=True).first
         primary_card = primary_text.locator(
-            'xpath=ancestor::*[.//input[@type="radio"]][1]').first
-        primary = primary_card.locator('input[type="radio"]').first
+            'xpath=ancestor::*[.//button[@role="checkbox"]][1]').first
+        primary = primary_card.locator('button[role="checkbox"]').first
         try:
             if await primary.count() == 0:
                 raise RuntimeError('Primary control not found')
-            await primary.check(timeout=6000)
-            if not await primary.is_checked():
+            if await primary.get_attribute('aria-checked') != 'true':
+                await primary.click(timeout=6000)
+            if await primary.get_attribute('aria-checked') != 'true':
                 raise RuntimeError('Primary control did not stay checked')
         except Exception as exc:
             self.log('เลือก Primary Bundle %s ไม่สำเร็จ: %s' % (
@@ -464,6 +508,6 @@ class ProductBuilder(ActivityBuilder):
         await self._fill_prices(page, spec, missing)
         await self._fill_display(page, spec, missing)
         await self._fill_limit(page, spec, missing)
-        await self._fill_tags(page, spec)
+        await self._fill_tags(page, spec, missing)
         await self._fill_bundles(page, spec, missing)
         return missing

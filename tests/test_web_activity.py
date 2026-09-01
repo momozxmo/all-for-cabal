@@ -630,6 +630,105 @@ def test_a_preview_has_no_way_to_press_the_button():
     assert '_save' in inspect.getsource(activity_runner.ActivityBuilder.run_many)
 
 
+def test_a_preview_reopens_once_when_playwright_loses_its_page(monkeypatch):
+    """A detached Playwright target must not become a long missing-field list."""
+    launches = []
+    logs = []
+
+    class EventSource:
+        def __init__(self):
+            self.listeners = {}
+
+        def on(self, event, listener):
+            self.listeners.setdefault(event, []).append(listener)
+
+        def remove_listener(self, event, listener):
+            self.listeners[event].remove(listener)
+
+        def emit(self, event):
+            for listener in tuple(self.listeners.get(event, ())):
+                listener()
+
+    class Page(EventSource):
+        url = 'https://x/itemcodes/create'
+
+        def __init__(self, number):
+            super().__init__()
+            self.number = number
+            self.closed = False
+
+        def is_closed(self):
+            return self.closed
+
+        async def screenshot(self, **_kwargs):
+            return b'preview'
+
+    class Context:
+        def __init__(self, page):
+            self.page = page
+
+        async def new_page(self):
+            return self.page
+
+        async def close(self):
+            return None
+
+    class Browser(EventSource):
+        def __init__(self, page):
+            super().__init__()
+            self.page = page
+            self.connected = True
+
+        def is_connected(self):
+            return self.connected
+
+        async def new_context(self, **_kwargs):
+            return Context(self.page)
+
+        async def close(self):
+            self.connected = False
+
+    class Chromium:
+        async def launch(self, **_kwargs):
+            number = len(launches) + 1
+            page = Page(number)
+            launches.append(page)
+            return Browser(page)
+
+    class Playwright:
+        chromium = Chromium()
+
+        async def stop(self):
+            return None
+
+    class Starter:
+        async def start(self):
+            return Playwright()
+
+    monkeypatch.setattr(activity_runner, 'async_playwright', Starter)
+    builder = _builder()
+    builder._open = lambda page, url: _value(None)
+
+    async def fill(page, _spec):
+        if page.number == 1:
+            await asyncio.sleep(0)
+            page.closed = True
+            page.emit('close')
+            await asyncio.sleep(0)
+            return ['ข้อความที่ไม่ควรถูกส่งกลับ']
+        return []
+
+    builder.fill_form = fill
+    builder._log = lambda message, level: logs.append((message, level))
+
+    outcome = asyncio.run(builder.run(
+        GAME, _itemcode(), storage_state={}, headed=False))
+
+    assert len(launches) == 2
+    assert outcome['missing'] == []
+    assert any('ลองเปิดใหม่อัตโนมัติ' in message for message, _level in logs)
+
+
 def test_the_two_forms_are_told_apart_by_where_they_write():
     """Both live at the game root, not under /shop/ where bundles are."""
     assert activity_runner.create_url(GAME, 'itemcodes').endswith(
