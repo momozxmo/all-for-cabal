@@ -650,7 +650,8 @@ def test_manual_selection_uses_only_fetched_option_ids():
         }""")
 
         page.locator('#categorySelect').select_option('2')
-        page.locator('#priceMatches select').select_option('12')
+        page.locator('#priceMatches .currency-combobox').fill(
+            'coin-b - Coin')
 
         entry = page.evaluate("productQueue.current()")
         assert entry['category_id'] == '2'
@@ -963,7 +964,7 @@ def test_wallet_point_price_is_editable_and_manual_price_can_be_added():
         page.locator('#btnAddManualPrice').click()
         assert page.locator('#priceMatches .price-match-row').count() == 2
         page.locator('#priceMatches .price-match-row').nth(1).locator(
-            'select').select_option('92')
+            '.currency-combobox').fill('force-gem - Force Gem')
         manual_inputs = page.locator(
             '#priceMatches .price-match-row').nth(1).locator(
                 'input[type="number"]')
@@ -1510,6 +1511,87 @@ def test_scoped_retry_renders_only_target_group_live_results():
         browser.close()
 
 
+def test_operator_can_retry_only_checked_missing_items():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        context.add_init_script("""
+          localStorage.setItem('afc.workspaceId', 'workspace-1');
+          window.sentSearchPayloads = [];
+          window.WebSocket = class {
+            constructor(url) {
+              this.url = url;
+              window.lastSearchSocket = this;
+            }
+            send(body) { window.sentSearchPayloads.push(JSON.parse(body)); }
+            close() {}
+          };
+        """)
+        page = context.new_page()
+
+        def item_finder_app(route):
+            url = route.request.url
+            if (route.request.resource_type == 'document'
+                    and url.startswith('http://tool.test/')):
+                route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8',
+                    body=_page_html(ITEM_FINDER))
+            elif url.endswith('/api/auth/me'):
+                route.fulfill(json={'username': 'tester', 'role': 'member',
+                                    'local_mode': True})
+            elif url.endswith('/api/games'):
+                route.fulfill(json={'games': ['CabalPC TH']})
+            elif url.endswith('/api/modes'):
+                route.fulfill(json={
+                    'event': {'web_mode': 'any', 'web_locked': False}})
+            elif url.endswith('/api/capabilities'):
+                route.fulfill(json={'allow_headed': False})
+            elif url.endswith('/api/aztek/status'):
+                route.fulfill(json={'status': 'active'})
+            elif url.endswith('/api/workspaces/workspace-1'):
+                route.fulfill(json={
+                    'workspace_id': 'workspace-1', 'mode': 'event',
+                    'game': 'CabalPC TH', 'filename': 'plan.xlsx',
+                    'count': 3, 'occurrence_count': 3, 'result_count': 1,
+                    'items': [
+                        {'kind': '1', 'name': 'found'},
+                        {'kind': '2', 'name': 'missing first'},
+                        {'kind': '3', 'name': 'missing second'},
+                    ],
+                    'results': [{'aztek_id': '10', 'item_name': 'found'}],
+                    'not_found': [
+                        ['#2 Kind=2', 'missing'],
+                        ['#3 Kind=3', 'missing'],
+                    ],
+                    'running_job': None,
+                })
+            else:
+                route.abort()
+
+        context.route('http://tool.test/**', item_finder_app)
+        page.on('dialog', lambda dialog: dialog.accept())
+        page.goto('http://tool.test/?workspace_id=workspace-1')
+        page.wait_for_function(
+            "typeof state === 'object' && state.workspaceId === 'workspace-1'",
+            timeout=10000)
+
+        picks = page.locator('#notFoundList .missing-pick')
+        assert picks.count() == 2
+        assert picks.evaluate_all('nodes => nodes.map(node => node.checked)') == [
+            True, True]
+        picks.nth(0).uncheck()
+        assert '1 รายการ' in page.locator('#btnRetryMissing').inner_text()
+        page.locator('#btnRetryMissing').click()
+        picks.nth(1).uncheck()
+        page.evaluate('window.lastSearchSocket.onopen()')
+        page.wait_for_function('window.sentSearchPayloads.length === 1')
+
+        payload = page.evaluate('window.sentSearchPayloads[0]')
+        assert payload['only_missing'] is True
+        assert payload['selected_missing_indexes'] == [1]
+        browser.close()
+
+
 def test_images_stay_in_memory_and_workspace_delete_is_scoped():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -1849,7 +1931,7 @@ def test_thumbnail_name_updates_in_this_tab_and_other_open_product_tabs():
         browser.close()
 
 
-def test_each_product_currency_row_can_search_live_options_and_select_result():
+def test_each_product_currency_row_uses_one_searchable_fetched_combobox():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = _tool_page(browser)
@@ -1865,13 +1947,61 @@ def test_each_product_currency_row_can_search_live_options_and_select_result():
           renderProductOptions(productQueue.current());
         }""")
 
-        search = page.locator('.currency-search')
-        assert search.count() == 1
-        search.fill('leaf')
-        choices = page.locator('.currency-select option').all_text_contents()
-        assert choices == ['เลือก Currency',
-                           'cabalpcth-leaf-gem - Leaf Gem']
-        page.locator('.currency-select').select_option('11')
+        combobox = page.locator('.currency-combobox')
+        assert combobox.count() == 1
+        assert page.locator('.currency-search').count() == 0
+        assert page.locator('.currency-select').count() == 0
+        list_id = combobox.get_attribute('list')
+        assert list_id
+        assert page.locator(f'#{list_id} option').evaluate_all(
+            "nodes => nodes.map(node => node.value)") == [
+                'cash - Cash',
+                'cabalpcth-leaf-gem - Leaf Gem',
+                'wallet-point - Wallet Point',
+            ]
+        combobox.fill('cabalpcth-leaf-gem - Leaf Gem')
         assert page.evaluate("""productQueue.current().prices[0]
           .currency_id""") == '11'
+        browser.close()
+
+
+def test_operator_can_remove_imported_and_manual_product_price_rows():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          optionState.currencies.options = [
+            {id:'10',slug:'cash',label:'Cash'},
+            {id:'11',slug:'wallet-point',label:'Wallet Point'}
+          ];
+          addDrafts([{source_group_key:'g1',name_th:'A',
+            price_candidates:[
+              {source_label:'Cash',sale_price:100,original_price:100},
+              {source_label:'กำหนดเอง 1',sale_price:50,original_price:60}
+            ],prices:[
+              {source_label:'Cash',currency_id:'10',currency_slug:'cash',
+                currency_label:'Cash',original_price:100,price:100},
+              {source_label:'กำหนดเอง 1',currency_id:'11',
+                currency_slug:'wallet-point',currency_label:'Wallet Point',
+                original_price:60,price:50}
+            ]}], 'workspace-1');
+          renderProductOptions(productQueue.current());
+        }""")
+
+        rows = page.locator('.price-match-row')
+        assert rows.count() == 2
+        rows.nth(0).locator('.price-remove').click()
+        assert page.locator('.price-match-row').count() == 1
+        assert page.evaluate("""productQueue.current().price_candidates
+          .map(candidate => candidate.source_label)""") == ['กำหนดเอง 1']
+        assert page.evaluate("""productQueue.current().prices
+          .map(price => price.source_label)""") == ['กำหนดเอง 1']
+
+        page.locator('.price-remove').click()
+        assert page.locator('.price-match-row').count() == 0
+        assert page.locator('#priceMatches .empty-note').inner_text() == (
+            'ยังไม่มีข้อมูลราคาในไฟล์')
+        assert page.evaluate(
+            "productQueue.current().price_candidates") == []
+        assert page.evaluate("productQueue.current().prices") == []
         browser.close()

@@ -195,6 +195,21 @@ def test_missing_criteria_are_the_rows_nothing_came_back_for():
     assert missing[1]['_label'].startswith('#3 ')
 
 
+def test_missing_criteria_can_limit_a_retry_to_selected_missing_rows():
+    """The indexes address the missing list, not the original plan."""
+    criteria = [
+        {'kind': '1', 'opt': '', 'dur': '', 'name': 'found'},
+        {'kind': '2', 'opt': '', 'dur': '', 'name': 'missing first'},
+        {'kind': '3', 'opt': '', 'dur': '', 'name': 'missing second'},
+    ]
+    results = [{'item_kind': '1', 'item_option': '', 'duration_index': ''}]
+
+    selected = svc.missing_criteria(criteria, results, selected_indexes=[1])
+
+    assert [row['kind'] for row in selected] == ['3']
+    assert selected[0]['_label'].startswith('#3 ')
+
+
 def test_a_retry_adds_to_what_was_already_found():
     """The first pass's results have to survive a run that only redoes the
     misses — and the newcomers belong at their place in the document, not

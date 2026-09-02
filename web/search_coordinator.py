@@ -206,6 +206,7 @@ class SearchCoordinator:
             criteria = list(workspace.criteria)
             occurrences = list(workspace.occurrences)
             kept = list(workspace.results)
+            previous_not_found = list(workspace.not_found or [])
             all_occurrences = list(occurrences)
             previous_results = list(kept)
             if not web_mode:
@@ -240,12 +241,52 @@ class SearchCoordinator:
         # first pass found. A full run starts clean — its results are invalid
         # from the moment it begins, even if it later fails.
         only_missing = bool(request_data.get('only_missing'))
+        selected_missing_indexes = request_data.get('selected_missing_indexes')
+        preserved_not_found = []
         if only_missing:
-            criteria = item_service.missing_criteria(criteria, kept)
+            all_missing = item_service.missing_criteria(criteria, kept)
+            if selected_missing_indexes is not None:
+                valid_selection = (
+                    isinstance(selected_missing_indexes, list)
+                    and all(type(index) is int
+                            for index in selected_missing_indexes)
+                    and all(0 <= index < len(all_missing)
+                            for index in selected_missing_indexes)
+                )
+                if not valid_selection:
+                    await emit({
+                        'type': 'error', 'code': 'invalid_missing_selection',
+                        'msg': 'รายการที่เลือกค้นซ้ำไม่ถูกต้อง กรุณาเลือกใหม่',
+                    })
+                    await emit({'type': 'done', 'count': len(kept),
+                                'not_found': previous_not_found})
+                    return False
+                selected_missing_indexes = sorted(set(selected_missing_indexes))
+                selected_set = set(selected_missing_indexes)
+                preserved_not_found = [
+                    previous_not_found[index]
+                    if index < len(previous_not_found)
+                    else [all_missing[index].get('_label', ''),
+                          'ยังไม่ได้เลือกค้นซ้ำ']
+                    for index in range(len(all_missing))
+                    if index not in selected_set
+                ]
+                criteria = item_service.missing_criteria(
+                    criteria, kept,
+                    selected_indexes=selected_missing_indexes)
+            else:
+                criteria = all_missing
             if not criteria:
-                await emit({'type': 'log', 'level': 'SUCCESS',
-                            'msg': 'ไม่มีรายการที่หาไม่เจอแล้ว — ไม่ต้องค้นซ้ำ'})
-                await emit({'type': 'done', 'count': len(kept), 'not_found': []})
+                has_misses = bool(all_missing)
+                await emit({
+                    'type': 'log',
+                    'level': 'WARNING' if has_misses else 'SUCCESS',
+                    'msg': ('ยังไม่ได้เลือกรายการสำหรับค้นซ้ำ'
+                            if has_misses else
+                            'ไม่มีรายการที่หาไม่เจอแล้ว — ไม่ต้องค้นซ้ำ'),
+                })
+                await emit({'type': 'done', 'count': len(kept),
+                            'not_found': previous_not_found if has_misses else []})
                 return False
             await emit({'type': 'log', 'level': 'STEP',
                         'msg': 'ค้นซ้ำเฉพาะที่หาไม่เจอ %d รายการ (ผลเดิม %d รายการยังอยู่)'
@@ -281,6 +322,8 @@ class SearchCoordinator:
                       config={'game': game, 'mode': mode,
                               'web_mode': web_mode or '', 'headed': headed,
                               'only_missing': only_missing,
+                              'selected_missing_indexes':
+                                  selected_missing_indexes,
                               'source_group_key': source_group_key})
             db.add(job)
             db.flush()
@@ -316,7 +359,8 @@ class SearchCoordinator:
             asyncio.ensure_future(
                 self._drive(live, user_id, workspace_id, job_id, game, data,
                             storage_state, kept, occurrences, previous_results,
-                            all_occurrences, source_group_key))
+                            all_occurrences, source_group_key,
+                            preserved_not_found))
         except BaseException as error:
             try:
                 self._fail_unstarted_job(job_id, error)
@@ -335,7 +379,7 @@ class SearchCoordinator:
     async def _drive(self, live: LiveSearch, user_id, workspace_id, job_id,
                      game, data, storage_state, kept=(), occurrences=(),
                      previous_results=(), all_occurrences=(),
-                     source_group_key='') -> None:
+                     source_group_key='', preserved_not_found=()) -> None:
         """Run one search to its end and write down what happened.
 
         Nothing in here depends on anyone watching: the job row and the results
@@ -372,7 +416,8 @@ class SearchCoordinator:
                     previous_results, scoped_results, source_group_key,
                     all_occurrences)
                 if source_group_key else scoped_results)
-            outcome['not_found'] = list(finder._not_found)
+            outcome['not_found'] = (list(preserved_not_found)
+                                    + list(finder._not_found))
             outcome['status'] = 'cancelled' if finder._cancel else 'done'
             streamed_results = scoped_results if source_group_key else outcome['results']
             if kept:

@@ -85,6 +85,70 @@ _CLICK_ROW = """([aid])=>{
 }"""
 
 
+# Read the current Aztek item form without changing it. Keep the live ids as
+# the first choice and the older name/text probes as fallbacks for games whose
+# form has not moved yet.
+_READ_ITEM_DETAIL = """()=>{
+    let webEnabled=null,qty='',tradeable=null,drillable=null,critVal='';
+    let hasImage=false,desc='';
+
+    const dta=document.querySelector('textarea[name="detail"]');
+    if(dta) desc=(dta.value||dta.textContent||'').trim();
+
+    const imgs=[...document.querySelectorAll('img')];
+    for(const img of imgs){
+        if(img.naturalWidth>0&&img.naturalHeight>0&&
+           img.src&&!img.src.startsWith('data:')&&
+           img.getBoundingClientRect().width>30){
+            hasImage=true; break;
+        }
+    }
+
+    function parentText(el,levels=6){
+        let cur=el;
+        for(let i=0;i<levels;i++){
+            if(!cur||!cur.parentElement) break;
+            cur=cur.parentElement;
+            const t=(cur.innerText||cur.textContent||'').trim();
+            if(t.length>2&&t.length<200) return t;
+        }
+        return '';
+    }
+
+    const cbs=[
+        ...document.querySelectorAll('input[type="checkbox"]'),
+        ...document.querySelectorAll('[role="checkbox"]'),
+    ];
+    const cbInfo=[];
+    for(const cb of cbs){
+        const checked=cb.checked!==undefined?cb.checked
+                      :cb.getAttribute('aria-checked')==='true'
+                      ||cb.classList.contains('checked');
+        const txt=parentText(cb);
+        const nm=(cb.getAttribute('name')||'').toLowerCase();
+        const id=(cb.id||'').toLowerCase();
+        cbInfo.push({txt:txt.substring(0,60),checked,name:nm,id});
+        if(id==='game-tradeable'||nm==='is_tradable'){
+            tradeable=checked; continue;
+        }
+        if(webEnabled===null&&(txt.includes('เปิดใช้งาน')||txt.includes('แสดงผล')))
+            webEnabled=checked;
+        if(tradeable===null&&txt.includes('แลกเปลี่ยน')) tradeable=checked;
+        if(drillable===null&&txt.includes('เจาะรู')) drillable=checked;
+    }
+
+    const inputs=[...document.querySelectorAll(
+        'input[type="text"],input[type="number"],input:not([type])')];
+    for(const inp of inputs){
+        const txt=parentText(inp);
+        if(!qty&&txt.includes('จำนวน')) qty=(inp.value||'').trim();
+        if(!critVal&&txt.includes('คริติคอล')) critVal=(inp.value||'').trim();
+    }
+
+    return {webEnabled,qty,tradeable,drillable,critVal,hasImage,desc,cbInfo};
+}"""
+
+
 def _norm_name(s):
     """normalize ชื่อไอเทมเพื่อเทียบแบบยืดหยุ่น (ไม่สนตัวพิมพ์/ช่องว่าง)"""
     return ''.join((s or '').lower().split())
@@ -2742,69 +2806,7 @@ class App:
                 await self._go_back(page, return_to)
                 return (False, '')
 
-            detail = await page.evaluate("""()=>{
-                let webEnabled=null,qty='',tradeable=null,drillable=null,critVal='';
-                let hasImage=false,desc='';
-
-                // คำอธิบายไอเทม (textarea name="detail") — โหมด Shop เอามาโชว์เพิ่มในตาราง
-                const dta=document.querySelector('textarea[name="detail"]');
-                if(dta) desc=(dta.value||dta.textContent||'').trim();
-
-                // Image check — look for item image that actually loaded
-                const imgs=[...document.querySelectorAll('img')];
-                for(const img of imgs){
-                    if(img.naturalWidth>0&&img.naturalHeight>0&&
-                       img.src&&!img.src.startsWith('data:')&&
-                       img.getBoundingClientRect().width>30){
-                        hasImage=true; break;
-                    }
-                }
-
-                // Helper: get container text
-                function parentText(el,levels=6){
-                    let cur=el;
-                    for(let i=0;i<levels;i++){
-                        if(!cur||!cur.parentElement) break;
-                        cur=cur.parentElement;
-                        const t=(cur.innerText||cur.textContent||'').trim();
-                        if(t.length>2&&t.length<200) return t;
-                    }
-                    return '';
-                }
-
-                // Scan checkboxes
-                const cbs=[
-                    ...document.querySelectorAll('input[type="checkbox"]'),
-                    ...document.querySelectorAll('[role="checkbox"]'),
-                ];
-                const cbInfo=[];
-                for(const cb of cbs){
-                    const checked=cb.checked!==undefined?cb.checked
-                                  :cb.getAttribute('aria-checked')==='true'
-                                  ||cb.classList.contains('checked');
-                    const txt=parentText(cb);
-                    const nm=(cb.getAttribute('name')||'').toLowerCase();
-                    cbInfo.push({txt:txt.substring(0,60),checked,name:nm});
-                    // ItemMove ในไฟล์ shop = ช่องนี้ (ไม่ติ๊ก = 'ผูกมัดไอดี')
-                    // จับจาก name ก่อน แม่นกว่าอ่านข้อความรอบ ๆ
-                    if(nm==='is_tradable'){ tradeable=checked; continue; }
-                    if(webEnabled===null&&(txt.includes('เปิดใช้งาน')||txt.includes('แสดงผล')))
-                        webEnabled=checked;
-                    if(tradeable===null&&txt.includes('แลกเปลี่ยน')) tradeable=checked;
-                    if(drillable===null&&txt.includes('เจาะรู')) drillable=checked;
-                }
-
-                // Scan text inputs
-                const inputs=[...document.querySelectorAll(
-                    'input[type="text"],input[type="number"],input:not([type])')];
-                for(const inp of inputs){
-                    const txt=parentText(inp);
-                    if(!qty&&txt.includes('จำนวน')) qty=(inp.value||'').trim();
-                    if(!critVal&&txt.includes('คริติคอล')) critVal=(inp.value||'').trim();
-                }
-
-                return {webEnabled,qty,tradeable,drillable,critVal,hasImage,desc,cbInfo};
-            }""")
+            detail = await page.evaluate(_READ_ITEM_DETAIL)
 
             self.log(f"    web:{detail.get('webEnabled')} img:{detail.get('hasImage')} "
                      f"qty:{detail.get('qty')!r} trade:{detail.get('tradeable')} "

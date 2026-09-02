@@ -60,6 +60,8 @@
     .log .SUCCESS{color:var(--green)}.log .WARNING{color:var(--yellow)}.log .ERROR{color:var(--red)}.log .STEP{color:#7ab8ff}
     progress{width:100%;height:9px;accent-color:var(--green)}.result-actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
     .count{color:var(--green);font-weight:700}.not-found{margin:0;padding-left:20px;color:var(--yellow);max-height:160px;overflow:auto}
+    .missing-row{padding:4px 0}.missing-row label{display:flex;align-items:flex-start;gap:8px;cursor:pointer}
+    .missing-pick{width:18px;height:18px;margin-top:1px;flex:0 0 auto;accent-color:var(--yellow)}
     .desc-col{display:none}body[data-mode="shop"] .desc-col{display:table-cell}dialog{width:min(720px,92vw);max-height:85vh;
       color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}dialog::backdrop{background:#000a}
     dialog h3{margin-top:0}.sheet-list,.bundle-list{display:grid;gap:7px;max-height:430px;overflow:auto;margin:12px 0}.sheet-row,.bundle{
@@ -361,8 +363,12 @@
 
       <section class="card">
         <div class="card-head"><h2>รายการที่หาไม่เจอ <span id="notFoundCount" class="warning">0</span></h2>
-          <button id="btnRetryMissing" class="warn" disabled
-                  title="ค้นใหม่เฉพาะรายการพวกนี้ ผลที่เจอแล้วไม่หาย">🔁 ค้นซ้ำเฉพาะที่ไม่เจอ</button></div>
+          <div class="actions">
+            <button id="btnMissingAll" disabled>เลือกทั้งหมด</button>
+            <button id="btnMissingNone" disabled>ล้างทั้งหมด</button>
+            <button id="btnRetryMissing" class="warn" disabled
+                    title="ค้นใหม่เฉพาะรายการที่เลือก ผลที่เจอแล้วไม่หาย">🔁 เลือกรายการที่จะค้นซ้ำ</button>
+          </div></div>
         <div class="card-body"><ol id="notFoundList" class="not-found"><li class="hint">ยังไม่มีข้อมูล</li></ol></div>
       </section>
     </div>
@@ -401,7 +407,7 @@ function showNotice(target,tone,title,detail='',nextStep=''){
   if(state==='error')notice.focus({preventScroll:false});
 }
 function clearNotice(target){const notice=typeof target==='string'?$(target):target;if(!notice)return;notice.hidden=true;notice.replaceChildren();}
-const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'' };
+const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'', busy:false };
 const sheetPickerSearch = createSheetPickerSearch({
   list:$('sheetList'),input:$('sheetSearch'),count:$('sheetSearchCount'),
   empty:$('sheetSearchEmpty'),selectAllButton:$('btnSheetsAll'),
@@ -428,11 +434,9 @@ function deepSummary(row){
   [['qty_val','จำนวน'],['crit_val','คริต']].forEach(([key,label])=>{ if(row[key])out.push(`${label}=${row[key]}`); });
   return out.join(' ') || '-';
 }
-function setBusy(busy){ $('btnSearch').disabled=busy||!state.workspaceId||!state.criteria.length||!state.aztekConnected; $('btnStop').disabled=!busy;
+function setBusy(busy){ state.busy=busy;$('btnSearch').disabled=busy||!state.workspaceId||!state.criteria.length||!state.aztekConnected; $('btnStop').disabled=!busy;
   $('btnImportPlan').disabled=busy; $('btnClearWorkspace').disabled=busy;
-  // Only worth offering once a run has ended and left something behind.
-  $('btnRetryMissing').disabled=busy||!state.notFound||!state.notFound.length
-    ||!state.aztekConnected;
+  updateMissingActions();
   document.querySelectorAll('input[name=runMode]').forEach(input=>input.disabled=busy); }
 function applyRuntimeMode(me){
   const localMode=!!(me&&me.local_mode);
@@ -599,27 +603,42 @@ function addResult(item){state.results.push(item);const index=state.results.leng
   $('resultsTable').tBodies[0].appendChild(tr);$('resultCount').textContent=state.results.length;resultActions();}
 function renderResults(){ $('resultsTable').tBodies[0].replaceChildren();const rows=[...state.results];state.results=[];state.selected.clear();rows.forEach(addResult);resultActions(); }
 function resetResults(){state.results=[];state.selected.clear();$('resultsTable').tBodies[0].replaceChildren();$('resultCount').textContent='0';resultActions();}
+function selectedMissingIndexes(){return [...document.querySelectorAll('#notFoundList .missing-pick:checked')].map(input=>Number(input.dataset.index));}
+function updateMissingActions(){
+  const total=(state.notFound||[]).length,selected=selectedMissingIndexes().length;
+  $('btnMissingAll').disabled=state.busy||!total||selected===total;
+  $('btnMissingNone').disabled=state.busy||!selected;
+  $('btnRetryMissing').disabled=state.busy||!selected||!state.aztekConnected;
+  $('btnRetryMissing').textContent=selected?`🔁 ค้นซ้ำ ${selected} รายการ`:'🔁 เลือกรายการที่จะค้นซ้ำ';
+}
+function setMissingSelection(checked){
+  document.querySelectorAll('#notFoundList .missing-pick').forEach(input=>{input.checked=checked;});
+  updateMissingActions();
+}
 function renderNotFound(rows){const list=$('notFoundList');list.replaceChildren();$('notFoundCount').textContent=rows.length;
-  state.notFound=rows;$('btnRetryMissing').disabled=!rows.length||!state.aztekConnected;
-  if(!rows.length){const li=document.createElement('li');li.className='hint';li.textContent='เจอครบทุกรายการ';list.appendChild(li);return;}
-  rows.forEach(row=>{const li=document.createElement('li');li.textContent=`${row[0]} — ${row[1]}`;list.appendChild(li);});}
+  state.notFound=rows;
+  if(!rows.length){const li=document.createElement('li');li.className='hint';li.textContent='เจอครบทุกรายการ';list.appendChild(li);updateMissingActions();return;}
+  rows.forEach((row,index)=>{const li=document.createElement('li');li.className='missing-row';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.className='missing-pick';input.dataset.index=String(index);input.checked=true;input.onchange=updateMissingActions;const text=document.createElement('span');text.textContent=`${row[0]} — ${row[1]}`;label.append(input,text);li.appendChild(label);list.appendChild(li);});updateMissingActions();}
+$('btnMissingAll').onclick=()=>setMissingSelection(true);
+$('btnMissingNone').onclick=()=>setMissingSelection(false);
 
 // Opening the socket starts a search, or — when one is already running for this
 // workspace — attaches to it and replays its log from the beginning.
 function startSearch(attach,onlyMissing){if(!state.workspaceId)return;
+  const retrySelection=onlyMissing?selectedMissingIndexes():null;
   // A retry keeps what the first pass found; only a fresh run clears the table.
   if(!attach&&!onlyMissing){resetResults();renderNotFound([]);}
   const searchTitle=attach?'กำลังต่อกับการค้นหาที่ค้างอยู่':(onlyMissing?'กำลังค้นซ้ำเฉพาะรายการที่ไม่เจอ':'กำลังค้นหาบน Aztek');
   $('progress').value=0;$('progressText').textContent=searchTitle;showNotice('finderNotice','progress',searchTitle,'ระบบกำลังเชื่อมต่อและตรวจทีละรายการ');setBusy(true);
   const protocol=location.protocol==='https:'?'wss:':'ws:';const socket=new WebSocket(`${protocol}//${location.host}/ws/search`);state.socket=socket;
-  socket.onopen=()=>socket.send(JSON.stringify({workspace_id:state.workspaceId,source_group_key:state.searchSourceGroupKey,game:$('game').value,web_mode:document.querySelector('input[name=webMode]:checked').value,headed:state.allowHeaded&&$('runHeaded').checked,only_missing:!!onlyMissing}));
+  socket.onopen=()=>{const payload={workspace_id:state.workspaceId,source_group_key:state.searchSourceGroupKey,game:$('game').value,web_mode:document.querySelector('input[name=webMode]:checked').value,headed:state.allowHeaded&&$('runHeaded').checked,only_missing:!!onlyMissing};if(onlyMissing)payload.selected_missing_indexes=retrySelection;socket.send(JSON.stringify(payload));};
   socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.type==='log')log(message.msg,message.level);else if(message.type==='progress'){const percent=message.total?message.cur/message.total*100:0;$('progress').value=Math.min(100,percent);$('progressText').textContent=`${message.cur}/${message.total} ${message.name||''}`;showNotice('finderNotice','progress',`กำลังค้นหา ${message.cur}/${message.total}`,message.name||'กำลังตรวจรายการถัดไป');}
     else if(message.type==='reset_results')resetResults();else if(message.type==='result')sourceGroupRows([message.item],state.searchSourceGroupKey).forEach(addResult);
     else if(message.type==='error'){ if(message.code==='aztek_session_required'||message.code==='aztek_session_expired'){ paintAztek(message.code==='aztek_session_expired'?'expired':'disconnected'); log((message.msg||'ต้องเชื่อมเซสชัน Aztek ก่อน')+' — เปิดหน้า “บัญชี / เชื่อม Aztek”','ERROR');showNotice('finderNotice','error','ยังค้นหาบน Aztek ไม่ได้',message.msg||'เซสชัน Aztek ยังไม่พร้อม','เปิดหน้า “บัญชี / เชื่อม Aztek” แล้วลองค้นหาอีกครั้ง'); } else { log(message.msg||'เกิดข้อผิดพลาด','ERROR');showNotice('finderNotice','error','ค้นหาไม่สำเร็จ',message.msg||'เกิดข้อผิดพลาดระหว่างค้นหา','ตรวจ Log แล้วลองค้นหาอีกครั้ง'); } }
     else if(message.type==='done'){$('progress').value=100;const review=state.results.filter(r=>r.name_mismatch).length;const missing=(message.not_found||[]).length;$('progressText').textContent=`เสร็จ · พบ ${message.count}`+(review?` · ⚠ ตรวจเอง ${review}`:'');renderNotFound(message.not_found||[]);setBusy(false);if(review||missing)showNotice('finderNotice','warning',`ค้นหาเสร็จ · พบ ${message.count} รายการ`,`${missing?`ไม่พบ ${missing} รายการ`:''}${missing&&review?' · ':''}${review?`ชื่อไม่ตรง ${review} รายการ`:''}`,'ตรวจรายการสีเหลืองและรายการที่ไม่พบ');else showNotice('finderNotice','success',`ค้นหาเสร็จ · พบ ${message.count} รายการ`,'พบข้อมูลครบและไม่มีรายการที่ต้องตรวจ');if(review)log(`⚠ มี ${review} รายการชื่อไม่ตรงกับไฟล์ (ไฮไลต์สีเหลือง) — ตรวจเอง`,'WARNING');}};
   socket.onerror=()=>{log('WebSocket ขัดข้อง','ERROR');showNotice('finderNotice','error','การเชื่อมต่อค้นหาขัดข้อง','ไม่สามารถรับผลจากเซิร์ฟเวอร์ได้','ตรวจการเชื่อมต่อแล้วลองค้นหาอีกครั้ง');};socket.onclose=event=>{state.socket=null;setBusy(false); if(event&&event.code===4401){window.location.replace('/login');}};}
 $('btnSearch').onclick=()=>startSearch(false,false);
-$('btnRetryMissing').onclick=()=>{const n=(state.notFound||[]).length;if(!n)return;
+$('btnRetryMissing').onclick=()=>{const n=selectedMissingIndexes().length;if(!n)return;
   if(!confirm(`ค้นซ้ำเฉพาะ ${n} รายการที่หาไม่เจอใช่ไหม?\n\nผลที่เจอไปแล้วยังอยู่ครบ`))return;
   log(`ค้นซ้ำเฉพาะที่ไม่เจอ ${n} รายการ`,'STEP');startSearch(false,true);};
 // Closing the socket no longer stops anything — the run belongs to the server —

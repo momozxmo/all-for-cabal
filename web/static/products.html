@@ -43,12 +43,12 @@
     .source-chip.ok{border-color:rgba(63,201,138,.45);color:var(--green)}
     .price-match-list{display:grid;gap:9px}
     .price-head,.price-match-row{display:grid;
-      grid-template-columns:minmax(120px,1fr) minmax(170px,1.4fr) minmax(95px,.65fr) minmax(95px,.65fr);
+      grid-template-columns:minmax(120px,1fr) minmax(170px,1.4fr) minmax(95px,.65fr) minmax(95px,.65fr) auto;
       gap:8px;align-items:center}
     .price-head{font-size:11px;color:var(--faint);font-weight:700}
     .price-match-row input,.price-match-row select{width:100%}
-    .currency-cell{display:grid;gap:5px}
-    .currency-search{font-size:12px}
+    .currency-combobox{font-size:12px}
+    .price-remove{white-space:nowrap}
     .empty-note{color:var(--muted);font-size:12px}
     .bundle-summary{display:grid;gap:10px}
     .bundle-rows{display:grid;gap:9px}
@@ -184,7 +184,7 @@
                 <h3 style="margin:0">สกุลเงินและราคา</h3>
                 <button id="btnAddManualPrice" type="button">+ เพิ่มราคาเอง</button>
               </div>
-              <div class="price-head"><span>ค่าจากไฟล์</span><span>Currency บน Aztek</span><span>ราคาปกติ</span><span>ราคาขาย</span></div>
+              <div class="price-head"><span>ค่าจากไฟล์</span><span>Currency บน Aztek</span><span>ราคาปกติ</span><span>ราคาขาย</span><span></span></div>
               <div id="priceMatches" class="price-match-list"></div>
             </section>
 
@@ -922,6 +922,32 @@ function addLiveOptions(select, options, selectedId, placeholder) {
   select.value = selectedId || '';
 }
 
+function currencyOptionText(option) {
+  if (!option) return '';
+  return option.slug ? `${option.slug} - ${option.label}` : option.label;
+}
+
+function currencyFromInput(value) {
+  const wanted = normalizeOptionText(value);
+  if (!wanted) return null;
+  return optionState.currencies.options.find(option =>
+    [option.id, option.slug, option.label, currencyOptionText(option)].some(
+      candidate => normalizeOptionText(candidate) === wanted)) || null;
+}
+
+function removeProductPrice(entry, candidate) {
+  if (!entry || !candidate) return;
+  const index = (entry.price_candidates || []).indexOf(candidate);
+  if (index >= 0) entry.price_candidates.splice(index, 1);
+  entry.prices = (entry.prices || []).filter(price =>
+    normalizeOptionText(price.source_label)
+      !== normalizeOptionText(candidate.source_label));
+  markSourceDirty(entry, 'price_candidates');
+  invalidateProductPreview(entry);
+  productQueue.save();
+  renderProductOptions(entry);
+}
+
 function renderProductOptions(entry) {
   addLiveOptions(
     $('categorySelect'), optionState.categories.options,
@@ -936,39 +962,49 @@ function renderProductOptions(entry) {
     list.appendChild(empty);
     return;
   }
-  for (const candidate of candidates) {
+  for (const [candidateIndex, candidate] of candidates.entries()) {
     const row = document.createElement('div');
     row.className = 'price-match-row';
     const chip = document.createElement('span');
     const resolved = resolvedPrice(entry, candidate.source_label);
     chip.className = 'source-chip' + (resolved ? ' ok' : '');
     chip.textContent = `${candidate.source_label} · ${candidate.sale_price}`;
-    const currencyCell = document.createElement('div');
-    currencyCell.className = 'currency-cell';
-    const search = document.createElement('input');
-    search.type = 'search';
-    search.className = 'currency-search';
-    search.placeholder = 'ค้นหา Currency...';
-    search.autocomplete = 'off';
-    const select = document.createElement('select');
-    select.className = 'currency-select';
-    const renderCurrencies = () => {
-      const query = normalizeOptionText(search.value);
-      const selectedId = select.value || resolved?.currency_id || '';
-      const selected = optionState.currencies.options.find(option =>
-        String(option.id) === String(selectedId));
-      const filtered = optionState.currencies.options.filter(option =>
-        !query || [option.id, option.slug, option.label].some(value =>
-          normalizeOptionText(value).includes(query)));
-      if (selected && !filtered.some(option =>
-          String(option.id) === String(selected.id))) filtered.unshift(selected);
-      addLiveOptions(select, filtered, selectedId, 'เลือก Currency');
+    const currencyInput = document.createElement('input');
+    currencyInput.type = 'search';
+    currencyInput.className = 'currency-combobox';
+    currencyInput.placeholder = 'ค้นหาและเลือก Currency...';
+    currencyInput.autocomplete = 'off';
+    const optionList = document.createElement('datalist');
+    const listId = `currency-options-${entry.key}-${candidateIndex}`;
+    optionList.id = listId;
+    currencyInput.setAttribute('list', listId);
+    for (const option of optionState.currencies.options) {
+      const node = document.createElement('option');
+      node.value = currencyOptionText(option);
+      node.label = `ID ${option.id}`;
+      optionList.appendChild(node);
+    }
+    const selectedCurrency = optionState.currencies.options.find(option =>
+      String(option.id) === String(resolved?.currency_id || ''));
+    currencyInput.value = selectedCurrency
+      ? currencyOptionText(selectedCurrency)
+      : (resolved?.currency_slug
+        ? `${resolved.currency_slug} - ${resolved.currency_label}`
+        : (resolved?.currency_label || ''));
+    currencyInput.oninput = () => {
+      const currency = currencyFromInput(currencyInput.value);
+      if (currency) setPriceCurrency(entry, candidate, currency.id);
     };
-    search.oninput = renderCurrencies;
-    renderCurrencies();
-    select.onchange = () =>
-      setPriceCurrency(entry, candidate, select.value);
-    currencyCell.append(search, select);
+    currencyInput.onchange = () => {
+      const currency = currencyFromInput(currencyInput.value);
+      if (currency) {
+        setPriceCurrency(entry, candidate, currency.id);
+      } else if (!currencyInput.value.trim()) {
+        setPriceCurrency(entry, candidate, '');
+      } else {
+        renderProductOptions(entry);
+      }
+    };
     const original = document.createElement('input');
     original.type = 'number';
     original.min = '0';
@@ -993,7 +1029,14 @@ function renderProductOptions(entry) {
       markSourceDirty(entry, 'price_candidates');
       productQueue.save();
     };
-    row.append(chip, currencyCell, original, sale);
+    const remove = document.createElement('button');
+    remove.className = 'price-remove danger';
+    remove.type = 'button';
+    remove.textContent = 'ลบ';
+    remove.onclick = () => removeProductPrice(entry, candidate);
+    const currencyCell = document.createElement('div');
+    currencyCell.append(currencyInput, optionList);
+    row.append(chip, currencyCell, original, sale, remove);
     list.appendChild(row);
   }
 }

@@ -330,7 +330,7 @@ def _found_keys(results):
             for row in results}
 
 
-def missing_criteria(criteria, results):
+def missing_criteria(criteria, results, selected_indexes=None):
     """The plan rows that came back with nothing, ready to search again.
 
     Each carries the label it had in the full run, so a retry's 'not found'
@@ -348,7 +348,10 @@ def missing_criteria(criteria, results):
         retry = dict(row)
         retry['_label'] = item_finder.criteria_label(index, row)
         missing.append(retry)
-    return missing
+    if selected_indexes is None:
+        return missing
+    selected = set(selected_indexes)
+    return [row for index, row in enumerate(missing) if index in selected]
 
 
 def merge_found(previous, fresh, occurrences):

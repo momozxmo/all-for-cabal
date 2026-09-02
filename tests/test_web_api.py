@@ -801,6 +801,63 @@ def test_searching_again_runs_only_the_misses_and_keeps_the_finds(
     assert [row['aztek_id'] for row in saved.results] == ['10', '20']
 
 
+def test_retrying_selected_misses_keeps_unselected_misses_visible(
+    test_settings, test_database, member, monkeypatch
+):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(
+            member.id, 'event', 'selected-retry.xlsx')
+        workspace.criteria = [
+            {'kind': '1', 'opt': '', 'dur': '', 'name': 'found'},
+            {'kind': '2', 'opt': '', 'dur': '', 'name': 'missing first'},
+            {'kind': '3', 'opt': '', 'dur': '', 'name': 'missing second'},
+        ]
+        workspace.occurrences = [
+            {'kind': '1', 'opt': '', 'dur': '', 'sources': ['G1']},
+            {'kind': '2', 'opt': '', 'dur': '', 'sources': ['G1']},
+            {'kind': '3', 'opt': '', 'dur': '', 'sources': ['G1']},
+        ]
+        workspace.results = [{
+            'aztek_id': '10', 'item_name': 'A', 'item_kind': '1',
+            'item_option': '', 'duration_index': '', 'sources': ['G1'],
+            'groups': 'G1',
+        }]
+        workspace.not_found = [
+            ['#2 Kind=2', 'missing'],
+            ['#3 Kind=3', 'missing'],
+        ]
+        workspace_id = workspace.id
+
+    coordinator = _coordinator(test_settings, test_database)
+    ran_with = {}
+
+    async def fake_run(finder, data, storage_state):
+        ran_with['kinds'] = [row['kind'] for row in data['multi']]
+        row = {
+            'aztek_id': '30', 'item_name': 'C', 'item_kind': '3',
+            'item_option': '', 'duration_index': '', 'game': data['game'],
+        }
+        finder._results = [row]
+        finder.add_result_row(row)
+        finder._not_found = []
+
+    async def scenario():
+        monkeypatch.setattr(search_runner.HeadlessFinder, 'run', fake_run)
+        assert await coordinator.start(
+            member.id, workspace_id,
+            {'game': 'CabalM SEA', 'web_mode': 'any', 'only_missing': True,
+             'selected_missing_indexes': [1]},
+            lambda message: _noop())
+        await _settle(coordinator, workspace_id)
+
+    asyncio.run(scenario())
+    assert ran_with['kinds'] == ['3']
+    with test_database.session() as db:
+        saved = db.get(WorkspaceRecord, workspace_id)
+    assert [row['aztek_id'] for row in saved.results] == ['10', '30']
+    assert saved.not_found == [['#2 Kind=2', 'missing']]
+
+
 def test_scoped_retry_persists_every_scope_but_replays_only_its_product_group(
         client, test_settings, test_database, member, monkeypatch):
     with test_database.session() as db:

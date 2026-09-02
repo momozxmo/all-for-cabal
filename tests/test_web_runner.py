@@ -5,6 +5,8 @@ import os
 import sys
 import asyncio
 
+from playwright.sync_api import sync_playwright
+
 os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -28,6 +30,27 @@ class FakePage:
 
     async def wait_for_timeout(self, ms):
         pass
+
+
+def test_detail_reader_uses_the_live_game_tradeable_checkbox():
+    """The current Aztek item form exposes tradeability as #game-tradeable."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content('''
+          <section>
+            <h2>พารามิเตอร์สำหรับส่งเข้าเกมส์</h2>
+            <input id="game-tradeable" type="checkbox" checked>
+            <label for="game-tradeable">
+              แลกเปลี่ยนได้ (ไม่เลือก = "ผูกมัดไอดี")
+            </label>
+          </section>
+        ''')
+
+        detail = page.evaluate(item_finder._READ_ITEM_DETAIL)
+
+        assert detail['tradeable'] is True
+        browser.close()
 
 
 def test_binding_and_callbacks():
