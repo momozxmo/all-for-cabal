@@ -47,6 +47,8 @@
       gap:8px;align-items:center}
     .price-head{font-size:11px;color:var(--faint);font-weight:700}
     .price-match-row input,.price-match-row select{width:100%}
+    .currency-cell{display:grid;gap:5px}
+    .currency-search{font-size:12px}
     .empty-note{color:var(--muted);font-size:12px}
     .bundle-summary{display:grid;gap:10px}
     .bundle-rows{display:grid;gap:9px}
@@ -62,7 +64,6 @@
     .bundle-conflict{padding:10px;border:1px solid rgba(242,182,75,.5);border-radius:9px;
       background:#302711;color:var(--yellow)}
     .bundle-conflict .actions{margin-top:8px}
-    .tag-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
     .warning-list{margin:0 0 14px;padding:10px 12px 10px 29px;border:1px solid rgba(242,182,75,.45);
       border-radius:9px;background:#302711;color:var(--yellow);font-size:12px}
     .sheet-row{display:flex;align-items:center;gap:9px}
@@ -70,7 +71,7 @@
       .product-layout{grid-template-columns:1fr}
     }
     @media(max-width:720px){
-      .field-grid,.image-grid,.switch-grid,.tag-grid{grid-template-columns:1fr}
+      .field-grid,.image-grid,.switch-grid{grid-template-columns:1fr}
       .price-head{display:none}
       .price-match-row{grid-template-columns:1fr}
     }
@@ -215,7 +216,7 @@
               <h3>ช่วงเวลาขาย</h3>
               <div id="sellingPeriod" class="field-grid">
                 <label class="field">วันเริ่มขาย *<input id="startAt" class="dtpick" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
-                <label class="field">วันสิ้นสุด *<input id="endAt" class="dtpick" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
+                <label class="field">วันสิ้นสุด *<input id="endAt" class="dtpick" data-fixed-second="59" type="text" placeholder="YYYY-MM-DD HH:mm:ss" readonly></label>
               </div>
             </section>
 
@@ -234,16 +235,6 @@
               </div>
             </section>
 
-            <section class="product-panel" data-product-section="tags">
-              <h3>Tags</h3>
-              <div id="tagFields" class="tag-grid">
-                <label class="switch-row"><input type="checkbox" data-product-tag="EVENT"> EVENT</label>
-                <label class="switch-row"><input type="checkbox" data-product-tag="HOT"> HOT</label>
-                <label class="switch-row"><input type="checkbox" data-product-tag="LIMITED"> LIMITED</label>
-                <label class="switch-row"><input type="checkbox" data-product-tag="NEW"> NEW</label>
-                <label class="switch-row"><input type="checkbox" data-product-tag="SALE"> SALE</label>
-              </div>
-            </section>
           </div>
         </div>
       </div>
@@ -313,22 +304,47 @@ const previewedProductKeys = new Set();
 const productEditRevisions = new Map();
 let productRunBusy = false;
 let productPageReady = false;
+addEventListener('storage', event => {
+  if (event.key !== PRODUCT_QUEUE_KEY || !event.newValue) return;
+  try {
+    const remote = JSON.parse(event.newValue);
+    if (!Array.isArray(remote)) return;
+    const namesByKey = new Map(remote.map(entry => [
+      entry.key,
+      entry.image_names && typeof entry.image_names === 'object'
+        ? structuredClone(entry.image_names) : {},
+    ]));
+    let changed = false;
+    for (const entry of productQueue.items) {
+      if (!namesByKey.has(entry.key)) continue;
+      entry.image_names = namesByKey.get(entry.key);
+      changed = true;
+    }
+    if (changed) renderImageNames();
+  } catch (error) {}
+});
 const PRODUCT_SOURCE_FIELDS = [
   'source_sheet', 'game', 'name_th', 'name_en', 'category_source',
   'start_at', 'end_at', 'bundle_ids', 'composite_required',
   'primary_bundle_id', 'bundle_id', 'bundle_source', 'price_candidates', 'limit_type',
   'limit_quantity', 'limit_reset_interval_days', 'limit_reset_at',
-  'tags', 'warnings',
+  'warnings',
 ];
 const PRODUCT_EXECUTION_SOURCE_FIELDS = new Set(
   PRODUCT_SOURCE_FIELDS.filter(field =>
     !['source_sheet', 'game', 'warnings'].includes(field)));
+productQueue.items = productQueue.items.map(withDefaults);
 
 function normalizeOptionText(value) {
   return String(value || '')
     .normalize('NFKC')
     .toLocaleLowerCase()
     .replace(/[\s_\-–—:/()[\].]+/g, '');
+}
+
+function endSecond59(value) {
+  return String(value || '').replace(
+    /([ T]\d{2}:\d{2})(?::\d{2})?$/, '$1:59');
 }
 
 function matchFetchedOption(source, options) {
@@ -626,7 +642,7 @@ function withDefaults(source) {
     bundle_ids: [], composite_required: false,
     price_candidates: [], prices: [], limit_type: 'UNLIMITED',
     limit_quantity: '', limit_reset_interval_days: '',
-    limit_reset_at: '', tags: [], is_enabled: false,
+    limit_reset_at: '', is_enabled: false,
     is_test_mode: true, is_hidden: false, position: '0',
     warnings: [], selected: false, image_names: {},
   }, raw);
@@ -634,7 +650,8 @@ function withDefaults(source) {
     ? entry.price_candidates : [];
   normalizeProductBundles(entry);
   entry.prices = Array.isArray(entry.prices) ? entry.prices : [];
-  entry.tags = Array.isArray(entry.tags) ? entry.tags : [];
+  entry.end_at = endSecond59(entry.end_at);
+  delete entry.tags;
   entry.warnings = Array.isArray(entry.warnings) ? entry.warnings : [];
   entry.image_names = entry.image_names && typeof entry.image_names === 'object'
     ? entry.image_names : {};
@@ -880,9 +897,6 @@ function renderQueue() {
       entry.source_sheet,
       entry.workspace_id ? `workspace ${entry.workspace_id}` : '',
     ].filter(Boolean).join(' · ');
-    document.querySelectorAll('[data-product-tag]').forEach(box => {
-      box.checked = entry.tags.includes(box.dataset.productTag);
-    });
   }
   renderWarnings(entry);
   renderBundle(entry);
@@ -929,12 +943,32 @@ function renderProductOptions(entry) {
     const resolved = resolvedPrice(entry, candidate.source_label);
     chip.className = 'source-chip' + (resolved ? ' ok' : '');
     chip.textContent = `${candidate.source_label} · ${candidate.sale_price}`;
+    const currencyCell = document.createElement('div');
+    currencyCell.className = 'currency-cell';
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'currency-search';
+    search.placeholder = 'ค้นหา Currency...';
+    search.autocomplete = 'off';
     const select = document.createElement('select');
-    addLiveOptions(
-      select, optionState.currencies.options,
-      resolved?.currency_id || '', 'เลือก Currency');
+    select.className = 'currency-select';
+    const renderCurrencies = () => {
+      const query = normalizeOptionText(search.value);
+      const selectedId = select.value || resolved?.currency_id || '';
+      const selected = optionState.currencies.options.find(option =>
+        String(option.id) === String(selectedId));
+      const filtered = optionState.currencies.options.filter(option =>
+        !query || [option.id, option.slug, option.label].some(value =>
+          normalizeOptionText(value).includes(query)));
+      if (selected && !filtered.some(option =>
+          String(option.id) === String(selected.id))) filtered.unshift(selected);
+      addLiveOptions(select, filtered, selectedId, 'เลือก Currency');
+    };
+    search.oninput = renderCurrencies;
+    renderCurrencies();
     select.onchange = () =>
       setPriceCurrency(entry, candidate, select.value);
+    currencyCell.append(search, select);
     const original = document.createElement('input');
     original.type = 'number';
     original.min = '0';
@@ -959,7 +993,7 @@ function renderProductOptions(entry) {
       markSourceDirty(entry, 'price_candidates');
       productQueue.save();
     };
-    row.append(chip, select, original, sale);
+    row.append(chip, currencyCell, original, sale);
     list.appendChild(row);
   }
 }
@@ -1190,7 +1224,7 @@ function jobFrom(entry) {
     primary_bundle_id: String(entry.primary_bundle_id || '').trim(),
     bundle_id: String(entry.primary_bundle_id || '').trim(),
     start_at: entry.start_at || '',
-    end_at: entry.end_at || '',
+    end_at: endSecond59(entry.end_at),
     is_enabled: !!entry.is_enabled,
     is_test_mode: !!entry.is_test_mode,
     is_hidden: !!entry.is_hidden,
@@ -1200,7 +1234,6 @@ function jobFrom(entry) {
     limit_reset_interval_days:
       String(entry.limit_reset_interval_days || ''),
     limit_reset_at: entry.limit_reset_at || '',
-    tags: [...(entry.tags || [])],
     bundle_conflict: entry.bundle_conflict
       ? structuredClone(entry.bundle_conflict) : null,
   };
@@ -1476,7 +1509,12 @@ function bindValue(id, field, checkbox = false) {
   $(id).addEventListener(event, () => {
     const entry = productQueue.current();
     if (!entry) return;
-    entry[field] = checkbox ? $(id).checked : $(id).value;
+    let value = checkbox ? $(id).checked : $(id).value;
+    if (field === 'end_at') {
+      value = endSecond59(value);
+      $(id).value = value;
+    }
+    entry[field] = value;
     markSourceDirty(entry, field);
     productQueue.save();
     if (field === 'name_th' || field === 'name_en') updateQueueOption(entry);
@@ -1555,16 +1593,6 @@ $('btnAddBundle').onclick = () => {
 $('btnAddManualPrice').onclick = () =>
   addManualPrice(productQueue.current());
 
-document.querySelectorAll('[data-product-tag]').forEach(box => {
-  box.onchange = () => {
-    const entry = productQueue.current();
-    if (!entry) return;
-    entry.tags = [...document.querySelectorAll('[data-product-tag]:checked')]
-      .map(node => node.dataset.productTag);
-    markSourceDirty(entry, 'tags');
-    productQueue.save();
-  };
-});
 document.querySelectorAll('[data-tab-group]').forEach(button => {
   button.onclick = () => showTab(
     button.dataset.tabGroup, button.dataset.tab);

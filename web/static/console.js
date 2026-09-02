@@ -156,6 +156,11 @@ function optionList(count) {
 /** Turn a text input into a read-only field with a 24-hour calendar popover. */
 function attachPicker(input) {
   input.value = displayStamp(input.value);
+  const requestedSecond = Number(input.dataset.fixedSecond);
+  const fixedSecond = input.dataset.fixedSecond === undefined
+    || !Number.isInteger(requestedSecond)
+    || requestedSecond < 0 || requestedSecond > 59
+    ? null : requestedSecond;
   const wrap = document.createElement('span');
   wrap.className = 'dtwrap';
   input.parentNode.insertBefore(wrap, input);
@@ -193,6 +198,7 @@ function attachPicker(input) {
         select.appendChild(option);
       });
       select.onchange = () => { shown[field] = +select.value; commit(); };
+      if (field === 'second' && fixedSecond !== null) select.disabled = true;
       boxes[field] = select;
       cell.append(label, select);
       time.appendChild(cell);
@@ -211,9 +217,11 @@ function attachPicker(input) {
   let shown = readStamp(input.value) || {
     year: today.getFullYear(), month: today.getMonth(), day: today.getDate(),
     hour: 0, minute: 0, second: 0};
+  if (fixedSecond !== null) shown.second = fixedSecond;
   let view = {year: shown.year, month: shown.month};
 
   function commit() {
+    if (fixedSecond !== null) shown.second = fixedSecond;
     input.value = writeStamp(shown);
     input.dispatchEvent(new Event('input', {bubbles: true}));
     paint();
@@ -260,7 +268,8 @@ function attachPicker(input) {
   nowBtn.onclick = () => {
     const day = new Date();
     shown = {year: day.getFullYear(), month: day.getMonth(), day: day.getDate(),
-             hour: 0, minute: 0, second: 0};
+             hour: 0, minute: 0,
+             second: fixedSecond === null ? 0 : fixedSecond};
     view = {year: shown.year, month: shown.month};
     commit();
   };
@@ -268,7 +277,11 @@ function attachPicker(input) {
 
   function open() {
     const value = readStamp(input.value);
-    if (value) { shown = value; view = {year: value.year, month: value.month}; }
+    if (value) {
+      shown = value;
+      if (fixedSecond !== null) shown.second = fixedSecond;
+      view = {year: value.year, month: value.month};
+    }
     paint();
     pop.hidden = false;
   }

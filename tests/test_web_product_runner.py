@@ -872,7 +872,7 @@ def test_product_unlimited_limit_maps_to_aztek_none(monkeypatch):
     assert missing == []
 
 
-def test_product_tags_are_missing_when_aztek_has_no_tag_control():
+def test_legacy_product_tags_do_not_block_current_aztek_form():
     logs = []
     builder = product_runner.ProductBuilder(
         lambda message, level='INFO': logs.append((level, message)))
@@ -883,9 +883,9 @@ def test_product_tags_are_missing_when_aztek_has_no_tag_control():
     asyncio.run(builder._fill_tags(
         page, {'tags': ['HOT', 'SALE']}, missing))
 
-    assert missing == ['Tags (Aztek ไม่มีช่อง)']
+    assert missing == []
     assert page.clicks == []
-    assert any('Aztek ไม่มีช่อง Tags' in message for _level, message in logs)
+    assert logs == []
 
 
 @pytest.mark.parametrize('field, label', [

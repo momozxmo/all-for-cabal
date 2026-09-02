@@ -57,6 +57,7 @@
           <select id="bulkTier" style="width:auto"><option>Common</option><option>Rare</option><option>Epic</option><option>Mystic</option><option>Legend</option></select>
           <button id="btnApplyAll" type="button">ใช้กับทุกไอเทม</button>
           <button id="btnAddRow" type="button">+ เพิ่มไอเทม</button>
+          <button id="btnUndoItem" type="button" disabled>↶ Undo ลบไอเทม</button>
           <span class="hint" style="margin-left:6px">เรียงบน→ล่าง = ลำดับบนเว็บ · แถวเหลือง = ต้องตรวจเอง</span>
         </div>
       </div>
@@ -139,6 +140,7 @@ const RESULTS_KEY='afc.bundleResults', MADE_KEY='afc.bundleMade';
 const GAME_KEY='afc.game', MODE_KEY='afc.mode', MISS_KEY='afc.notFound';
 const state={queue:[],active:'',rewardOptions:{},rewardOptionsGame:'',
   eventDrafts:[],itemcodeDrafts:[],workspaceId:'',results:[],made:[]};
+const deletedItems=new Map();
 
 async function apiFetch(url, options){
   const response = await fetch(url, Object.assign({credentials:'same-origin'}, options||{}));
@@ -218,9 +220,11 @@ function renderQueue(){const pick=$('queuePick');pick.replaceChildren();
     pick.appendChild(option);});
   if(current())pick.value=state.active;
   ['btnQueueDel','btnQueueClear'].forEach(id=>$(id).disabled=!state.queue.length);
+  $('btnUndoItem').disabled=!current()||!deletedItems.has(state.active);
   paintRunButtons();saveQueue();}
 $('queuePick').onchange=()=>select($('queuePick').value);
 $('btnQueueDel').onclick=()=>{const b=current();if(!b)return;
+  deletedItems.delete(b.key);
   state.queue=state.queue.filter(x=>x.key!==b.key);
   select(state.queue.length?state.queue[0].key:'');};
 $('btnQueueNew').onclick=()=>{
@@ -243,6 +247,7 @@ function select(key){state.active=key;const b=current();
 $('btnQueueClear').onclick=()=>{if(!state.queue.length)return;
   if(!confirm(`ล้างคิวทั้งหมด ${state.queue.length} บันเดิล? (ที่แก้ไว้จะหายหมด)`))return;
   state.queue=[];state.active='';state.results=[];state.made=[];
+  deletedItems.clear();
   $('bundleResults').replaceChildren();$('handoff').hidden=true;
   clearNotice('runMsg');select('');};
 
@@ -364,7 +369,8 @@ function renderItems(){const b=current();const body=$('itemsTable').tBodies[0];b
       moveTd.appendChild(mv);});
     const xTd=document.createElement('td');const rm=document.createElement('button');
     rm.type='button';rm.textContent='✕';rm.title='ตัดออกจากบันเดิลนี้';
-    rm.onclick=()=>{b.items.splice(i,1);renderItems();renderQueue();};xTd.appendChild(rm);
+    rm.onclick=()=>{const item=b.items.splice(i,1)[0];
+      deletedItems.set(b.key,{item,index:i});renderItems();renderQueue();};xTd.appendChild(rm);
     [numTd,idTd,nameTd,docTd,qtyTd,docQtyTd,tierTd,rateTd,paramTd,descTd,moveTd,xTd]
       .forEach(td=>tr.appendChild(td));
     if(it.shared||it.name_mismatch||drift)tr.classList.add('needs-review');
@@ -394,6 +400,10 @@ function paintReview(){const b=current();if(!b){$('reviewNote').textContent='';r
 $('btnAddRow').onclick=()=>{const b=current();if(!b)return;
   b.items.push({id:'',name:'',qty:'1',tier:'Common',rate:'',shared:false});
   renderItems();renderQueue();};
+$('btnUndoItem').onclick=()=>{const b=current();if(!b)return;
+  const deleted=deletedItems.get(b.key);if(!deleted)return;
+  b.items.splice(Math.min(deleted.index,b.items.length),0,deleted.item);
+  deletedItems.delete(b.key);renderItems();renderQueue();};
 $('btnApplyAll').onclick=()=>{const b=current();if(!b)return;
   const q=$('bulkQty').value||'1',t=$('bulkTier').value;
   b.items.forEach(it=>{it.qty=q;it.tier=t;});renderItems();saveQueue();};

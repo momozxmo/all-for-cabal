@@ -149,7 +149,7 @@ def test_leaving_the_search_page_does_not_throw_the_search_away():
 def test_ui_exposes_desktop_item_finder_controls():
     required_ids = [
         'modeEvent', 'modeItemcode', 'modeShop', 'game', 'webAny', 'webYes',
-        'webNo', 'templateFile', 'planFile', 'btnImportTemplate', 'btnImportPlan',
+        'webNo', 'planFile', 'btnImportPlan',
         'btnClearWorkspace', 'criteriaTable', 'btnSearch', 'btnStop', 'btnSelectAll',
         'btnClearSelection', 'btnCopySelected', 'btnCopyAll', 'btnExportXlsx',
         'btnExportCsv', 'btnBundles', 'resultsTable', 'notFoundList', 'log',
@@ -161,7 +161,7 @@ def test_ui_exposes_desktop_item_finder_controls():
 
 def test_ui_uses_workspace_api_and_handles_regroup_reset():
     required_fragments = [
-        '/api/import-template', '/api/import-plan', '/api/import-plan/apply',
+        '/api/import-plan', '/api/import-plan/apply',
         '/api/workspaces/', '/ws/search', 'workspace_id', 'reset_results',
         'selected_indexes', 'navigator.clipboard',
     ]

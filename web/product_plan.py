@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 
 BANGKOK = ZoneInfo('Asia/Bangkok')
-TAG_ORDER = ('EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE')
 _WEEKDAYS = {
     'monday': 0, 'mon': 0, 'จันทร์': 0,
     'tuesday': 1, 'tue': 1, 'อังคาร': 1,
@@ -163,30 +162,6 @@ def _limit_fields(meta: dict, now=None) -> dict:
     }
 
 
-def _tag_values(shop_label) -> list[str]:
-    text = _norm(shop_label)
-    compact = text.replace(' ', '')
-    hits = set()
-    if any(token in text for token in ('event', 'กิจกรรม')):
-        hits.add('EVENT')
-    if any(token in text for token in (
-            'popular', 'must have', 'musthave', 'ยอดนิยม')):
-        hits.add('HOT')
-    if any(token in text for token in ('limited', 'จำกัด')):
-        hits.add('LIMITED')
-    if re.search(r'(^|\s)new($|\s)', text) or 'ใหม่' in text:
-        hits.add('NEW')
-    if ('%' in _text(shop_label)
-            or any(token in text for token in (
-                'sale', 'discount', 'off', 'ลด'))):
-        hits.add('SALE')
-    # Keep this local variable used: it makes "MustHave" match without adding a
-    # hardcoded Product catalog.
-    if 'musthave' in compact:
-        hits.add('HOT')
-    return [tag for tag in TAG_ORDER if tag in hits]
-
-
 def _clean_prices(raw) -> list[dict]:
     output = []
     seen = set()
@@ -226,13 +201,18 @@ def _unique_warnings(values) -> list[str]:
     return output
 
 
+def _end_second_59(value) -> str:
+    text = _text(value)
+    return re.sub(r'([ T]\d{2}:\d{2})(?::\d{2})?$', r'\1:59', text)
+
+
 def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
     current = _bangkok_now(now)
     name = _text(product.get('name') or meta.get('product') or group_key)
     start_at = _text(product.get('start_at'))
     if not start_at:
         start_at = current.strftime('%Y-%m-%d 00:00:00')
-    end_at = _text(product.get('end_at'))
+    end_at = _end_second_59(product.get('end_at'))
     bundle_ids = _id_tokens(product.get('bundle_ids'))
     if not bundle_ids:
         bundle_ids = _id_tokens(product.get('bundle_id'))
@@ -263,7 +243,6 @@ def _draft_from_meta(group_key, meta, product, game, now=None) -> dict:
         'bundle_source': 'workbook' if bundle_ids else '',
         'price_candidates': _clean_prices(product.get('price_candidates')),
         'prices': [],
-        'tags': _tag_values(product.get('shop_label')),
         'is_enabled': False,
         'is_test_mode': True,
         'is_hidden': False,

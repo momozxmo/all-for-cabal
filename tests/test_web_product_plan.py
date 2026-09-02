@@ -33,7 +33,7 @@ def _meta(**overrides):
     return {'is_shop': True, 'product_meta': product}
 
 
-def test_product_draft_uses_same_name_end_time_limits_and_tags():
+def test_product_draft_uses_same_name_end_time_and_limits_without_tags():
     draft = product_plan.build_products(
         {'g1': _meta()}, 'CabalPC TH', now=NOW)[0]
 
@@ -42,12 +42,12 @@ def test_product_draft_uses_same_name_end_time_limits_and_tags():
     assert draft['source_group_key'] == 'g1'
     assert draft['source_sheet'] == 'Promotion 15.7'
     assert draft['start_at'] == '2026-07-30 00:00:00'
-    assert draft['end_at'] == '2026-07-30 07:59:00'
+    assert draft['end_at'] == '2026-07-30 07:59:59'
     assert draft['limit_type'] == 'PLAYER'
     assert draft['limit_quantity'] == '10'
     assert draft['limit_reset_interval_days'] == ''
     assert draft['limit_reset_at'] == ''
-    assert draft['tags'] == ['SALE']
+    assert 'tags' not in draft
     assert draft['prices'] == []
     assert draft['price_candidates'][0]['source_label'] == 'Future Coin'
 
@@ -81,7 +81,7 @@ def test_multiple_source_bundles_become_direct_product_bundles():
     assert draft['bundle_id'] == '223930'
     assert draft['bundle_source'] == 'workbook'
     assert draft['start_at'] == '2026-07-30 00:00:00'
-    assert draft['end_at'] == '2026-07-30 07:59:00'
+    assert draft['end_at'] == '2026-07-30 07:59:59'
     assert draft['category_source'] == 'Highlight'
     assert draft['price_candidates'][0]['source_label'] == 'Future Coin'
     assert draft['limit_type'] == 'PLAYER'
@@ -148,14 +148,6 @@ def test_same_weekday_reset_uses_only_a_candidate_not_after_bangkok_now():
 
     assert before_reset['limit_reset_at'] == '2026-07-24 09:15:00'
     assert after_reset['limit_reset_at'] == '2026-07-31 09:15:00'
-
-
-def test_all_approved_tags_have_stable_order():
-    draft = product_plan.build_products({
-        'g1': _meta(
-            shop_label='Event Popular Must Have Limited New 15% Discount'),
-    }, 'CabalPC TH', now=NOW)[0]
-    assert draft['tags'] == ['EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE']
 
 
 def test_missing_end_date_and_existing_parser_warnings_are_preserved():

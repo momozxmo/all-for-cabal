@@ -256,7 +256,7 @@ def test_product_source_refresh_merges_pristine_fields_and_keeps_local_edits():
         assert result['source_sheet'] == 'New Sheet'
         assert result['category_source'] == 'New Category'
         assert result['start_at'] == '2026-08-03 00:00:00'
-        assert result['end_at'] == '2026-08-31 07:59:00'
+        assert result['end_at'] == '2026-08-31 07:59:59'
         assert result['bundle_ids'] == [
             '223930', '223931', '900001', '223932']
         assert result['composite_required'] is False
@@ -269,7 +269,6 @@ def test_product_source_refresh_merges_pristine_fields_and_keeps_local_edits():
             'CHARACTER', '5')
         assert (result['reset_interval'], result['reset_at']) == (
             '7', '2026-07-31 09:15:00')
-        assert result['tags'] == ['SALE']
         assert result['warnings'] == ['new warning']
         assert result['selected'] is True
         assert result['image_names'] == {'thumbnail_th': 'kept.png'}
@@ -307,13 +306,13 @@ def test_legacy_product_refresh_fills_only_missing_source_values():
         assert result['name_th'] == 'Legacy Name'
         assert result['name_en'] == 'Source English'
         assert result['start_at'] == '2026-08-09 00:00:00'
-        assert result['end_at'] == '2026-08-15 07:59:00'
+        assert result['end_at'] == '2026-08-15 07:59:59'
         assert result['bundle_ids'] == ['777', '223930', '223931']
         assert result['primary_bundle_id'] == '777'
         assert result['bundle_id'] == '777'
         assert result['bundle_source'] == 'manual'
         assert result['price_candidates'][0]['sale_price'] == 20
-        assert result['source_snapshot']['end_at'] == '2026-08-31 07:59:00'
+        assert result['source_snapshot']['end_at'] == '2026-08-31 07:59:59'
         browser.close()
 
 
@@ -383,7 +382,6 @@ def test_partial_source_refresh_ignores_missing_and_null_but_applies_empty_clear
         assert result['limit_quantity'] == ''
         assert (result['reset_interval'], result['reset_at']) == (
             '7', '2026-07-31 09:15:00')
-        assert result['tags'] == ['SALE']
         assert result['warnings'] == ['old warning']
         assert result['selected'] is True
         assert result['category_id'] == '77'
@@ -954,7 +952,7 @@ def test_wallet_point_price_is_editable_and_manual_price_can_be_added():
           }], 'workspace-1');
         }""")
 
-        inputs = page.locator('#priceMatches input')
+        inputs = page.locator('#priceMatches input[type="number"]')
         assert inputs.count() == 2
         assert inputs.nth(0).input_value() == '75'
         assert inputs.nth(1).input_value() == '75'
@@ -967,7 +965,8 @@ def test_wallet_point_price_is_editable_and_manual_price_can_be_added():
         page.locator('#priceMatches .price-match-row').nth(1).locator(
             'select').select_option('92')
         manual_inputs = page.locator(
-            '#priceMatches .price-match-row').nth(1).locator('input')
+            '#priceMatches .price-match-row').nth(1).locator(
+                'input[type="number"]')
         manual_inputs.nth(0).fill('30')
         manual_inputs.nth(1).fill('25')
         manual = page.evaluate("""() => productQueue.current().prices.find(
@@ -1740,4 +1739,139 @@ def test_create_all_counts_and_submits_only_uncreated_products_in_queue_order():
         assert result['sent'] == {
             'groups': ['g2', 'g3'], 'doSave': True}
         assert result['ids'] == ['500', '601', '602']
+        browser.close()
+
+
+def test_item_finder_only_exposes_the_plan_import_action():
+    """The removed blue Template import must not return beside Plan import."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        page = context.new_page()
+        page.goto('http://tool.test/', wait_until='domcontentloaded')
+
+        assert page.locator('#btnImportTemplate').count() == 0
+        assert page.locator('#btnImportPlan').count() == 1
+        browser.close()
+
+
+def test_bundle_deleted_item_can_be_restored_at_its_original_position():
+    """Undo must restore the full row, not a blank replacement at the end."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles', wait_until='domcontentloaded')
+        page.wait_for_function("typeof state === 'object'")
+        page.evaluate("""() => {
+          state.queue = [{key:'b1',name:'Bundle A',type:'RANDOM',deliver:true,
+            rewards:[],items:[
+              {id:'101',name:'First',qty:'3',tier:'Epic',rate:'25',
+               file_name:'First Doc',params:'เว็บ✓',doc_qty:'3'},
+              {id:'202',name:'Second',qty:'1',tier:'Common',rate:'75'}
+            ]}];
+          select('b1');
+        }""")
+
+        page.locator(
+            '#itemsTable tbody tr').nth(0).locator(
+                'button[title="ตัดออกจากบันเดิลนี้"]').click()
+        assert page.evaluate(
+            "current().items.map(item => item.id)") == ['202']
+        assert page.locator('#btnUndoItem').is_enabled()
+
+        page.locator('#btnUndoItem').click()
+        restored = page.evaluate("current().items[0]")
+        assert [item['id'] for item in page.evaluate(
+            "current().items")] == ['101', '202']
+        assert {
+            key: restored[key]
+            for key in ('name', 'qty', 'tier', 'rate', 'file_name',
+                        'params', 'doc_qty')
+        } == {
+            'name': 'First', 'qty': '3', 'tier': 'Epic', 'rate': '25',
+            'file_name': 'First Doc', 'params': 'เว็บ✓', 'doc_qty': '3',
+        }
+        assert page.locator('#btnUndoItem').is_disabled()
+        browser.close()
+
+
+def test_product_page_has_no_tags_and_end_time_always_uses_second_59():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          addDrafts([{source_group_key:'g1',name_th:'A',
+            end_at:'2026-09-30 23:59:00',price_candidates:[],prices:[]}],
+            'workspace-1');
+          const input = document.querySelector('#endAt');
+          input.value = '2026-10-31 20:30:00';
+          input.dispatchEvent(new Event('input', {bubbles:true}));
+        }""")
+
+        assert page.locator('[data-product-section="tags"]').count() == 0
+        assert page.locator('#endAt').input_value() == '2026-10-31 20:30:59'
+        assert page.evaluate(
+            "productQueue.current().end_at") == '2026-10-31 20:30:59'
+        browser.close()
+
+
+def test_thumbnail_name_updates_in_this_tab_and_other_open_product_tabs():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        first = context.new_page()
+        first.goto('http://tool.test/products', wait_until='domcontentloaded')
+        first.wait_for_function("productPageReady === true")
+        first.evaluate("""addDrafts([{source_group_key:'g1',name_th:'A',
+          image_names:{thumbnail_th:'old.png'},price_candidates:[],prices:[]}],
+          'workspace-1')""")
+
+        second = context.new_page()
+        second.goto('http://tool.test/products', wait_until='domcontentloaded')
+        second.wait_for_function("productPageReady === true")
+        first.set_input_files('#thumbnailTh', {
+            'name': 'latest-thumbnail.png',
+            'mimeType': 'image/png',
+            'buffer': b'latest image bytes',
+        })
+
+        assert first.locator('#thumbnailThName').inner_text() == (
+            'latest-thumbnail.png')
+        second.wait_for_function("""() =>
+          document.querySelector('#thumbnailThName').textContent
+            .includes('latest-thumbnail.png')""")
+        assert second.evaluate("""productQueue.current()
+          .image_names.thumbnail_th""") == 'latest-thumbnail.png'
+        browser.close()
+
+
+def test_each_product_currency_row_can_search_live_options_and_select_result():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _tool_page(browser)
+        page.evaluate("""() => {
+          optionState.currencies.options = [
+            {id:'10',slug:'cash',label:'Cash'},
+            {id:'11',slug:'cabalpcth-leaf-gem',label:'Leaf Gem'},
+            {id:'12',slug:'wallet-point',label:'Wallet Point'}
+          ];
+          addDrafts([{source_group_key:'g1',name_th:'A',
+            price_candidates:[{source_label:'กำหนดเอง',sale_price:100,
+              original_price:100}],prices:[]}], 'workspace-1');
+          renderProductOptions(productQueue.current());
+        }""")
+
+        search = page.locator('.currency-search')
+        assert search.count() == 1
+        search.fill('leaf')
+        choices = page.locator('.currency-select option').all_text_contents()
+        assert choices == ['เลือก Currency',
+                           'cabalpcth-leaf-gem - Leaf Gem']
+        page.locator('.currency-select').select_option('11')
+        assert page.evaluate("""productQueue.current().prices[0]
+          .currency_id""") == '11'
         browser.close()

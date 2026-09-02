@@ -425,26 +425,9 @@ class ProductBuilder(ActivityBuilder):
             missing.append('รีเซ็ตล่าสุด')
 
     async def _fill_tags(self, page, spec, missing):
-        approved = {'EVENT', 'HOT', 'LIMITED', 'NEW', 'SALE'}
-        tags = [tag for tag in spec.get('tags') or [] if tag in approved]
-        if not tags:
-            return
-        controls = [page.get_by_text(tag, exact=True).first for tag in tags]
-        if not any([await control.count() for control in controls]):
-            missing.append('Tags (Aztek ไม่มีช่อง)')
-            self.log(
-                'Aztek ไม่มีช่อง Tags ในหน้าสร้าง Product ปัจจุบัน '
-                'จึงยังไม่ส่งข้อมูล Tag',
-                'WARNING')
-            return
-        for tag, control in zip(tags, controls):
-            try:
-                if not await control.count():
-                    raise RuntimeError('ไม่พบตัวเลือก')
-                await control.click(timeout=6000)
-            except Exception as exc:
-                missing.append('Tag %s' % tag)
-                self.log('เลือก Tag %s ไม่สำเร็จ: %s' % (tag, exc), 'WARNING')
+        # Kept as a compatibility no-op for old queue payloads.  The current
+        # Aztek Product form has no Tag controls, so tags must never block a run.
+        return None
 
     async def _fill_bundles(self, page, spec, missing):
         raw_ids = spec.get('bundle_ids') or [spec.get('bundle_id')]
@@ -508,6 +491,5 @@ class ProductBuilder(ActivityBuilder):
         await self._fill_prices(page, spec, missing)
         await self._fill_display(page, spec, missing)
         await self._fill_limit(page, spec, missing)
-        await self._fill_tags(page, spec, missing)
         await self._fill_bundles(page, spec, missing)
         return missing

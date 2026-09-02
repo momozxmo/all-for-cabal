@@ -301,7 +301,6 @@
           <div class="hint" id="modeHint">มี/ไม่มี = เข้าไปเช็คหน้ารายละเอียดทีละไอเทม</div>
           <div class="actions">
             <a class="button" href="/api/template">⬇ โหลด Template</a>
-            <button id="btnImportTemplate" class="primary">📂 Import Template</button>
             <button id="btnImportPlan" class="success">🎁 Import Event/Prize</button>
             <button id="btnClearWorkspace">ล้างรายการ</button>
             <!-- The conditions block (expiry, codes per set, repeatable) is read
@@ -313,7 +312,6 @@
             <button id="btnToProduct" class="primary" disabled hidden
                     title="ส่ง Product จาก Shop plan ที่เลือกไว้ไปแก้ต่อ">➡ ส่งเข้าสร้าง Product</button>
           </div>
-          <input id="templateFile" class="hidden" type="file" accept=".xlsx,.xlsm,.csv">
           <input id="planFile" class="hidden" type="file" accept=".xlsx,.xlsm">
           <div id="workspaceSummary" class="summary">ยังไม่ได้ import</div>
           <div id="searchHandoffNotice" class="summary warning" hidden></div>
@@ -431,7 +429,7 @@ function deepSummary(row){
   return out.join(' ') || '-';
 }
 function setBusy(busy){ $('btnSearch').disabled=busy||!state.workspaceId||!state.criteria.length||!state.aztekConnected; $('btnStop').disabled=!busy;
-  $('btnImportTemplate').disabled=busy; $('btnImportPlan').disabled=busy; $('btnClearWorkspace').disabled=busy;
+  $('btnImportPlan').disabled=busy; $('btnClearWorkspace').disabled=busy;
   // Only worth offering once a run has ended and left something behind.
   $('btnRetryMissing').disabled=busy||!state.notFound||!state.notFound.length
     ||!state.aztekConnected;
@@ -574,12 +572,11 @@ function useWorkspace(data){ const sourceGroupKey=arguments.length>1?arguments[1
   $('btnToProduct').disabled=data.mode!=='shop';
   setBusy(false); const visibleResults=sourceGroupRows(data.results||[],state.searchSourceGroupKey);if(visibleResults.length){state.results=visibleResults;renderResults();}
   showNotice('finderNotice','success','นำเข้ารายการแล้ว',`${state.criteria.length} รายการจาก ${data.filename||'ไฟล์ที่เลือก'}`,'ตรวจรายการแล้วกดค้นหาบน Aztek'); }
-async function upload(kind,file){ if(!file)return; const form=new FormData(); form.append('file',file);form.append('mode',state.mode);if(state.workspaceId)form.append('workspace_id',state.workspaceId);
-  setBusy(true);showNotice('finderNotice','progress','กำลังอ่านไฟล์',file.name);try{const response=await apiFetch(kind==='template'?'/api/import-template':'/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
+async function uploadPlan(file){ if(!file)return; const form=new FormData(); form.append('file',file);form.append('mode',state.mode);if(state.workspaceId)form.append('workspace_id',state.workspaceId);
+  setBusy(true);showNotice('finderNotice','progress','กำลังอ่านไฟล์',file.name);try{const response=await apiFetch('/api/import-plan',{method:'POST',body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Import ไม่สำเร็จ');
     if(data.needs_sheet_selection){state.pendingId=data.pending_id;openSheetPicker(data.sheets);}else useWorkspace(data);
-  }catch(error){log(error.message,'ERROR');showNotice('finderNotice','error','อ่านไฟล์ไม่สำเร็จ',error.message,'ตรวจไฟล์แล้วลอง Import อีกครั้ง');}finally{setBusy(false);$('templateFile').value='';$('planFile').value='';}}
-$('btnImportTemplate').onclick=()=>$('templateFile').click(); $('templateFile').onchange=event=>upload('template',event.target.files[0]);
-$('btnImportPlan').onclick=()=>$('planFile').click(); $('planFile').onchange=event=>upload('plan',event.target.files[0]);
+  }catch(error){log(error.message,'ERROR');showNotice('finderNotice','error','อ่านไฟล์ไม่สำเร็จ',error.message,'ตรวจไฟล์แล้วลอง Import อีกครั้ง');}finally{setBusy(false);$('planFile').value='';}}
+$('btnImportPlan').onclick=()=>$('planFile').click(); $('planFile').onchange=event=>uploadPlan(event.target.files[0]);
 
 function openSheetPicker(sheets){const list=$('sheetList');list.replaceChildren();sheets.forEach(sheet=>{const displayName=sheet.name;const label=document.createElement('label');label.className='sheet-row';label.dataset.sheetName=displayName;const input=document.createElement('input');input.type='checkbox';input.value=sheet.name;input.checked=true;const text=document.createElement('span');text.className='sheet-name';text.textContent=` ${displayName} (${sheet.count})`;label.append(input,text);list.appendChild(label);});sheetPickerSearch.refresh(true);showNotice('finderNotice','info',`พบ ${sheets.length} Sheet`,'เลือกเฉพาะ Sheet ที่ต้องการนำเข้า');$('sheetDialog').showModal();}
 $('btnApplySheets').onclick=async()=>{const selected=[...document.querySelectorAll('#sheetList input:checked')].map(x=>x.value);if(!selected.length){showNotice('finderNotice','warning','ยังนำเข้าไม่ได้','ยังไม่ได้เลือก Sheet','เลือกอย่างน้อย 1 Sheet แล้วกดนำเข้า');return;}
