@@ -154,6 +154,14 @@ def mode_policy(mode):
     return dict(policies[mode])
 
 
+def sheet_import_warnings(rows):
+    """Deduplicate parser warnings for the sheet-selection preview."""
+    return list(dict.fromkeys(
+        note for row in rows
+        for note in (row.get('group_meta') or {}).get('import_warnings', [])
+    ))
+
+
 def sheet_display_name(sheet_name, rows):
     """Return the full plan title when Excel truncated the worksheet tab.
 

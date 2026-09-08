@@ -1024,6 +1024,55 @@ def parse_shop_workbook(path):
     return out, skipped
 
 
+def _restore_stm_item_header(rows):
+    """Restore only the known STM H:P layout in memory, never in the file.
+
+    A context marker, code-count labels, and every contiguous reward row must
+    agree. Other headerless spreadsheets are deliberately not guessed.
+    """
+    if any(_event_norm(value) == 'itemkind' for row in rows for value in row):
+        return rows, False
+    has_conditions = any(len(row) > 7 and
+                         _event_norm(row[7]).startswith('conditions')
+                         for row in rows[:16])
+    has_counts = any(len(row) > 13 and
+                     _event_norm(row[12]) == 'จำนวน[โค้ด/ชุด]' and
+                     _event_norm(row[13]) == 'จำนวน[ชุด]'
+                     for row in rows[:16])
+    if not (has_conditions and has_counts):
+        return rows, False
+    for index, row in enumerate(rows):
+        if not row or _event_norm(row[0]) != 'รายละเอียดกิจกรรมและของรางวัล':
+            continue
+        if any(value not in (None, '') for value in row[7:16]):
+            continue
+        rewards = []
+        for following in rows[index + 1:]:
+            if not any(value not in (None, '') for value in following[7:16]):
+                break
+            rewards.append(following)
+        if not rewards:
+            return rows, False
+        for reward in rewards:
+            if (len(reward) < 16 or
+                    not all(_event_num(reward[c]).isdigit() for c in (7, 8, 9, 10, 14)) or
+                    int(_event_num(reward[7])) <= 0 or
+                    int(_event_num(reward[14])) <= 0 or
+                    _event_norm(reward[11]) not in ('yes', 'no') or
+                    _event_norm(reward[15]) not in ('yes', 'no') or
+                    not isinstance(reward[12], str) or not reward[12].strip() or
+                    not re.fullmatch(r'(?:ถาวร|permanent|\d+(?:days?|วัน))',
+                                     _event_norm(reward[13]))):
+                return rows, False
+        header = list(row) + [None] * max(0, 16 - len(row))
+        header[7:16] = ['Item Kind', 'Item Index', 'ItemOption', 'DurationIndex',
+                        'Stackable', 'Display Name', 'ระยะเวลา', 'Amt', 'Itemmove']
+        restored = list(rows)
+        restored[index] = tuple(header)
+        return restored, True
+    return rows, False
+
+
 def parse_event_workbook(path):
     """อ่าน .xlsx แล้วคืน (out, skipped)
     out = list ของ (sheet_name, [items]) เฉพาะ sheet ที่มีไอเทม
@@ -1073,7 +1122,11 @@ def parse_event_workbook(path):
             wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
             try:
                 for sh in wb.sheetnames:
-                    items = _parse_event_rows(wb[sh].iter_rows(values_only=True), skipped)
+                    if wb[sh].sheet_state != 'visible':
+                        continue
+                    rows, restored_header = _restore_stm_item_header(
+                        list(wb[sh].iter_rows(values_only=True)))
+                    items = _parse_event_rows(rows, skipped)
                     for it in items:
                         grp = it.pop('group', '')
                         it['sources'] = [grp] if grp else ['(ไม่มีชื่อกลุ่ม)']
@@ -1085,6 +1138,11 @@ def parse_event_workbook(path):
                     if len(blocks) > len(items):
                         items = blocks
                     if items:
+                        if restored_header:
+                            for item in items:
+                                item.setdefault('group_meta', {})['import_warnings'] = [
+                                    'ไม่พบหัวคอลัมน์ไอเทม — อ่านตามรูปแบบ STM H:P '
+                                    'กรุณาตรวจไอเทมและจำนวนก่อนนำเข้า']
                         out.append((sh, items))
             finally:
                 wb.close()

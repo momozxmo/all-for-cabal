@@ -383,6 +383,101 @@ def _workbook_bytes(rows, title='plan'):
     return buffer.getvalue()
 
 
+def _stm_workbook(tmp_path, *, malformed=None, include_hidden=True):
+    """Synthetic STM layout: hidden old plan, two visible headerless tables."""
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    old = book.active
+    old.title = 'Old August'
+    for row in [['Old activity']] + _block(1, '', 1, ['999']):
+        old.append(row)
+    old.sheet_state = 'hidden'
+    for number in (1, 2):
+        sheet = book.create_sheet(str(number))
+        sheet['A1'] = 'September activity %s' % number
+        sheet['H1'] = 'CONDITIONS'
+        sheet['H2'] = 'CODE EXPIRE DATE'
+        sheet['J2'] = '2026-10-05 23:59:00'
+        sheet['H3'] = 'เงื่อนไขเพิ่มเติม'
+        sheet['J3'] = 'เติมซ้ำได้'
+        sheet['H5'] = 'Unique Code'
+        sheet['M5'] = 'จำนวน [โค้ด/ชุด]'
+        sheet['N5'] = 'จำนวน [ชุด]'
+        sheet['M6'] = 1
+        sheet['N6'] = 300
+        sheet['A9'] = 'รายละเอียดกิจกรรม และของรางวัล'
+        for index in range(9):
+            values = [10000 * number + index, 100 + index, index, 12,
+                      'Yes', 'Reward %s-%s' % (number, index), '7 Days',
+                      3 if index == 8 else 1, 'No']
+            for column, value in enumerate(values, 8):
+                sheet.cell(10 + index, column, value)
+        if malformed == 'no_context':
+            sheet['H1'] = None
+        elif malformed == 'no_prize_marker':
+            sheet['A9'] = None
+        elif malformed == 'bad_stackable':
+            sheet['L11'] = 'unknown'
+        elif malformed == 'bad_amount':
+            sheet['O11'] = 'unknown'
+    if not include_hidden:
+        book.remove(old)
+    path = tmp_path / 'stm.xlsx'
+    book.save(path)
+    book.close()
+    return path
+
+
+def test_stm_import_recovers_both_visible_sheets_without_old_hidden_items(tmp_path):
+    sheets, skipped = item_finder.parse_event_workbook(_stm_workbook(tmp_path))
+    assert [name for name, _rows in sheets] == ['1', '2']
+    assert [len(rows) for _name, rows in sheets] == [9, 9]
+    assert skipped == []
+    assert [(r['kind'], r['opt'], r['dur'], r['amt'], r['name'])
+            for r in sheets[0][1]][-1] == (
+                '10008', '8', '12', '3', 'Reward 1-8')
+    assert sheets[1][1][0]['kind'] == '20000'
+
+
+def test_stm_header_recovery_does_not_depend_on_hidden_template(tmp_path):
+    sheets, _ = item_finder.parse_event_workbook(
+        _stm_workbook(tmp_path, include_hidden=False))
+    assert [len(rows) for _name, rows in sheets] == [9, 9]
+
+
+@pytest.mark.parametrize('malformed', [
+    'no_context', 'no_prize_marker', 'bad_stackable', 'bad_amount',
+])
+def test_stm_import_does_not_guess_ambiguous_headerless_tables(tmp_path, malformed):
+    sheets, _ = item_finder.parse_event_workbook(
+        _stm_workbook(tmp_path, malformed=malformed, include_hidden=False))
+    assert sheets == []
+
+
+@pytest.mark.parametrize('endpoint', ['/api/import-plan', '/api/itemcodes/import'])
+def test_stm_import_endpoints_expose_visible_sheets_and_recovery_warning(
+        client, tmp_path, endpoint):
+    payload = _stm_workbook(tmp_path).read_bytes()
+    response = client.post(endpoint, data={'mode': 'itemcode', 'game': TH},
+                           files={'file': ('stm.xlsx', payload)})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [s['name'] for s in data['sheets']] == ['1', '2']
+    assert all(s.get('warnings') for s in data['sheets'])
+    if endpoint == '/api/import-plan':
+        assert [s['count'] for s in data['sheets']] == [9, 9]
+        applied = client.post('/api/import-plan/apply', json={
+            'pending_id': data['pending_id'], 'selected_sheets': ['2'],
+        })
+        assert applied.status_code == 200, applied.text
+        assert len(applied.json()['items']) == 9
+        assert {r['name'].split()[1].split('-')[0]
+                for r in applied.json()['items']} == {'2'}
+    else:
+        assert [d['sheet'] for d in data['itemcodes']] == ['1', '2']
+
+
 def test_finder_handoff_keeps_a_later_headerless_item_code(client):
     payload = _workbook_bytes(
         [['Apple, Orange, Ensaymada?']]

@@ -1247,6 +1247,8 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
                 'name': name,
                 'display_name': item_service.sheet_display_name(name, rows),
                 'count': len(rows),
+                **({'warnings': item_service.sheet_import_warnings(rows)}
+                   if item_service.sheet_import_warnings(rows) else {}),
                 **({
                     'product_count': product_plan.count_products(rows),
                 } if mode == 'shop' else {}),
@@ -2401,6 +2403,8 @@ async def itemcodes_import(request: Request, file: UploadFile = File(...),
             'name': name,
             'display_name': item_service.sheet_display_name(name, rows),
             'count': len(made),
+            **({'warnings': item_service.sheet_import_warnings(rows)}
+               if item_service.sheet_import_warnings(rows) else {}),
         })
 
     write_audit(

@@ -681,6 +681,12 @@ function showSheets(sheets, mode) {
     const text = document.createElement('span');
     text.className = 'sheet-name';
     text.textContent = ` ${displayName} — ${sheet.count} Item Code`;
+    if (sheet.warnings?.length) {
+      const note = document.createElement('small');
+      note.className = 'warning'; note.style.display = 'block';
+      note.textContent = sheet.warnings.join(' · ');
+      text.appendChild(note);
+    }
     row.append(tick, text);
     list.appendChild(row);
   });

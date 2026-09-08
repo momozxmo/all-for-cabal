@@ -127,6 +127,22 @@ def test_shared_picker_filters_immediately_and_reports_visible_count():
         browser.close()
 
 
+@pytest.mark.parametrize('page_name', ['index', 'itemcodes'])
+def test_header_recovery_warning_is_visible_before_selecting_sheets(page_name):
+    warning = 'ไม่พบหัวคอลัมน์ไอเทม กรุณาตรวจข้อมูลก่อนนำเข้า <script>unsafe</script>'
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = _open_real_picker(browser, page_name, [
+            {'name': '1', 'count': 9, 'warnings': [warning]},
+            {'name': '2', 'count': 9},
+        ])
+        assert page.locator('#sheetDialog').is_visible()
+        assert warning in page.locator('.sheet-row').first.inner_text()
+        assert page.locator('.sheet-row script').count() == 0
+        assert 'ไม่พบหัวคอลัมน์' not in page.locator('.sheet-row').nth(1).inner_text()
+        browser.close()
+
+
 def test_shared_picker_bulk_buttons_change_only_visible_rows():
     """A filtered bulk action must not change checked sheets outside the view."""
     with sync_playwright() as playwright:
