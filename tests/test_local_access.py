@@ -169,7 +169,10 @@ def test_health_product_marker_is_only_exposed_in_local_mode(
     local = _local_client(_local_app(test_settings, test_database))
     hosted = TestClient(web_app.create_app(test_settings, test_database))
 
-    assert local.get('/api/health').json() == {
+    local_health = local.get('/api/health').json()
+    version = local_health.pop('version')
+    assert len(version.split('.')) == 3 and all(part.isdecimal() for part in version.split('.'))
+    assert local_health == {
         'ok': True,
         'product': 'all-for-cabal-local',
     }

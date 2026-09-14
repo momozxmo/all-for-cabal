@@ -196,6 +196,7 @@ class LocalServer:
 
     def start(self, timeout: float = 20.0) -> None:
         app = self._app_factory()
+        self.application = app
         uvicorn_config = self._config_factory(
             app=app,
             host=LOCAL_HOST,
@@ -239,4 +240,24 @@ class LocalServer:
             self._uvicorn_server.should_exit = True
         if self._thread is not None:
             self._thread.join(5)
+            if getattr(self._thread, 'is_alive', lambda: False)():
+                raise LocalServerError('เซิร์ฟเวอร์ยังไม่ปิด จึงยังอัปเดตไม่ได้ กรุณารอให้งานจบ')
         self._logger.info('local server stopped')
+
+    def pending_update(self):
+        application = getattr(self, 'application', None)
+        service = getattr(getattr(application, 'state', None), 'local_update', None)
+        return service if service and service.install_requested else None
+
+    def install_update(self):
+        service = self.pending_update()
+        if not service:
+            raise LocalServerError('ไม่พบคำขออัปเดตที่พร้อมติดตั้ง')
+        service.install_requested = False
+        try:
+            self.stop()
+            service.io.launch_installer(service.package, service.digest, service.release['version'])
+        except Exception as exc:
+            service.state = 'error'
+            service.cancel('เริ่มตัวติดตั้งไม่สำเร็จ กรุณาลองใหม่')
+            raise LocalServerError('เริ่มตัวติดตั้งไม่สำเร็จ กรุณากดเริ่มใหม่แล้วลองอัปเดตอีกครั้ง') from exc

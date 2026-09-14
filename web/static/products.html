@@ -1744,5 +1744,14 @@ async function bootProductPage() {
 
 bootProductPage();
 </script>
+<script>
+window.afcUpdateDraft = {
+  ready: () => productPageReady,
+  busy: () => productRunBusy,
+  capture: () => ({data:{items:productQueue.items,active:productQueue.active}, storage:{[PRODUCT_QUEUE_KEY]:JSON.stringify(productQueue.items)}, warnings:productFiles.size ? ['Product: มีรูปในหน่วยความจำ ต้องเลือกไฟล์ใหม่หลังอัปเดต'] : []}),
+  restore: snapshot => { Object.assign(productQueue,snapshot.data); renderQueue(); }
+};
+</script>
+<script src="/static/updates.js"></script>
 </body>
 </html>

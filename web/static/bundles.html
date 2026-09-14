@@ -660,7 +660,16 @@ async function init(){
   renderResults(state.results,false);$('handoff').hidden=!state.made.length;
   try{const s=await apiFetch('/api/aztek/status').then(r=>r.json());paintAztek(s.status);}
   catch(e){paintAztek('disconnected');}}
-init().catch(e=>log(e.message,'ERROR'));
+init().then(() => {window.afcUpdateReady = true;}).catch(e=>log(e.message,'ERROR'));
 </script>
+<script>
+window.afcUpdateDraft = {
+  ready: () => !!window.afcUpdateReady,
+  capture: () => ({data: {queue:state.queue, active:state.active, eventDrafts:state.eventDrafts, itemcodeDrafts:state.itemcodeDrafts, results:state.results, made:state.made},
+    storage: {[QUEUE_KEY]:JSON.stringify(state.queue), [EVENT_DRAFT_KEY]:JSON.stringify(state.eventDrafts), [ITEMCODE_DRAFT_KEY]:JSON.stringify(state.itemcodeDrafts), [RESULTS_KEY]:JSON.stringify(state.results), [MADE_KEY]:JSON.stringify(state.made)}}),
+  restore: snapshot => { Object.assign(state,snapshot.data); select(state.active); renderResults(state.results,false); }
+};
+</script>
+<script src="/static/updates.js"></script>
 </body>
 </html>

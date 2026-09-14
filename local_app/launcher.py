@@ -229,6 +229,7 @@ class LauncherController:
                             callback()
                 else:
                     error = payload[0]
+                    self._closing = False
                     self._set_controls_enabled(True)
                     self._set_status(str(error))
                     messagebox.showerror(
@@ -238,6 +239,11 @@ class LauncherController:
                     )
         except queue.Empty:
             pass
+        if not self._closing and getattr(self.server, 'pending_update', lambda: None)():
+            self._closing = True
+            self._set_controls_enabled(False)
+            self._set_status('กำลังปิดโปรแกรมเพื่อติดตั้งอัปเดต…')
+            self._run_worker(self.server.install_update, self._finish_close)
         if not self._shutdown_complete:
             self.root.after(100, self._drain_messages)
 

@@ -43,3 +43,13 @@ _Avoid_: Duplicate block
 **Mastercode WR Preview**:
 ขั้นตรวจข้อมูลหลังเลือกชีทและก่อนเพิ่มเข้าคิว แสดงชื่อ เกม Code Window, Mastercode, Bundle ID, Usage Limit และความพร้อมของแต่ละ Master Code Block
 _Avoid_: Aztek preview, create confirmation
+
+## การอัปเดต All for Cabal
+
+**All for Cabal Update**:
+การเปลี่ยนโปรแกรม All for Cabal ที่ติดตั้งอยู่เป็นรุ่นใหม่ผ่านคำสั่งอัปเดตในโปรแกรม โดยผู้ใช้งานเป็นคนเลือกเริ่มและสามารถใช้รุ่นเดิมต่อได้
+_Avoid_: บังคับอัปเดต, อัปเดตข้อมูล Aztek
+
+**Update Details Popup**:
+หน้าต่างแสดงรายการแก้ไขและสิ่งที่เพิ่มในเวอร์ชัน All for Cabal ที่แจ้งอัปเดต ผู้ใช้สามารถเปิดดูซ้ำได้จากปุ่มในโปรแกรม
+_Avoid_: ประวัติงานในคิว, Aztek log

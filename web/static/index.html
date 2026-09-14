@@ -748,7 +748,16 @@ $('btnToProduct').onclick=sendToProductPage;
 
 $('btnClearLog').onclick=()=>$('log').replaceChildren();
 
-init().catch(error=>{log(error.message,'ERROR');$('serverBadge').textContent='เชื่อมต่อไม่ได้';$('serverBadge').className='badge error';});
+init().then(()=>{window.afcUpdateReady=true;}).catch(error=>{log(error.message,'ERROR');$('serverBadge').textContent='เชื่อมต่อไม่ได้';$('serverBadge').className='badge error';});
 </script>
+<script>
+window.afcUpdateDraft = {
+  ready: () => !!window.afcUpdateReady,
+  busy: () => state.busy,
+  capture: () => ({data:{workspaceId:state.workspaceId,mode:state.mode,criteria:state.criteria,results:state.results,searchSourceGroupKey:state.searchSourceGroupKey},storage:state.workspaceId ? {[WORKSPACE_KEY]:state.workspaceId} : {}}),
+  restore: snapshot => {Object.assign(state,snapshot.data); renderCriteria(); renderResults(); resultActions();}
+};
+</script>
+<script src="/static/updates.js"></script>
 </body>
 </html>

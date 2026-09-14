@@ -517,6 +517,12 @@ def console_js():
                         media_type='application/javascript')
 
 
+@router.get('/static/updates.js')
+def updates_js():
+    return FileResponse(os.path.join(STATIC_DIR, 'updates.js'),
+                        media_type='application/javascript')
+
+
 @router.get('/static/game_sync.js')
 def game_sync_js():
     """Synchronize the shared game/server picker between open tool tabs."""
@@ -1041,6 +1047,8 @@ def health(request: Request):
     result = {'ok': True}
     if request.app.state.settings.local_desktop_mode:
         result['product'] = 'all-for-cabal-local'
+        from local_app.updates import current_version
+        result['version'] = current_version()
     return result
 
 
@@ -2766,6 +2774,7 @@ def create_app(
     settings: Settings | None = None,
     database: Database | None = None,
     monotonic_clock: Callable[[], float] = time.monotonic,
+    update_io=None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
     resolved_settings.validate()
@@ -2794,10 +2803,19 @@ def create_app(
         if stale:
             warnings.warn('marked %d interrupted search job(s) as failed' % stale,
                           RuntimeWarning, stacklevel=2)
-        yield
+        update = application.state.local_update
+        update_task = asyncio.create_task(update.check()) if update else None
+        try:
+            yield
+        finally:
+            if update_task:
+                update_task.cancel()
+                await asyncio.gather(update_task, return_exceptions=True)
 
     application = FastAPI(title='All for Cabal — Web', lifespan=lifespan)
     application.add_middleware(RequestSizeLimitMiddleware)
+    from web.update_gate import UpdateWorkMiddleware
+    application.add_middleware(UpdateWorkMiddleware)
     application.state.settings = resolved_settings
     application.state.database = resolved_database
     application.state.auth_service = auth_service
@@ -2806,10 +2824,22 @@ def create_app(
     application.state.browser_gate = browser_gate
     application.state.local_aztek_capture = local_aztek_capture
     application.state.search_coordinator = search_coordinator
+    application.state.local_update = None
+    if resolved_settings.local_desktop_mode and (
+        update_io is not None or (sys.platform == 'win32' and getattr(sys, 'frozen', False))
+    ):
+        from pathlib import Path
+        from local_app.updates import LocalUpdate
+        from web.update_previews import UpdatePreviews
+        application.state.local_update = LocalUpdate(
+            Path(resolved_settings.local_runtime_dir), update_io, browser_gate,
+            lambda: search_coordinator.busy, UpdatePreviews())
     application.state.login_throttle = LoginThrottle(monotonic_clock)
     application.state.pairing_throttle = LoginThrottle(monotonic_clock)
     application.state.pairing_issue_reservations = PairingIssueReservations()
     application.include_router(router)
+    from web.update_routes import update_router
+    application.include_router(update_router(require_user))
     return application
 
 

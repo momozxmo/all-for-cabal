@@ -886,7 +886,9 @@ function jobFrom(entry) {
           rewards: entry.rewards};
 }
 
+let lastRunResults = [];
 function renderResults(results) {
+  lastRunResults = results;
   const box = $('results'); box.replaceChildren();
   if (!results.length) return;
   const table = document.createElement('table'); table.className = 'idtable';
@@ -979,7 +981,15 @@ async function init() {
   if (!queue.active && queue.items.length) queue.active = queue.items[0].key;
   select(queue.active);
 }
-init().catch(e => log(e.message, 'ERROR'));
+init().then(() => {window.afcUpdateReady = true;}).catch(e => log(e.message, 'ERROR'));
 </script>
+<script>
+window.afcUpdateDraft = {
+  ready: () => !!window.afcUpdateReady,
+  capture: () => ({data:{items:queue.items,active:queue.active,results:lastRunResults}, storage:{[queue.storageKey]:JSON.stringify(queue.items),'afc.itemcodeLastResults':JSON.stringify(lastRunResults)}}),
+  restore: snapshot => { queue.items=snapshot.data.items; queue.active=snapshot.data.active; select(queue.active); renderResults(snapshot.data.results || []); }
+};
+</script>
+<script src="/static/updates.js"></script>
 </body>
 </html>

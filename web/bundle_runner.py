@@ -718,6 +718,19 @@ class BundleBuilder:
 _KEPT: dict[str, tuple] = {}
 
 
+def kept_count():
+    return len(_KEPT)
+
+
+async def close_all_kept():
+    for key, (pw, browser, context) in list(_KEPT.items()):
+        if browser.is_connected():
+            await context.close()
+            await browser.close()
+        await pw.stop()
+        _KEPT.pop(key, None)
+
+
 async def _shutdown(pw, browser, context):
     """Close a browser and its driver, tolerating a window the user already shut."""
     for closeable in (context, browser):

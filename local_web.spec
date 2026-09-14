@@ -16,6 +16,16 @@ if not BROWSER_CACHE.is_dir():
 
 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(BROWSER_CACHE)
 
+version_source = ROOT / 'local_app' / 'version.txt'
+build_version = os.environ.get('AFC_BUILD_VERSION')
+if build_version:
+    import re
+    if not re.fullmatch(r'\d+\.\d+\.\d+', build_version):
+        raise SystemExit('Invalid AFC_BUILD_VERSION')
+    version_source = ROOT / 'build' / 'local-version' / 'version.txt'
+    version_source.parent.mkdir(parents=True, exist_ok=True)
+    version_source.write_text(build_version, encoding='utf-8')
+
 def add_tree(source, destination):
     collected = []
     for path in source.rglob('*'):
@@ -40,6 +50,7 @@ datas = (
     + [
     (str(ROOT / 'alembic.ini'), '.'),
     (str(ICON), '.'),
+    (str(version_source), 'local_app'),
     (str(BROWSER_CACHE), 'ms-playwright'),
     ]
 )

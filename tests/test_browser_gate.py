@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from web.browser_gate import BrowserOperationGate
+import pytest
 
 
 def test_one_slot_does_not_overlap_browser_operations():
@@ -36,4 +37,19 @@ def test_one_slot_does_not_overlap_browser_operations():
         await asyncio.gather(one, two)
         assert order == ['first-enter', 'first-exit', 'second-enter']
 
+    asyncio.run(scenario())
+
+
+def test_update_waits_for_active_and_waiting_work_and_blocks_new_work():
+    async def scenario():
+        gate = BrowserOperationGate(1)
+        async with gate.slot():
+            assert gate.begin_update() is False
+        assert gate.begin_update() is True
+        with pytest.raises(RuntimeError, match='อัปเดต'):
+            async with gate.slot():
+                pytest.fail('must not start work during install preparation')
+        gate.end_update()
+        async with gate.slot():
+            assert gate.begin_update() is False
     asyncio.run(scenario())

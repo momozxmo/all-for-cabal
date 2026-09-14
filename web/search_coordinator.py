@@ -77,6 +77,11 @@ class SearchCoordinator:
         self._starting: set[str] = set()
         self._deleting: set[str] = set()
 
+    @property
+    def busy(self):
+        with self._registry_lock:
+            return bool(self._live or self._starting)
+
     def live(self, workspace_id: str) -> LiveSearch | None:
         with self._registry_lock:
             return self._live.get(workspace_id)
