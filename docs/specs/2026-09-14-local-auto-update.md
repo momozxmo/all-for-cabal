@@ -1,6 +1,6 @@
 # All for Cabal Update — อัปเดตผ่านโปรแกรมพร้อมรายละเอียดเวอร์ชัน
 
-สถานะ: ดำเนินการตามคำสั่ง `implement` แล้วใน Local checkout; ยังไม่เผยแพร่ Release หรือ GitHub Issue ดูผลตรวจใน `docs/verification/2026-09-14-local-auto-update.md`
+สถานะ: ดำเนินการและจัดทำ Setup v0.1.31 ตามคำสั่งแล้ว; ยังไม่ได้สร้าง GitHub Issues จากร่าง tickets ดูผลตรวจใน `docs/verification/2026-09-14-local-auto-update.md`
 
 ## Problem Statement
 
