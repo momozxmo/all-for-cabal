@@ -94,6 +94,10 @@ class BundleRequest(BaseModel):
     source_group_key: str = Field(default='', max_length=240)
 
 
+class BundleTextImportRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000000)
+
+
 class BundleSpec(BaseModel):
     """One bundle as the operator built it on the Create Bundle page.
 
@@ -520,6 +524,12 @@ def console_js():
 @router.get('/static/updates.js')
 def updates_js():
     return FileResponse(os.path.join(STATIC_DIR, 'updates.js'),
+                        media_type='application/javascript')
+
+
+@router.get('/static/bundle_import.js')
+def bundle_import_js():
+    return FileResponse(os.path.join(STATIC_DIR, 'bundle_import.js'),
                         media_type='application/javascript')
 
 
@@ -1115,7 +1125,17 @@ def _clean_rewards(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
         qty = positive_int_text(
             qty_source,
             f'Bundle ที่ {bundle_number}: จำนวน reward แถว {row}')
-        cleaned.append({'type': kind, 'value': value, 'qty': qty})
+        entry_clean = {'type': kind, 'value': value, 'qty': qty}
+        if 'tier' in entry:
+            tier = entry['tier']
+            if tier not in ('Common', 'Rare', 'Epic', 'Mystic', 'Legend'):
+                raise _safe_failure(f'Bundle ที่ {bundle_number}: Tier ของ Reward ไม่ถูกต้อง')
+            entry_clean['tier'] = tier
+        if entry.get('rate') not in (None, ''):
+            entry_clean['rate'] = plain_decimal_text(
+                entry['rate'], f'Bundle ที่ {bundle_number}: เรทสุ่ม Reward',
+                minimum=Decimal('0.001'), maximum=Decimal('100'), places=3)
+        cleaned.append(entry_clean)
     return cleaned
 
 
@@ -1942,6 +1962,45 @@ def _clean_items(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
         items.append({
             'id': item_id, 'qty': qty, 'tier': tier, 'rate': rate})
     return items
+
+
+@router.get('/api/bundles/template')
+def bundles_template(user: User = Depends(require_user)):
+    return FileResponse(
+        os.path.join(STATIC_DIR, 'templates', 'bundle-template.xlsx'),
+        filename='All-for-Cabal-Bundle-Template.xlsx',
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@router.post('/api/bundles/import')
+async def bundles_import(file: UploadFile = File(...),
+                         user: User = Depends(require_user)):
+    from web.bundle_import import read_bundle_template
+
+    if not (file.filename or '').lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail='กรุณาเลือกไฟล์ Excel .xlsx จาก Template Bundle')
+    path = await _temporary_upload(file)
+    try:
+        return await asyncio.to_thread(read_bundle_template, path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception:
+        raise HTTPException(status_code=400, detail='อ่านไฟล์ Excel ไม่สำเร็จ กรุณาตรวจว่าเป็นไฟล์ .xlsx ที่เปิดได้')
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+@router.post('/api/bundles/import-text')
+def bundles_import_text(payload: BundleTextImportRequest,
+                        user: User = Depends(require_user)):
+    from web.bundle_import import read_bundle_text
+    try:
+        return read_bundle_text(payload.text)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
 
 @router.post('/api/bundles/run')

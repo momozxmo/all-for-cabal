@@ -42,6 +42,28 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="bundleImportTitle">
+      <div class="card-head"><h2 id="bundleImportTitle">Import Bundle จาก Item ID</h2>
+        <a class="button" href="/api/bundles/template" download>ดาวน์โหลด Template Excel</a></div>
+      <div class="card-body section">
+        <p class="hint">ใช้ Item ID บน Aztek ของเกมที่เลือก ไม่ใช่ Item Index · ทั้ง Excel และก็อปวางใช้รูปแบบเดียวกัน</p>
+        <label for="bundlePasteText">ก็อปเซลล์จาก Excel มาวางตรงนี้ (คั่นคอลัมน์ด้วย Tab หรือ |)</label>
+        <textarea id="bundlePasteText" rows="7" style="width:100%;font-family:monospace" spellcheck="false" placeholder="กล่องสุ่มกิจกรรม&#9;RANDOM&#10;200479&#9;10&#9;Common&#9;60&#10;200480&#9;3&#9;Rare&#9;30&#10;200481&#9;1&#9;Epic&#9;10"></textarea>
+        <div><button id="btnBundlePastePreview" type="button" class="primary">พรีวิวข้อความที่วาง</button></div>
+        <p class="hint">หัวชุด: ชื่อบันเดิล / FIXED, CHOICE หรือ RANDOM · รายการ: Item ID / จำนวน / Rarity / เรท (%) เฉพาะ RANDOM รวม 100% · Currency ใช้ CREDIT: Alz หรือ DEBIT: ชื่อ, MILEAGE: ชื่อ, PLAYER_EXP: ชื่อ</p>
+        <div class="topline">
+          <label>ไฟล์ Excel (.xlsx)<input id="bundleImportFile" type="file" accept=".xlsx"></label>
+          <button id="btnBundleImportRead" type="button">อ่านไฟล์</button>
+          <label>Sheet<select id="bundleImportSheet" disabled></select></label>
+          <button id="btnBundleImportPreview" type="button" disabled>พรีวิวข้อมูล</button>
+          <button id="btnBundleImportAdd" type="button" class="success" disabled>เพิ่มเข้าคิว Bundle</button>
+        </div>
+        <div id="bundleImportMsg" class="notice" role="status" aria-live="polite" style="white-space:pre-line" hidden></div>
+        <div id="bundleImportPreview" class="table-wrap" style="max-height:440px" hidden></div>
+        <p class="hint">ส่งทันทีเป็นค่าเริ่มต้น แก้ไขต่อในคิวได้ · จำนวนว่าง = 1 และ Rarity ว่าง = Common · ยังไม่ตรวจว่า ID / Currency มีอยู่จริงบน Aztek และไม่สร้างจริงจนกดสร้างเอง</p>
+      </div>
+    </section>
+
     <section class="card" id="editor" hidden>
       <div class="card-head"><h2>แก้บันเดิล</h2>
         <span><span id="reviewNote" class="hint"></span> <span id="editorWhich" class="hint"></span></span></div>
@@ -410,7 +432,7 @@ $('btnApplyAll').onclick=()=>{const b=current();if(!b)return;
 $('bundleName').oninput=()=>{const b=current();if(!b)return;
   b.name=$('bundleName').value.trim()||'Bundle';renderQueue();};
 $('bundleType').onchange=()=>{const b=current();if(!b)return;
-  b.type=$('bundleType').value;document.body.dataset.btype=b.type;renderQueue();};
+  b.type=$('bundleType').value;document.body.dataset.btype=b.type;renderQueue();renderRewards();};
 $('bundleDeliver').onchange=()=>{const b=current();if(b)b.deliver=$('bundleDeliver').checked;renderQueue();};
 
 // ---- Reward ----
@@ -419,10 +441,19 @@ function renderRewards(){const box=$('rewardList');box.replaceChildren();
   bundleRewards().forEach((rw,i)=>{const row=document.createElement('div');row.className='rwrow';
     const k=document.createElement('span');k.className='k';k.textContent=rw.type;
     const v=document.createElement('span');v.className='v';v.textContent=rw.value;
-    const q=document.createElement('span');q.className='q';q.textContent='x'+rw.qty;
+    const q=document.createElement('input');q.type='number';q.min='1';q.value=rw.qty;q.style.width='100px';q.setAttribute('aria-label','จำนวน Reward');
+    q.oninput=()=>{rw.qty=q.value;renderQueue();};
+    const tier=document.createElement('select');tier.setAttribute('aria-label','Rarity Reward');
+    TIERS.forEach(value=>{const option=document.createElement('option');option.textContent=value;tier.append(option);});
+    tier.value=rw.tier||'Common';tier.onchange=()=>{rw.tier=tier.value;renderQueue();};
     const rm=document.createElement('button');rm.type='button';rm.textContent='✕';rm.title='เอาออก';
     rm.onclick=()=>{bundleRewards().splice(i,1);renderRewards();renderQueue();};
-    [k,v,q,rm].forEach(el=>row.appendChild(el));box.appendChild(row);});}
+    [k,v,q,tier].forEach(el=>row.appendChild(el));
+    if(current()?.type==='RANDOM'){
+      const rate=document.createElement('input');rate.type='number';rate.min='0.001';rate.max='100';rate.step='0.001';rate.style.width='100px';rate.placeholder='เรท %';rate.value=rw.rate||'';rate.setAttribute('aria-label','เรท Reward');
+      rate.oninput=()=>{rw.rate=rate.value;renderQueue();};row.append(rate);
+    }
+    row.append(rm);box.appendChild(row);});}
 $('btnRewardAdd').onclick=()=>{const value=$('rewardValue').value.trim();
   if(!current()){showNotice('runMsg','warning','ยังเพิ่ม reward ไม่ได้','ยังไม่ได้เลือกบันเดิล','เลือกบันเดิลในคิวก่อน');return;}
   if(!value){showNotice('runMsg','warning','ยังเพิ่ม reward ไม่ได้','ช่องค่า reward ยังว่าง','ใส่ชื่อสกุลเงินหรือยศ แล้วกดเพิ่มอีกครั้ง');return;}
@@ -671,5 +702,6 @@ window.afcUpdateDraft = {
 };
 </script>
 <script src="/static/updates.js"></script>
+<script src="/static/bundle_import.js"></script>
 </body>
 </html>

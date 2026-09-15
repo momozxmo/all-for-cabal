@@ -12,6 +12,29 @@ from local_app.release_verify import verify_tree, write_checksum
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('prefix', ['', '_internal/'])
+def test_release_verifier_accepts_shipped_bundle_template(tmp_path, prefix):
+    package = tmp_path / 'package'
+    target = package / f'{prefix}web/static/templates/bundle-template.xlsx'
+    target.parent.mkdir(parents=True)
+    target.write_bytes((ROOT / 'web/static/templates/bundle-template.xlsx').read_bytes())
+    verify_tree(package)
+
+
+@pytest.mark.parametrize('relative', [
+    'uploads/bundle-template.xlsx',
+    '_internal/web/static/templates/private.xlsx',
+    '_internal/web/static/templates/nested/bundle-template.xlsx',
+])
+def test_release_verifier_still_rejects_other_workbooks(tmp_path, relative):
+    package = tmp_path / 'package'
+    target = package / relative
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b'private')
+    with pytest.raises(ValueError, match='private runtime suffix'):
+        verify_tree(package)
+
+
 def test_release_verifier_rejects_private_runtime_files(tmp_path):
     package = tmp_path / 'package'
     package.mkdir()

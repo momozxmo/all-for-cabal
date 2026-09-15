@@ -29,6 +29,11 @@ FORBIDDEN_COMPONENTS = {
     '.pytest_cache',
 }
 
+SHIPPED_TEMPLATES = {
+    'web/static/templates/bundle-template.xlsx',
+    '_internal/web/static/templates/bundle-template.xlsx',
+}
+
 
 def _forbidden_reason(relative: Path) -> str | None:
     lowered_parts = [part.casefold() for part in relative.parts]
@@ -36,6 +41,9 @@ def _forbidden_reason(relative: Path) -> str | None:
         return 'forbidden directory'
     if any(part in FORBIDDEN_NAMES for part in lowered_parts):
         return 'private runtime name'
+    # Only the reviewed, bundled template is public; uploaded workbooks remain forbidden.
+    if relative.as_posix().casefold() in SHIPPED_TEMPLATES:
+        return None
     if relative.suffix.casefold() in FORBIDDEN_SUFFIXES:
         return 'private runtime suffix'
     return None

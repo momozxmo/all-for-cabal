@@ -531,6 +531,7 @@ class BundleBuilder:
         added = 0
         successful_items = []
         rewards_added = 0
+        successful_rewards = []
         header_complete = await self._fill_header(page, name, btype, deliver)
         # Older tests/integrations monkeypatch this method with a coroutine that
         # returns None; only an explicit False from the real completion-aware
@@ -558,6 +559,14 @@ class BundleBuilder:
                                       reward.get('value'),
                                       reward.get('qty') or '1'):
                 rewards_added += 1
+                successful_rewards.append(reward)
+        # Imported rewards may carry an explicit Tier and RANDOM rate. They use
+        # the same card indexes, after only the items that were actually added.
+        if any('tier' in reward or reward.get('rate') for reward in successful_rewards):
+            entries = successful_items + successful_rewards
+            fields_complete = ((await self._fill_qty_tier(page, entries)) is not False) and fields_complete
+            if btype == 'RANDOM':
+                fields_complete = ((await self._fill_rates(page, entries)) is not False) and fields_complete
         # Last of all, because a reward row only exists once it is added and
         # arrives with its required Tier unset.
         if added or rewards_added:

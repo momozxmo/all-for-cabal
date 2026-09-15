@@ -18,6 +18,7 @@ WORKBOOK_PATHS = frozenset({
     '/api/import-plan',
     '/api/itemcodes/import',
     '/api/events/import',
+    '/api/bundles/import',
 })
 _MUTATION_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 

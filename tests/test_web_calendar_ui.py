@@ -434,6 +434,9 @@ def test_bundle_random_tier_and_rate_are_reachable_in_an_800px_shop_table():
           select('shop-random');
         }''')
 
+        # Import controls sit above the editor; bring the table into the viewport
+        # before hit-testing horizontal access to the live row controls.
+        page.locator('#itemsTable').scroll_into_view_if_needed()
         layout = page.evaluate('''() => {
           const wrapper = document.querySelector('#itemsTable').closest('.table-wrap');
           const tier = document.querySelector('#itemsTable tbody select');
