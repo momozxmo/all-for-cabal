@@ -554,6 +554,20 @@ def sheet_picker_js():
                         media_type='application/javascript')
 
 
+@router.get('/static/workspace-ui.css')
+def workspace_ui_css():
+    """Shared operator workspace presentation layer."""
+    return FileResponse(os.path.join(STATIC_DIR, 'workspace-ui.css'),
+                        media_type='text/css')
+
+
+@router.get('/static/workspace-ui.js')
+def workspace_ui_js():
+    """Shared presentation-only hierarchy, focus, and overflow behavior."""
+    return FileResponse(os.path.join(STATIC_DIR, 'workspace-ui.js'),
+                        media_type='application/javascript')
+
+
 @router.get('/bundles', response_class=HTMLResponse)
 def bundles_page(
     request: Request,

@@ -177,9 +177,11 @@ function attachPicker(input) {
   head.className = 'dthead';
   const prev = document.createElement('button');
   prev.type = 'button'; prev.textContent = '‹';
+  prev.setAttribute('aria-label', 'เดือนก่อนหน้า');
   const title = document.createElement('b');
   const next = document.createElement('button');
   next.type = 'button'; next.textContent = '›';
+  next.setAttribute('aria-label', 'เดือนถัดไป');
   head.append(prev, title, next);
 
   const grid = document.createElement('div');
@@ -273,7 +275,21 @@ function attachPicker(input) {
     view = {year: shown.year, month: shown.month};
     commit();
   };
-  doneBtn.onclick = () => { pop.hidden = true; };
+  function close(returnFocus = false) {
+    pop.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    if (returnFocus) input.focus();
+  }
+  doneBtn.onclick = () => close(true);
+  pop.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); close(true);
+    }
+  });
+  wrap.addEventListener('focusout', event => {
+    if (!wrap.contains(event.relatedTarget)) close();
+  });
+  input.setAttribute('aria-expanded', 'false');
 
   function open() {
     const value = readStamp(input.value);
@@ -284,14 +300,15 @@ function attachPicker(input) {
     }
     paint();
     pop.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
   }
-  input.onclick = () => { pop.hidden ? open() : (pop.hidden = true); };
+  input.onclick = () => { pop.hidden ? open() : close(); };
   input.onkeydown = event => {
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
-    if (event.key === 'Escape') pop.hidden = true;
+    if (event.key === 'Escape') close();
   };
   document.addEventListener('mousedown', event => {
-    if (!pop.hidden && !wrap.contains(event.target)) pop.hidden = true;
+    if (!pop.hidden && !wrap.contains(event.target)) close();
   });
   return input;
 }

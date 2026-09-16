@@ -87,6 +87,8 @@
       .itemcode-limit-fields{grid-template-columns:1fr}
     }
   </style>
+  <link rel="stylesheet" href="/static/workspace-ui.css">
+  <script src="/static/workspace-ui.js" defer></script>
 </head>
 <body>
 <main class="shell">
@@ -124,6 +126,7 @@
         <input id="wrFile" class="hidden" type="file" accept=".xlsx,.xlsm">
         <p class="hint" id="queueHint">ยังไม่มีอะไรในคิว — กด “📂 Import ไฟล์แผน” เพื่อดูข้อมูลในไฟล์ก่อน
           หรือ “+ Item Code ใหม่” เพื่อกรอกเอง</p>
+        <p class="hint">ไฟล์แผน: นำเข้ารายการ Item Code ทั่วไป · Mastercode WR: อ่านบล็อก Master Code พร้อม Limit และ Bundle ID แล้วพรีวิวก่อนเข้าคิว</p>
       </div>
     </section>
 

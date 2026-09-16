@@ -52,6 +52,8 @@
     #bookmarklet:hover{border-color:var(--legend);background:rgba(224,166,60,.14)}
     @media(prefers-reduced-motion:reduce){*{animation:none!important}}
   </style>
+  <link rel="stylesheet" href="/static/workspace-ui.css">
+  <script src="/static/workspace-ui.js" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -74,7 +76,7 @@
       <div class="card-body">
         <dl class="profile">
           <div><dt>สถานะ</dt><dd id="aztekStatusText">กำลังโหลด…</dd></div>
-          <div><dt>บัญชีที่เชื่อม</dt><dd id="aztekAccountLabel">-</dd></div>
+          <div><dt>ข้อมูลการเชื่อมต่อ</dt><dd id="aztekAccountLabel">-</dd></div>
           <div><dt>อัปเดตล่าสุด</dt><dd id="aztekUpdatedAt">-</dd></div>
         </dl>
         <div data-local-aztek hidden>
@@ -128,6 +130,10 @@
 
     function applyRuntimeMode(me) {
       const localMode = !!(me && me.local_mode);
+      if (localMode) {
+        document.querySelector('h1').textContent = 'การเชื่อมต่อ Aztek';
+        document.title = 'การเชื่อมต่อ Aztek | All for Cabal';
+      }
       document.querySelectorAll('[data-hosted-auth]').forEach(
         node => { node.hidden = localMode; });
       document.querySelectorAll('[data-hosted-aztek]').forEach(
@@ -241,7 +247,9 @@
         aztekStatusText.textContent = statusLabel(status.status);
         aztekAccountLabel.textContent = status.account_label || '-';
         aztekUpdatedAt.textContent = status.updated_at
-          ? new Date(status.updated_at).toLocaleString('th-TH') : '-';
+          ? new Date(status.updated_at).toLocaleString('th-TH-u-ca-gregory', {
+              dateStyle:'medium', timeStyle:'medium', hour12:false, timeZone:'Asia/Bangkok',
+            }) + ' (เวลาไทย)' : '-';
         if (status.status === 'active' && statusPoll) {
           stopPolling(); stopCountdown(); pairingBox.hidden = true;
           aztekMessage.textContent = 'เชื่อมต่อสำเร็จแล้ว';

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>All for Cabal — สร้าง Bundle</title>
   <link rel="stylesheet" href="/static/console.css">
+  <link rel="stylesheet" href="/static/workspace-ui.css">
+  <script src="/static/workspace-ui.js" defer></script>
 </head>
 <body data-btype="FIXED">
 <main class="shell">
@@ -47,12 +49,12 @@
         <a class="button" href="/api/bundles/template" download>ดาวน์โหลด Template Excel</a></div>
       <div class="card-body section">
         <p class="hint">ใช้ Item ID บน Aztek ของเกมที่เลือก ไม่ใช่ Item Index · ทั้ง Excel และก็อปวางใช้รูปแบบเดียวกัน</p>
-        <label for="bundlePasteText">ก็อปเซลล์จาก Excel มาวางตรงนี้ (คั่นคอลัมน์ด้วย Tab หรือ |)</label>
+        <label for="bundlePasteText"><strong>วางข้อมูลจาก Excel</strong> — ก็อปเซลล์มาวางตรงนี้ (คั่นคอลัมน์ด้วย Tab หรือ |)</label>
         <textarea id="bundlePasteText" rows="7" style="width:100%;font-family:monospace" spellcheck="false" placeholder="กล่องสุ่มกิจกรรม&#9;RANDOM&#10;200479&#9;10&#9;Common&#9;60&#10;200480&#9;3&#9;Rare&#9;30&#10;200481&#9;1&#9;Epic&#9;10"></textarea>
         <div><button id="btnBundlePastePreview" type="button" class="primary">พรีวิวข้อความที่วาง</button></div>
         <p class="hint">หัวชุด: ชื่อบันเดิล / FIXED, CHOICE หรือ RANDOM · รายการ: Item ID / จำนวน / Rarity / เรท (%) เฉพาะ RANDOM รวม 100% · Currency ใช้ CREDIT: Alz หรือ DEBIT: ชื่อ, MILEAGE: ชื่อ, PLAYER_EXP: ชื่อ</p>
         <div class="topline">
-          <label>ไฟล์ Excel (.xlsx)<input id="bundleImportFile" type="file" accept=".xlsx"></label>
+          <label>หรือเลือกไฟล์ Excel (.xlsx)<input id="bundleImportFile" type="file" accept=".xlsx"></label>
           <button id="btnBundleImportRead" type="button">อ่านไฟล์</button>
           <label>Sheet<select id="bundleImportSheet" disabled></select></label>
           <button id="btnBundleImportPreview" type="button" disabled>พรีวิวข้อมูล</button>

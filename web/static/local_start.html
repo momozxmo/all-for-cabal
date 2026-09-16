@@ -26,19 +26,27 @@
     h1 { margin: 0 0 12px; font-size: 1.4rem; }
     p { margin: 0; color: #aeb7d0; line-height: 1.6; }
   </style>
+  <link rel="stylesheet" href="/static/workspace-ui.css">
+  <script src="/static/workspace-ui.js" defer></script>
 </head>
 <body>
   <main>
     <h1>กำลังเปิด All for Cabal Web</h1>
-    <p id="status">กำลังตรวจสอบสิทธิ์จาก Launcher…</p>
+    <p id="status" role="status">กำลังตรวจสอบสิทธิ์จาก Launcher…</p>
+    <p id="recovery" hidden style="margin-top:16px">เปิดเมนู Start ของ Windows → ค้นหา “All for Cabal Web” → เปิดโปรแกรม แล้วเข้าเว็บจาก Launcher อีกครั้ง</p>
   </main>
   <script>
     (() => {
       const status = document.getElementById('status');
       const token = location.hash.slice(1);
+      const showRecovery = () => {
+        document.querySelector('h1').textContent = 'เปิดโปรแกรมผ่าน Launcher';
+        status.textContent = 'กรุณาเปิดผ่าน All for Cabal Web Launcher';
+        document.getElementById('recovery').hidden = false;
+      };
       history.replaceState(null, '', '/local-start');
       if (!token) {
-        status.textContent = 'กรุณาเปิดผ่าน All for Cabal Web Launcher';
+        showRecovery();
         return;
       }
       fetch('/api/local/session', {
@@ -50,7 +58,7 @@
         if (!response.ok) throw new Error('local session rejected');
         location.replace('/');
       }).catch(() => {
-        status.textContent = 'กรุณาเปิดผ่าน All for Cabal Web Launcher';
+        showRecovery();
       });
     })();
   </script>

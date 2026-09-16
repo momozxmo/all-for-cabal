@@ -101,7 +101,14 @@ def _route_live_game_tools(context, workspace=None):
                 and url.endswith('/products'):
             route.fulfill(json=workspace)
         elif '/static/' in url:
-            route.fulfill(content_type='text/css', body='')
+            # Exercise the complete interface (including responsive styles and
+            # presentation scripts), not an unstyled subset of the tool.
+            from urllib.parse import urlsplit
+            asset = ROOT / 'web' / 'static' / Path(urlsplit(url).path).name
+            if asset.is_file():
+                route.fulfill(path=str(asset))
+            else:
+                route.abort()
         else:
             route.abort()
 

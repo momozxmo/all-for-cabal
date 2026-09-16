@@ -76,6 +76,8 @@
       .price-match-row{grid-template-columns:1fr}
     }
   </style>
+  <link rel="stylesheet" href="/static/workspace-ui.css">
+  <script src="/static/workspace-ui.js" defer></script>
 </head>
 <body class="product-page">
 <main class="shell">
@@ -112,6 +114,7 @@
           <button id="btnDeleteWorkspace" class="danger" type="button" disabled>ล้างแผนที่นำเข้า</button>
         </div>
         <p class="hint" id="queueHint">ยังไม่มี Product ในคิว — ส่ง Shop plan จาก Item Finder, Import ที่นี่ หรือเพิ่มเอง</p>
+        <p id="selectedFeedback" class="selected-feedback" role="status" hidden></p>
         <div class="option-tools">
           <button id="btnRefreshCategories" type="button">↻ Fetch Category</button>
           <span id="categoryOptionState" class="option-state">ยังไม่ได้ Fetch</span>
@@ -394,7 +397,9 @@ function optionStatus(kind) {
   if (state.loading) return 'กำลัง Fetch…';
   if (state.warning) return state.warning;
   if (!state.fetched_at) return 'ยังไม่ได้ Fetch';
-  const time = new Date(state.fetched_at).toLocaleString();
+  const time = new Date(state.fetched_at).toLocaleString('th-TH-u-ca-gregory', {
+    dateStyle:'medium', timeStyle:'medium', hour12:false, timeZone:'Asia/Bangkok',
+  }) + ' (เวลาไทย)';
   return `${state.options.length} รายการ · ${time}`;
 }
 
@@ -871,6 +876,16 @@ function renderQueue() {
   $('queueCount').textContent = String(productQueue.items.length);
   $('queueHint').hidden = productQueue.items.length > 0;
   const entry = productQueue.current();
+  const feedback = $('selectedFeedback');
+  feedback.hidden = !entry;
+  if (entry) {
+    const labels = {failed:'ครั้งก่อนสร้างไม่สำเร็จ', incomplete:'ครั้งก่อนตรวจพบข้อมูลไม่ครบ',
+      previewed:'เคยเปิดตรวจแล้ว', created:'สร้างแล้ว'};
+    const result = entry.last_result || {};
+    const detail = [result.error, ...(result.missing || [])].filter(Boolean).join(' · ');
+    feedback.textContent = `${labels[entry.status] || 'รอตรวจข้อมูล'}${detail ? ' · ' + detail : ''}`
+      + (entry.product_id ? ` · Product #${entry.product_id}` : ' · ตรวจข้อมูลปัจจุบันและเปิดเว็บดูก่อนสร้าง');
+  } else feedback.textContent = '';
   $('editor').hidden = !entry;
   $('btnQueueDel').disabled = !entry;
   $('btnQueueClear').disabled = !productQueue.items.length;
@@ -895,10 +910,11 @@ function renderQueue() {
     setField('limitResetAt', entry.limit_reset_at);
     $('editorWhich').textContent = [
       entry.source_sheet,
-      entry.workspace_id ? `workspace ${entry.workspace_id}` : '',
+      entry.workspace_id ? 'แผนที่นำเข้า' : 'รายการที่เพิ่มเอง',
     ].filter(Boolean).join(' · ');
   }
   renderWarnings(entry);
+  $('editorWhich').title = entry?.workspace_id ? `workspace ${entry.workspace_id}` : '';
   renderBundle(entry);
   renderImageNames();
   renderProductOptions(entry);
@@ -1036,7 +1052,15 @@ function renderProductOptions(entry) {
     remove.onclick = () => removeProductPrice(entry, candidate);
     const currencyCell = document.createElement('div');
     currencyCell.append(currencyInput, optionList);
-    row.append(chip, currencyCell, original, sale, remove);
+    currencyCell.className = 'currency-cell';
+    const currencyLabel = document.createElement('label');
+    currencyLabel.append('Currency บน Aztek', currencyInput);
+    currencyCell.replaceChildren(currencyLabel, optionList);
+    const originalLabel = document.createElement('label');
+    originalLabel.append('ราคาปกติ', original);
+    const saleLabel = document.createElement('label');
+    saleLabel.append('ราคาขาย', sale);
+    row.append(chip, currencyCell, originalLabel, saleLabel, remove);
     list.appendChild(row);
   }
 }
