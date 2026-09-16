@@ -62,8 +62,8 @@
     if (!file || !file.name.toLowerCase().endsWith('.xlsx')) {
       notice('error', 'ยังอ่านไฟล์ไม่ได้', 'กรุณาเลือกไฟล์ Excel .xlsx จาก Template Bundle'); return;
     }
-    if (file.size > 32 * 1024 * 1024) {
-      notice('error', 'ไฟล์ใหญ่เกินกำหนด', 'กรุณาแบ่งไฟล์ให้เล็กกว่า 32 MB'); return;
+    if (file.size > 64 * 1024 * 1024) {
+      notice('error', 'ไฟล์ใหญ่เกินกำหนด', 'กรุณาแบ่งไฟล์ให้เล็กกว่า 64 MB'); return;
     }
     const token = revision;
     readButton.disabled = true;

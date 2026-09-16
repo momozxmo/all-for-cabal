@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -186,13 +187,24 @@ class LocalServer:
 
     def ensure_started(self) -> str:
         if self._port_is_open():
-            if _is_local_health(self.http.health()):
+            health = self.http.health()
+            if _is_local_health(health):
+                self._check_running_version(health)
                 return 'reused'
             raise PortInUseError(
                 'พอร์ต 8000 ถูกใช้งานโดยโปรแกรมอื่น กรุณาปิดโปรแกรมนั้นก่อน'
             )
         self.start()
         return 'started'
+
+    def _check_running_version(self, health) -> None:
+        if getattr(sys, 'frozen', False) and _is_local_health(health):
+            from local_app.updates import current_version
+            if health.get('version') != current_version():
+                raise PortInUseError(
+                    'มี All for Cabal คนละรุ่นหรือเซิร์ฟเวอร์ทดสอบใช้พอร์ต 8000 อยู่ '
+                    'กรุณาบันทึกงาน ปิดเซิร์ฟเวอร์เดิม แล้วเปิดโปรแกรมที่ติดตั้งอีกครั้ง'
+                )
 
     def start(self, timeout: float = 20.0) -> None:
         app = self._app_factory()
@@ -223,6 +235,7 @@ class LocalServer:
         )
 
     def open_browser(self) -> str:
+        self._check_running_version(self.http.health())
         token = self.http.launch(self.config['launcher_secret'])
         url = f'{LOCAL_BASE_URL}/local-start#{token}'
         if webbrowser.open(url) is False:

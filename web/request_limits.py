@@ -8,7 +8,7 @@ from typing import Any
 
 
 PAIR_BODY_MAX = 307200
-WORKBOOK_BODY_MAX = 33554432
+WORKBOOK_BODY_MAX = 67108864
 PRODUCT_BODY_MAX = 67108864
 MUTATION_BODY_MAX = 2097152
 COALESCE_FRAME_BYTES = 64 * 1024
@@ -74,7 +74,7 @@ async def _send_json(send: Callable[[dict[str, Any]], Awaitable[None]], status: 
 def _too_large_payload(path: str, limit: int) -> dict[str, Any]:
     if path in WORKBOOK_PATHS:
         return {
-            'detail': 'ไฟล์ Excel ใหญ่เกิน 32 MB',
+            'detail': 'ไฟล์ Excel ใหญ่เกิน 64 MB',
             'code': 'request_too_large',
             'limit_bytes': limit,
         }

@@ -102,6 +102,27 @@ def test_unknown_process_on_port_8000_is_rejected():
         server.ensure_started()
 
 
+@pytest.mark.parametrize('action', ['ensure_started', 'open_browser'])
+def test_installed_launcher_rejects_other_running_version(monkeypatch, action):
+    monkeypatch.setattr('local_app.server.sys.frozen', True, raising=False)
+    monkeypatch.setattr('local_app.updates.current_version', lambda: '0.1.34')
+    http = FakeHttp(health={'ok': True, 'product': 'all-for-cabal-local',
+                            'version': '0.1.30'})
+    server = LocalServer(_paths(), _config(), http=http, port_is_open=lambda: True)
+    with pytest.raises(PortInUseError, match='8000'):
+        getattr(server, action)()
+    assert http.launch_headers is None
+
+
+def test_installed_launcher_reuses_matching_version(monkeypatch):
+    monkeypatch.setattr('local_app.server.sys.frozen', True, raising=False)
+    monkeypatch.setattr('local_app.updates.current_version', lambda: '0.1.34')
+    server = LocalServer(_paths(), _config(),
+        http=FakeHttp(health={'ok': True, 'product': 'all-for-cabal-local',
+                             'version': '0.1.34'}), port_is_open=lambda: True)
+    assert server.ensure_started() == 'reused'
+
+
 def test_startup_timeout_stops_the_partially_started_server():
     clock_values = iter([0.0, 21.0])
     fake = WaitingUvicornServer()

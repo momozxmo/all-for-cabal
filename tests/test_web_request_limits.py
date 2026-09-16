@@ -175,21 +175,31 @@ def test_item_finder_accepts_the_real_19mb_workbook_request_body():
 
 
 @pytest.mark.parametrize('path', WORKBOOK_PATHS)
-def test_workbook_over_32mb_is_rejected_with_plain_thai_guidance(path):
+def test_workbook_over_64mb_is_rejected_with_plain_thai_guidance(path):
     recorded = RecordingApp()
 
     sent = _run(
         RequestSizeLimitMiddleware(recorded),
-        _scope('POST', path, '33554433'),
+        _scope('POST', path, '67108865'),
         [],
     )
 
     assert recorded.calls == []
     assert json.loads(sent[-1]['body']) == {
-        'detail': 'ไฟล์ Excel ใหญ่เกิน 32 MB',
+        'detail': 'ไฟล์ Excel ใหญ่เกิน 64 MB',
         'code': 'request_too_large',
-        'limit_bytes': 33554432,
+        'limit_bytes': 67108864,
     }
+
+
+def test_monthly_plan_size_passes_workbook_body_limit():
+    recorded = RecordingApp()
+    body = b'x' * 35829436
+    sent = _run(RequestSizeLimitMiddleware(recorded),
+                _scope('POST', '/api/import-plan', str(len(body))),
+                [{'type': 'http.request', 'body': body, 'more_body': False}])
+    assert sent[0]['status'] == 204
+    assert sum(len(m['body']) for m in recorded.calls[0]) == len(body)
 
 
 def test_valid_thousands_digit_content_length_is_rejected_as_too_large():
