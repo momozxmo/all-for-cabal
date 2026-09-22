@@ -217,6 +217,7 @@ def result_view(item):
         item.get('group_keys') or item.get('sources') or [])]
     return {
         'aztek_id': item.get('aztek_id', ''),
+        'document_reference': item.get('document_reference'),
         'item_name': web_name,
         'file_name': file_name,
         'item_kind': item.get('item_kind', '') or '',

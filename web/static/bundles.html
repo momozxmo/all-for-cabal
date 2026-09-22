@@ -217,7 +217,7 @@ function loadQueue(){try{const raw=localStorage.getItem(QUEUE_KEY);
     state.results=Array.isArray(parsed)?parsed:[];}catch(e){state.results=[];}
   try{const parsed=JSON.parse(localStorage.getItem(MADE_KEY)||'[]');
     state.made=Array.isArray(parsed)?parsed:[];}catch(e){state.made=[];}}
-function saveQueue(){try{
+function saveQueue(){renderDocumentReference();try{
   localStorage.setItem(QUEUE_KEY,JSON.stringify(state.queue));
   localStorage.setItem(EVENT_DRAFT_KEY,JSON.stringify(state.eventDrafts));
   localStorage.setItem(ITEMCODE_DRAFT_KEY,JSON.stringify(state.itemcodeDrafts));
@@ -225,6 +225,41 @@ function saveQueue(){try{
   localStorage.setItem(MADE_KEY,JSON.stringify(state.made));
 }catch(e){}}
 function current(){return state.queue.find(b=>b.key===state.active);}
+function renderDocumentReference(){
+  let panel=$('documentReference');
+  if(!panel){panel=document.createElement('section');panel.id='documentReference';
+    panel.setAttribute('aria-label','ข้อมูลอ้างอิง Bundle');
+    $('itemsTable').closest('.table-wrap').after(panel);}
+  panel.replaceChildren();const b=current();if(!b)return;
+  const title=document.createElement('h3');title.textContent='ข้อมูลอ้างอิง Bundle';panel.append(title);
+  const ref=b.document_reference;
+  const note=document.createElement('p');
+  note.textContent=ref&&ref.available!==false?'ต้นฉบับไม่เปลี่ยนตามการแก้คิว · ยังไม่ใช่ผลตรวจ Aztek'
+    :'ไม่มีข้อมูลอ้างอิง — รายการที่กรอกเองหรือคิวเก่า ไม่ถือว่าตรวจผ่าน';panel.append(note);
+  if(ref){const provenance=document.createElement('p');
+    provenance.textContent=`เกมต้นฉบับ: ${ref.game||'ไม่มีข้อมูลอ้างอิง'}`;panel.append(provenance);
+    appendReferenceTable(panel,'ต้นฉบับ',ref.items,ref.rewards,ref);}
+  appendReferenceTable(panel,'ค่าคิวปัจจุบัน (แสดงแยก ไม่ใช่การจับคู่แถว)',b.items,b.rewards,null);
+  if(b.submitted_values)appendReferenceTable(panel,'ค่าที่ส่งสร้างล่าสุด',b.submitted_values.items,b.submitted_values.rewards,null);
+}
+function appendReferenceTable(panel,label,items,rewards,source){
+    const details=document.createElement('details');details.open=true;
+    const summary=document.createElement('summary');summary.textContent=label;details.append(summary);
+    const wrap=document.createElement('div');wrap.className='table-wrap';wrap.tabIndex=0;
+    const t=document.createElement('table');const head=t.createTHead().insertRow();
+    ['รายการ','Kind / Option / Duration','จำนวน','Rarity','Rate','ไฟล์ / Sheet / แถว'].forEach(text=>{
+      const th=document.createElement('th');th.textContent=text;head.append(th);});
+    const body=t.createTBody();const absent='ไม่มีข้อมูลอ้างอิง';
+    const value=v=>(v===undefined||v===null||v==='')?absent:String(v);
+    [...(items||[]),...(rewards||[])].forEach(it=>{
+      const row=body.insertRow();
+      const values=[it.id||it.name||[it.type,it.value].filter(Boolean).join(': ')||absent,
+        it.type?'ไม่เกี่ยวข้อง':[it.kind,it.option,it.duration].map(value).join(' / '),
+        value(it.qty),value(it.tier),value(it.rate),
+        [it.filename??source?.filename,it.sheet??source?.sheet,it.source_row].map(value).join(' / ')];
+      values.forEach(text=>{row.insertCell().textContent=text;});});
+    wrap.append(t);details.append(wrap);panel.append(details);
+}
 function liveItems(b){return b?b.items:[];}
 function nextKey(){return 'b'+(Date.now().toString(36))+Math.floor(Math.random()*1e6).toString(36);}
 function uniqueName(name){const taken=new Set(state.queue.map(b=>b.name));
@@ -303,6 +338,8 @@ function drainHandoff(){
     // RANDOM with the odds already filled in, not left for the operator to spot.
     const random=!!b.is_random||items.some(it=>it.rate);
     state.queue.push({key:nextKey(),name:uniqueName(b.name||'Bundle'),
+      document_reference:b.document_reference
+        ? {...structuredClone(b.document_reference),game:payload.game||null} : null,
       workspace_id:state.workspaceId,
       group:b.group||'',group_key:b.group_key||'',
       type:random?'RANDOM':'FIXED',deliver:true,items,rewards:[]});
@@ -549,7 +586,7 @@ $('rewardValue').onfocus=openRewardPicker;
 
 // ---- สร้างจริง ----
 function jobFrom(b){const random=b.type==='RANDOM';
-  return {name:b.name,bundle_type:b.type,deliver:b.deliver,rewards:b.rewards||[],
+  return {client_key:b.key,name:b.name,bundle_type:b.type,deliver:b.deliver,rewards:b.rewards||[],
           items:b.items.filter(it=>String(it.id).trim()).map(it=>({id:it.id,
             qty:String(parseInt(it.qty)||1),tier:it.tier||'Common',
             rate:random?String(it.rate||'').trim():''}))};}
@@ -575,13 +612,27 @@ function renderResults(results,append){const box=$('bundleResults');
      r.rewards_total?`${r.rewards_added}/${r.rewards_total}`:'-',
      outcome==='ok'?'สร้างแล้ว':outcome==='noid'?'สร้างแล้ว (เช็คเลขบนเว็บ)':(r.error||'ไม่สำเร็จ')
     ].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
-    table.tBodies[0].appendChild(tr);});}
+    table.tBodies[0].appendChild(tr);
+    if(r.submitted_values){
+      const detail=document.createElement('details');detail.className='submitted-reference';
+      const summary=document.createElement('summary');summary.textContent=`ข้อมูลที่ส่งสร้าง: ${r.name}`;
+      detail.append(summary);const ref=r.document_reference;
+      if(ref)appendReferenceTable(detail,'ต้นฉบับ',ref.items,ref.rewards,ref);
+      appendReferenceTable(detail,'ค่าที่ส่งสร้าง',r.submitted_values.items,r.submitted_values.rewards,null);
+      box.append(detail);
+    }
+  });}
 
 async function runBundles(bundles, doSave){
   const jobs=bundles.map(jobFrom).filter(j=>j.items.length||j.rewards.length);
   if(!jobs.length){showNotice('runMsg','warning','ยังตรวจหรือสร้างไม่ได้','บันเดิลนี้ยังไม่มีไอเทมหรือ reward','เพิ่มอย่างน้อย 1 รายการแล้วลองอีกครั้ง');return null;}
   const short=jobs.filter(rateGap).map(j=>j.name);
   if(short.length){showNotice('runMsg','error','เรทสุ่มยังไม่ครบ 100%',short.join(', '),'แก้เรทของบันเดิลที่ระบุแล้วลองอีกครั้ง');return null;}
+  if(doSave){
+    for(const b of bundles){b.submitted_values=structuredClone({...jobFrom(b),game:$('game').value});}
+    try{localStorage.setItem(QUEUE_KEY,JSON.stringify(state.queue));}
+    catch(e){showNotice('runMsg','error','ยังสร้างไม่ได้','บันทึกข้อมูลอ้างอิงในเครื่องไม่สำเร็จ','ตรวจพื้นที่จัดเก็บแล้วลองใหม่');return null;}
+  }
   ['btnPreview','btnCreateOne','btnCreateAll'].forEach(id=>$(id).disabled=true);
   $('shot').replaceChildren();
   try{const r=await apiFetch('/api/bundles/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game:$('game').value,bundles:jobs,do_save:doSave})});
@@ -608,15 +659,21 @@ async function createThese(bundles){
   const total=bundles.reduce((n,b)=>n+b.items.filter(it=>String(it.id).trim()).length,0);
   if(!confirm(`สร้างจริงบน Aztek ${bundles.length} บันเดิล (${total} ไอเทม) ใช่ไหม?\n\n`
              +`กดแล้วสร้างทีละอันจนครบ ย้อนกลับเองไม่ได้`))return;
+  const submitted=new Map(bundles.map(b=>[b.key,{
+    client_key:b.key,document_reference:structuredClone(b.document_reference||null),
+    submitted_values:structuredClone({...jobFrom(b),game:$('game').value})}]));
   showNotice('runMsg','progress',`กำลังสร้าง ${bundles.length} Bundle`,'ดูความคืบหน้าได้ในหน้าต่าง Chrome');
   const d=await runBundles(bundles,true);if(!d)return;
-  const fresh=d.results||[];
+  const fresh=(d.results||[]).map(r=>{
+    const snapshot=submitted.get(r.client_key)
+      ||[...submitted.values()].find(value=>value.submitted_values.name===r.name);
+    return {...r,...snapshot};});
   state.results=fresh;
   renderResults(state.results,false);
   offerHandoff(fresh);
   // Created bundles leave the queue so a second pass cannot duplicate them.
-  const made=new Set((d.results||[]).filter(r=>r.saved).map(r=>r.name));
-  state.queue=state.queue.filter(b=>!made.has(b.name));
+  const made=new Set(fresh.filter(r=>r.saved).map(r=>r.client_key));
+  state.queue=state.queue.filter(b=>!made.has(b.key));
   state.active=state.queue.length?state.queue[0].key:'';select(state.active);
   if(d.created===d.planned){
     showNotice('runMsg','success',`สร้างครบ ${d.created}/${d.planned} Bundle`,'เลข Bundle อยู่ในตารางด้านล่าง','ส่งเลขต่อไปหน้า Event หรือ Product ได้');
@@ -635,7 +692,7 @@ $('btnCreateAll').onclick=()=>state.queue.length?createThese(state.queue.slice()
 // operator off with a blank field.
 function offerHandoff(results){
   state.made=(results||[]).filter(r=>r.saved&&r.bundle_id)
-    .map(r=>{const source=state.queue.find(bundle=>bundle.name===r.name)||{};
+    .map(r=>{const source=state.queue.find(bundle=>r.client_key?bundle.key===r.client_key:bundle.name===r.name)||{};
       return {workspace_id:source.workspace_id||state.workspaceId||'',
         group:source.group||r.group||'',group_key:source.group_key||'',
         name:r.name||'',bundle_id:String(r.bundle_id)};});

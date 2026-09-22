@@ -41,7 +41,16 @@ def test_excel_blocks_and_paste_produce_identical_bundles(client):
     book.close()
     excel = client.post('/api/bundles/import', files={'file': ('blocks.xlsx', out.getvalue())})
     assert excel.status_code == 200
-    assert excel.json()['sheets'][0]['bundles'] == paste(client, TEXT).json()['sheets'][0]['bundles']
+    excel_bundles = excel.json()['sheets'][0]['bundles']
+    pasted_bundles = paste(client, TEXT).json()['sheets'][0]['bundles']
+    for uploaded, pasted in zip(excel_bundles, pasted_bundles):
+        uploaded_ref = uploaded.pop('document_reference')
+        pasted_ref = pasted.pop('document_reference')
+        assert uploaded_ref['filename'] == 'blocks.xlsx'
+        assert pasted_ref['filename'] is None
+        assert uploaded_ref['items'] == pasted_ref['items']
+        assert uploaded_ref['rewards'] == pasted_ref['rewards']
+    assert excel_bundles == pasted_bundles
 
 
 def test_extra_excel_column_is_not_silently_discarded(client):

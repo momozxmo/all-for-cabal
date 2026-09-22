@@ -5,6 +5,7 @@ This module contains only deterministic data transforms and byte exporters.
 It deliberately does not know about FastAPI, tkinter, or browser sessions.
 """
 from dataclasses import dataclass
+from copy import deepcopy
 from datetime import datetime
 import csv
 import io
@@ -26,6 +27,22 @@ def parse_workbook_locked(parser, path):
     """Serialize parsers that temporarily monkey-patch openpyxl internals."""
     with _WORKBOOK_PARSE_LOCK:
         return parser(path)
+
+
+def capture_document_rows(rows, filename, sheet=None):
+    """Copy source values before any queue editing or search enrichment."""
+    captured = []
+    for original in rows:
+        row = dict(original)
+        row['document_reference'] = {
+            'filename': filename, 'sheet': sheet or row.get('source_sheet'),
+            'source_row': row.get('source_row'), 'name': row.get('name'),
+            **{target: (str(row[source]) if row.get(source) not in (None, '') else None)
+               for target, source in (('kind', 'kind'), ('option', 'opt'),
+                                      ('duration', 'dur'), ('qty', 'amt'),
+                                      ('rate', 'rate'), ('tier', 'tier'))}}
+        captured.append(row)
+    return captured
 
 
 @dataclass
@@ -500,6 +517,7 @@ def regroup_results(results, occurrences):
             # A random box's plan lists a draw rate per item; carrying it means
             # the operator never types the odds back in by hand.
             row['rate'] = occurrence.get('rate', '') or ''
+            row['document_reference'] = deepcopy(occurrence.get('document_reference'))
             expanded.append(row)
     return expanded or [dict(row) for row in results]
 
@@ -517,7 +535,7 @@ def _bundle_name(group, group_meta, group_key=None):
     return group
 
 
-def build_bundles(results, group_meta):
+def build_bundles(results, group_meta, occurrences=None):
     """Build one bundle per group, items in the order the plan file listed them."""
     item_groups = {}
     for row in results:
@@ -543,9 +561,12 @@ def build_bundles(results, group_meta):
             group_key = str(raw_key or '').strip() or group
             if group_key not in grouped:
                 grouped[group_key] = {
-                    'group': group, 'seen': set(), 'items': []}
+                    'group': group, 'seen': set(), 'items': [], 'references': []}
                 order.append(group_key)
             bucket = grouped[group_key]
+            reference = row.get('document_reference')
+            if reference is not None:
+                bucket['references'].append(deepcopy(reference))
             if item_id in bucket['seen']:
                 continue
             bucket['seen'].add(item_id)
@@ -577,8 +598,21 @@ def build_bundles(results, group_meta):
                  'doc_qty': str(row.get('amt', '') or '').strip(),
                  # Odds from the plan's random-box table, already a percentage.
                  'rate': str(row.get('rate', '') or '').strip()})
+    if occurrences is not None:
+        # Baseline membership belongs to the document, never the search result.
+        # Include misses and count a document row once even if it found many IDs.
+        for bucket in grouped.values():
+            bucket['references'] = []
+        for occurrence in occurrences:
+            keys = occurrence.get('group_keys') or occurrence.get('sources') or ['(ไม่มีกลุ่ม)']
+            for key in dict.fromkeys(keys):
+                if key in grouped:
+                    grouped[key]['references'].append(deepcopy(
+                        occurrence.get('document_reference') or {}))
     return [
         {'name': _bundle_name(grouped[key]['group'], group_meta, key),
+         'document_reference': {'version': 1, 'items': grouped[key]['references'],
+                                'rewards': [], 'available': any(grouped[key]['references'])},
          'group': grouped[key]['group'], 'group_key': key,
          # A product whose plan gave draw rates is a random box, so the bundle
          # is created as RANDOM without the operator having to spot it.

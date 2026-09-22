@@ -20,6 +20,24 @@ TYPES = ('FIXED', 'CHOICE', 'RANDOM')
 REWARDS = ('CREDIT', 'DEBIT', 'MILEAGE', 'PLAYER_EXP')
 
 
+def _reference(identity, qty, tier, rate, row, name=None):
+    """Keep absence distinct from the defaults used to fill the form."""
+    return {'id': str(identity), 'qty': None if _blank(qty) else str(qty),
+            'tier': None if _blank(tier) else str(tier),
+            'rate': None if _blank(rate) else str(rate), 'name': name,
+            'kind': None, 'option': None, 'duration': None, 'source_row': row}
+
+
+def attach_document_references(result, filename=None):
+    for sheet in result['sheets']:
+        for bundle in sheet['bundles']:
+            bundle['document_reference'] = {
+                'version': 1, 'filename': filename, 'sheet': sheet['name'],
+                'items': [entry.pop('_reference') for entry in bundle['items']],
+                'rewards': [entry.pop('_reference') for entry in bundle['rewards']]}
+    return result
+
+
 def _blocks(rows, name):
     result = {'name': name, 'bundles': [], 'errors': []}
     bundles, current, seen = [], None, set()
@@ -49,6 +67,7 @@ def _blocks(rows, name):
                 raise ValueError('แถวรายการต้องมีไม่เกิน 4 คอลัมน์: ID / จำนวน / Tier / เรท')
             values += [None] * (4 - len(values))
             identity, qty, tier, rate = values
+            reference = _reference(identity, qty, tier, rate, number)
             qty = positive_int_text(1 if _blank(qty) else qty, 'Qty')
             tier = 'Common' if _blank(tier) else str(tier).strip().capitalize()
             if tier not in TIERS:
@@ -71,14 +90,16 @@ def _blocks(rows, name):
                 if not value or value == '[ชื่อ Currency]':
                     raise ValueError('กรุณาระบุชื่อ Currency จริงหลังเครื่องหมาย :')
                 current['rewards'].append({'type': prefix.upper(), 'value': value,
-                    'qty': qty, 'tier': tier, 'rate': rate, 'source_row': number})
+                    'qty': qty, 'tier': tier, 'rate': rate, 'source_row': number,
+                    '_reference': dict(reference, id=None, type=prefix.upper(), value=value)})
             else:
                 item_id = positive_int_text(identity, 'Item ID (Currency ใช้ CREDIT: ชื่อ หรือชนิด Reward อื่น)')
                 if item_id in seen:
                     raise ValueError('Item ID ซ้ำในบันเดิลเดียวกัน กรุณารวมจำนวนเป็นแถวเดียว')
                 seen.add(item_id)
                 current['items'].append({'id': item_id, 'qty': qty, 'tier': tier,
-                    'rate': rate, 'name': '', 'shared': False, 'source_row': number})
+                    'rate': rate, 'name': '', 'shared': False, 'source_row': number,
+                    '_reference': dict(reference, id=item_id)})
         except ValueError as error:
             result['errors'].append({'row': number, 'message': str(error)})
             if len(result['errors']) >= 100:
@@ -134,6 +155,7 @@ def _sheet(sheet):
             if any(not _blank(v) for v in values[5:]):
                 raise ValueError('มีข้อมูลเกินคอลัมน์ของ Template กรุณาตรวจแถวนี้')
             name, item_id, qty, tier, item_name = values[:5]
+            reference = _reference(item_id, qty, tier, None, number, item_name)
             name = optional_text(name or '', 'Bundle Name', max_length=200)
             if not name:
                 raise ValueError('กรุณาระบุ Bundle Name ทุกแถว')
@@ -153,7 +175,8 @@ def _sheet(sheet):
             ids.add(item_id)
             bundle['items'].append({
                 'id': item_id, 'qty': qty, 'tier': tier, 'name': item_name,
-                'rate': '', 'shared': False, 'source_row': number})
+                'rate': '', 'shared': False, 'source_row': number,
+                '_reference': dict(reference, id=item_id)})
         except ValueError as error:
             result['errors'].append({'row': number, 'message': str(error)})
             if len(result['errors']) >= 100:

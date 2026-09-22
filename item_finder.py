@@ -260,7 +260,7 @@ def read_template(path):
         headers = [str(c.value or '').strip() for c in ws[header_row]]
         idx = {h: i for i, h in enumerate(headers)}
 
-        for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        for source_row, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
             if not any(row):
                 continue
             raw = [str(v) if v is not None else '' for v in row]
@@ -271,6 +271,7 @@ def read_template(path):
                 return ''
 
             d = parse_row(g)
+            d.update(source_row=source_row, source_sheet=ws.title)
             if d['kind'] or d['opt'] or d['dur'] or d['name']:
                 rows.append(d)
         wb.close()
@@ -282,6 +283,7 @@ def read_template(path):
             def g(k, r=row):
                 return str(r.get(k, '') or '').strip()
             d = parse_row(g)
+            d['source_row'] = reader.line_num
             if d['kind'] or d['opt'] or d['dur'] or d['name']:
                 rows.append(d)
     return rows
@@ -532,7 +534,7 @@ def _parse_event_rows(rows, skipped=None):
         # ชื่อกลุ่มซ้ำจะทำให้สองโค้ดถูกยุบเป็นอันเดียว จึงเติมลำดับให้ไม่ซ้ำ
         cur_meta['event_name'] = group
 
-    for row in rows:
+    for source_row, row in enumerate(rows, 1):
         cn = [_event_norm(c) for c in row]
         # ชื่อกิจกรรม = ข้อความคอลัมน์ 0 ตัวแรกที่ไม่ใช่ generic (แบนเนอร์บนสุดของชีต) เก็บครั้งเดียว
         if not sheet_activity and row and row[0] is not None:
@@ -591,6 +593,7 @@ def _parse_event_rows(rows, skipped=None):
             finalize_group()
             table_has_items = True
             items.append({
+                'source_row': source_row,
                 'kind': kind,
                 'opt': _event_num(get('opt')),
                 'dur': _event_num(get('dur')),
@@ -872,7 +875,7 @@ def _shop_sheet_items(rows, sheet_title, skipped=None, now=None):
     tbl = 0
     buf = []
     product_meta = {}
-    for row in rows:
+    for source_row, row in enumerate(rows, 1):
         cn = [_event_norm(c) for c in row]
         if 'itemkind' in cn:                       # หัวตาราง -> เริ่มตารางใหม่
             col = {}
@@ -928,6 +931,7 @@ def _shop_sheet_items(rows, sheet_title, skipped=None, now=None):
             #   (ไม่ติ๊กแลกเปลี่ยนได้ = ขึ้นเป็น 'ผูกมัดไอดี')
             # Itemmove = No/ว่าง -> ไม่ตรวจอะไร (ช่องพวกนี้ไม่โผล่เพราะปิดแสดงผลบนเว็บอยู่)
             items.append({
+                'source_row': source_row,
                 'kind': kind,
                 'opt': _event_num(get('opt')),
                 'dur': _event_num(get('dur')),

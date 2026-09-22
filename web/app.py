@@ -1201,6 +1201,7 @@ async def import_template(request: Request, file: UploadFile = File(...), mode: 
     try:
         rows = await asyncio.to_thread(
             item_service.parse_workbook_locked, item_finder.read_template, path)
+        rows = item_service.capture_document_rows(rows, file.filename)
     except Exception as error:
         raise HTTPException(status_code=400, detail='อ่าน template ไม่สำเร็จ: %s' % error)
     finally:
@@ -1263,6 +1264,8 @@ async def import_plan(request: Request, file: UploadFile = File(...), mode: Mode
             pass
     if not sheets:
         raise HTTPException(status_code=400, detail='ไม่พบตารางไอเทมในไฟล์นี้')
+    sheets = [(name, item_service.capture_document_rows(rows, file.filename, name))
+              for name, rows in sheets]
     pending = repository.add_pending(user.id, workspace.id, sheets, skipped)
     if not workspace_id:
         write_audit(
@@ -1549,7 +1552,8 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
             }
     if not rows:
         raise HTTPException(status_code=400, detail='ไม่มีไอเทมให้รวมเป็นบันเดิล')
-    bundles = item_service.build_bundles(rows, workspace.group_meta)
+    bundles = item_service.build_bundles(
+        rows, workspace.group_meta, workspace.occurrences or workspace.criteria)
     if source_group_key:
         bundles = [bundle for bundle in bundles
                    if str(bundle.get('group_key') or '').strip()
@@ -1989,13 +1993,14 @@ def bundles_template(user: User = Depends(require_user)):
 @router.post('/api/bundles/import')
 async def bundles_import(file: UploadFile = File(...),
                          user: User = Depends(require_user)):
-    from web.bundle_import import read_bundle_template
+    from web.bundle_import import read_bundle_template, attach_document_references
 
     if not (file.filename or '').lower().endswith('.xlsx'):
         raise HTTPException(status_code=400, detail='กรุณาเลือกไฟล์ Excel .xlsx จาก Template Bundle')
     path = await _temporary_upload(file)
     try:
-        return await asyncio.to_thread(read_bundle_template, path)
+        result = await asyncio.to_thread(read_bundle_template, path)
+        return attach_document_references(result, file.filename)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception:
@@ -2010,9 +2015,9 @@ async def bundles_import(file: UploadFile = File(...),
 @router.post('/api/bundles/import-text')
 def bundles_import_text(payload: BundleTextImportRequest,
                         user: User = Depends(require_user)):
-    from web.bundle_import import read_bundle_text
+    from web.bundle_import import read_bundle_text, attach_document_references
     try:
-        return read_bundle_text(payload.text)
+        return attach_document_references(read_bundle_text(payload.text))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 

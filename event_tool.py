@@ -279,6 +279,7 @@ def _pride_workbook_items(path):
             order.append(sh)
         for it in b['items']:
             out[sh].append({
+                'source_row': it.get('source_row'),
                 'kind': it.get('kind', ''), 'opt': it.get('opt', ''), 'dur': it.get('dur', ''),
                 'name': it.get('name', ''), 'amt': it.get('amt', ''),
                 'sources': [grp], 'group_meta': meta,
@@ -300,7 +301,7 @@ def _plan_sheet_items(rows, skipped):
     table_has_items = False
     cur_meta = {}
     ntab = 0
-    for row in rows:
+    for source_row, row in enumerate(rows, 1):
         for c in row:
             s = str(c).strip() if c is not None else ''
             if s.lower().startswith('reward:'):
@@ -341,6 +342,7 @@ def _plan_sheet_items(rows, skipped):
         if kind and kind.isdigit():
             table_has_items = True
             items.append({
+                'source_row': source_row,
                 'kind': kind, 'opt': _num(get('opt')), 'dur': _num(get('dur')),
                 'name': str(nm).strip() if name_filled else '', 'amt': _num(get('amt')),
                 'group': cur_group, 'group_meta': cur_meta,
@@ -516,7 +518,7 @@ def _topspender_sheet_items(rows, sheet_title, skipped):
     cur_group = ''
     cur_meta = {}
     col = None
-    for row in rows:
+    for source_row, row in enumerate(rows, 1):
         cn = [_norm(c) for c in row]
         if 'webreward' in cn:
             wi = cn.index('webreward')
@@ -558,6 +560,7 @@ def _topspender_sheet_items(rows, sheet_title, skipped):
         name_filled = nm is not None and str(nm).strip() != ''
         if kind and kind.isdigit():
             items.append({
+                'source_row': source_row,
                 'kind': kind, 'opt': _num(get('opt')), 'dur': _num(get('dur')),
                 'name': str(nm).strip() if name_filled else '', 'amt': _num(get('amt')),
                 'group': cur_group, 'group_meta': cur_meta,

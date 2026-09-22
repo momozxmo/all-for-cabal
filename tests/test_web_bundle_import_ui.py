@@ -8,6 +8,40 @@ from test_web_product_ui import _route_live_game_tools
 STATIC = Path(__file__).resolve().parents[1] / 'web' / 'static'
 
 
+def test_submitted_values_survive_successful_queue_removal():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        def saved(route):
+            page.fill('#bundleName', 'Edited while creating')
+            route.fulfill(json={'created': 1, 'planned': 1, 'results': [
+                {'name': 'Pack', 'saved': True, 'bundle_id': '123', 'added': 1, 'total': 1}]})
+        context.route('**/api/bundles/run', saved)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleQueue', JSON.stringify([{
+          key:'a',name:'Pack',type:'FIXED',deliver:true,rewards:[],
+          items:[{id:'11',qty:'2',tier:'Rare'}],
+          document_reference:{version:1,game:'CabalM TH',filename:'old.xlsx',items:[{id:'11',qty:'1'}],rewards:[]}
+        }]))""")
+        page.reload()
+        page.on('dialog', lambda dialog: dialog.accept())
+        page.click('#btnCreateAll')
+        expect(page.locator('#queueCount')).to_have_text('0')
+        page.reload()
+        page.get_by_text('ข้อมูลที่ส่งสร้าง: Pack', exact=True).click()
+        expect(page.locator('.submitted-reference')).to_contain_text('old.xlsx')
+        submitted_row = page.locator('.submitted-reference details').filter(has=page.get_by_text('ค่าที่ส่งสร้าง', exact=True)).locator('tbody tr').first
+        expect(submitted_row.locator('td').nth(2)).to_have_text('2')
+        result = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))[0]")
+        assert result['submitted_values']['items'][0]['qty'] == '2'
+        assert result['document_reference']['items'][0]['qty'] == '1'
+        assert result['document_reference']['filename'] == 'old.xlsx'
+        browser.close()
+
+
 def test_select_sheet_preview_then_append_once_and_preserve_existing_queue(client):
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -55,8 +89,21 @@ def test_select_sheet_preview_then_append_once_and_preserve_existing_queue(clien
         assert [b['name'] for b in queue] == ['Existing', 'Pack A', 'Pack B']
         assert [b['items'][0]['qty'] for b in queue[1:]] == ['2', '4']
         assert [b['items'][0]['id'] for b in queue[1:]] == ['11', '11']
+        expect(page.locator('#documentReference')).to_contain_text('bundle.xlsx')
+        expect(page.locator('#documentReference')).to_contain_text('ไม่มีข้อมูลอ้างอิง')
+        page.locator('#itemsTable tbody tr').first.locator('input[type=number]').first.fill('9')
+        original = page.locator('#documentReference details').filter(has=page.get_by_text('ต้นฉบับ', exact=True))
+        expect(original.locator('tbody tr').first.locator('td').nth(2)).to_have_text('2')
+        reference = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleQueue'))[1].document_reference")
+        assert reference['items'][0]['qty'] == '2'
+        assert reference['sheet'] == 'เลือก แท็บนี้'
+        assert reference['game']
         page.reload()
         expect(page.locator('#queueCount')).to_have_text('3')
+        page.select_option('#queuePick', queue[1]['key'])
+        expect(page.locator('#documentReference')).to_contain_text('bundle.xlsx')
+        expect(page.locator('#itemsTable tbody tr').first.locator('input[type=number]').first).to_have_value('9')
+        assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleQueue'))[1].document_reference") == reference
 
         # A valid preview cannot survive switching to an invalid sheet/file/game.
         page.set_input_files('#bundleImportFile', {

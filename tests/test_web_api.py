@@ -36,7 +36,25 @@ def make_template_bytes():
         with open(path, 'rb') as stream:
             return stream.read()
     finally:
-        os.unlink(path)
+            os.unlink(path)
+
+
+def test_template_import_freezes_source_parameters(client):
+    from openpyxl import Workbook
+    book = Workbook()
+    book.active.title = 'Original'
+    book.active.append(['ItemKind', 'itemOption', 'durationIndex', 'ItemName'])
+    book.active.append([123, 0, 9, 'Potion'])
+    stream = io.BytesIO()
+    book.save(stream)
+    book.close()
+    response = client.post('/api/import-template', data={'mode': 'event'},
+                           files={'file': ('original.xlsx', stream.getvalue())})
+    assert response.status_code == 200
+    reference = response.json()['items'][0]['document_reference']
+    assert (reference['filename'], reference['sheet'], reference['source_row']) == ('original.xlsx', 'Original', 2)
+    assert (reference['kind'], reference['option'], reference['duration']) == ('123', '0', '9')
+    assert reference['qty'] is None
 
 
 def _connect_aztek(client):
@@ -236,6 +254,42 @@ def test_bundle_handoff_repairs_stale_shared_item_memberships(
     assert [[item['id'] for item in bundle['items']] for bundle in bundles] == [
         ['10'], ['10'],
     ]
+
+
+def test_bundle_handoff_keeps_each_document_occurrence(client, member, test_database):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(member.id, 'shop', 'plan.xlsx')
+        workspace.occurrences = [
+            {'kind': '1', 'opt': '0', 'dur': '9', 'sources': ['Pack'],
+             'amt': str(qty), 'document_reference': {
+                 'kind': '1', 'option': '0', 'duration': '9', 'qty': str(qty),
+                 'filename': 'plan.xlsx', 'sheet': 'Sheet A', 'source_row': row}}
+            for row, qty in [(7, 2), (8, 3)]]
+        workspace.results = [{'aztek_id': '10', 'item_kind': '1',
+                              'item_option': '0', 'duration_index': '9', 'sources': ['Pack']}]
+        workspace_id = workspace.id
+    response = client.post(f'/api/workspaces/{workspace_id}/bundles', json={'selected_indexes': []})
+    assert response.status_code == 200
+    reference = response.json()['bundles'][0]['document_reference']
+    assert [(row['source_row'], row['qty']) for row in reference['items']] == [(7, '2'), (8, '3')]
+    assert reference['items'][0]['option'] == '0'
+
+
+def test_bundle_reference_includes_unfound_rows_without_multiplying_matches(client, member, test_database):
+    with test_database.session() as db:
+        workspace = WorkspaceRepository(db).create(member.id, 'shop', 'plan.xlsx')
+        workspace.occurrences = [
+            {'kind': kind, 'opt': '0', 'dur': '9', 'sources': ['Pack'],
+             'document_reference': {'kind': kind, 'qty': '1', 'source_row': row}}
+            for kind, row in [('1', 7), ('404', 8)]]
+        workspace.results = [
+            {'aztek_id': item_id, 'item_kind': '1', 'item_option': '0',
+             'duration_index': '9', 'sources': ['Pack']}
+            for item_id in ['10', '20']]
+        workspace_id = workspace.id
+    response = client.post(f'/api/workspaces/{workspace_id}/bundles', json={'selected_indexes': []})
+    reference = response.json()['bundles'][0]['document_reference']
+    assert [(row['source_row'], row['kind']) for row in reference['items']] == [(7, '1'), (8, '404')]
 
 
 def test_workspace_restore_keeps_a_persisted_item_description(

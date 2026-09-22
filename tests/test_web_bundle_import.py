@@ -30,6 +30,19 @@ def upload(client, sheets):
                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
 
 
+def test_import_keeps_document_reference_and_missing_values(client):
+    response = upload(client, [('Source', [
+        ['Pack', '11', 3, 'Rare', 'Potion'],
+        ['Pack', '12', None, None, 'Orb'],
+    ], False)])
+    reference = response.json()['sheets'][0]['bundles'][0]['document_reference']
+    assert (reference['filename'], reference['sheet']) == ('bundles.xlsx', 'Source')
+    first, second = reference['items']
+    assert (first['source_row'], first['id'], first['qty'], first['tier']) == (2, '11', '3', 'Rare')
+    assert second['qty'] is None and second['tier'] is None
+    assert first['kind'] is None and first['option'] is None and first['duration'] is None
+
+
 def test_groups_in_source_order_and_keeps_same_id_in_different_bundles(client):
     response = upload(client, [('ชุด ก', [
         ['Pack A', '200479', 3, 'Epic', 'Potion'],

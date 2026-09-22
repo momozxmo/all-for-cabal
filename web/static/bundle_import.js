@@ -144,6 +144,8 @@
       clearPreview(); notice('error', 'ชื่อในคิวเปลี่ยนแล้ว', 'กรุณาพรีวิวใหม่เพื่อจัดชื่อไม่ให้ซ้ำ'); return;
     }
     const incoming = preview.bundles.map(bundle => ({...bundle, key: nextKey(),
+      document_reference: bundle.document_reference
+        ? {...structuredClone(bundle.document_reference), game: preview.game} : null,
       items: bundle.items.map(item => ({...item})), rewards: bundle.rewards.map(reward => ({...reward}))}));
     const queue = [...state.queue, ...incoming];
     try {

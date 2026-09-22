@@ -424,7 +424,7 @@ def _pride_block(cell, nrows, r_head, c_ik, event_name, sheet):
         except Exception:
             break
         nm = cell(rr, c_ik + 5)
-        items.append({'kind': kind, 'opt': _num_str(cell(rr, c_ik + 2)),
+        items.append({'source_row': rr, 'kind': kind, 'opt': _num_str(cell(rr, c_ik + 2)),
                       'dur': _num_str(cell(rr, c_ik + 3)),
                       'name': str(nm).strip() if nm else '', 'amt': _num_str(cell(rr, c_ik + 7))})
         rr += 1
