@@ -546,6 +546,38 @@ def test_blank_tier_search_skips_the_bundle_type_select():
 
 # ------------------------------ draw rate ------------------------------
 
+def test_random_rates_use_stable_secret_chance_ids_for_each_item():
+    """Aztek now exposes secret_chance and chance, neither marked required."""
+    page = FakePage(fields=[
+        {'id': 'items.0.chance', 'name': 'items.0.chance', 'required': False},
+        {'id': 'items.0.secret_chance', 'name': 'items.0.secret_chance', 'required': False},
+        {'id': 'items.1.chance', 'name': 'items.1.chance', 'required': False},
+        {'id': 'items.1.secret_chance', 'name': 'items.1.secret_chance', 'required': False},
+    ])
+
+    complete = asyncio.run(_builder()._fill_rates(page, [
+        {'id': '1', 'rate': '12.5'}, {'id': '2', 'rate': '87.5'},
+    ]))
+
+    assert complete is True
+    assert page.filled == [
+        ('input[id="items.0.secret_chance"]', ''),
+        ('input[id="items.0.secret_chance"]', '12.5'),
+        ('input[id="items.1.secret_chance"]', ''),
+        ('input[id="items.1.secret_chance"]', '87.5'),
+    ]
+
+
+def test_random_rate_does_not_fill_display_chance_as_draw_chance():
+    page = FakePage(fields=[
+        {'id': 'items.0.chance', 'name': 'items.0.chance', 'required': False},
+    ])
+
+    assert asyncio.run(_builder()._fill_rates(
+        page, [{'id': '1', 'rate': '25'}])) is False
+    assert page.filled == []
+
+
 def test_rate_targets_the_required_field_not_the_display_rate():
     """A card carries a draw rate and a display rate; only the first is required."""
     page = FakePage(fields=[

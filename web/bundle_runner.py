@@ -425,15 +425,15 @@ class BundleBuilder:
     async def _fill_rates(self, page, items):
         """Set the random rate on each item card (RANDOM bundles only).
 
-        The rate field name is discovered from the DOM rather than hardcoded: a
-        card can carry both a draw rate and a display rate, and only the draw
-        rate is required. Reading the real names keeps this working if the site
-        renames the field.
+        Aztek identifies the actual draw chance by a stable per-row input ID.
+        The adjacent ``chance`` input is only the player-visible display rate;
+        neither input currently has the HTML ``required`` attribute. Keep the
+        older rate-name discovery only for older versions of the form.
         """
         try:
             fields = await page.eval_on_selector_all(
-                'input[name^="items."]',
-                'els => els.map(e => ({name: e.name, required: e.required}))')
+                'input[id^="items."], input[name^="items."]',
+                'els => els.map(e => ({id: e.id, name: e.name, required: e.required}))')
         except Exception as exc:
             self.log('หาช่องเรทสุ่มไม่สำเร็จ: %s' % exc, 'WARNING')
             return False
@@ -443,18 +443,22 @@ class BundleBuilder:
             if not rate:
                 continue
             prefix = 'items.%d.' % idx
-            candidates = [f for f in fields
-                          if f['name'].startswith(prefix)
-                          and 'rate' in f['name'].rsplit('.', 1)[-1].lower()]
-            # Prefer the required field (the draw rate) over the display rate;
-            # DOM order breaks the tie.
-            chosen = next((f for f in candidates if f['required']), None) \
-                or (candidates[0] if candidates else None)
+            draw_id = prefix + 'secret_chance'
+            chosen = next((f for f in fields if f.get('id') == draw_id), None)
+            if chosen is None:
+                candidates = [f for f in fields
+                              if f.get('name', '').startswith(prefix)
+                              and 'rate' in f['name'].rsplit('.', 1)[-1].lower()
+                              and 'display' not in f['name'].rsplit('.', 1)[-1].lower()]
+                chosen = next((f for f in candidates if f.get('required')), None) \
+                    or (candidates[0] if candidates else None)
             if chosen is None:
                 self.log('ไอเทม #%d: หาช่องเรทสุ่มไม่เจอ' % (idx + 1), 'WARNING')
                 continue
             try:
-                box = page.locator('input[name="%s"]' % chosen['name']).first
+                selector = ('input[id="%s"]' % draw_id if chosen.get('id') == draw_id
+                            else 'input[name="%s"]' % chosen['name'])
+                box = page.locator(selector).first
                 await box.fill('')
                 await box.fill(rate)
                 done += 1
