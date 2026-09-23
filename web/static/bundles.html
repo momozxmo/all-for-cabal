@@ -117,6 +117,7 @@
             <button id="btnPreview" class="primary" disabled>👁 เปิดหน้าเว็บดูก่อน (บันเดิลที่เลือก)</button>
             <button id="btnCreateOne" class="warn" disabled title="กด “เปิดหน้าเว็บดูก่อน” ตรวจฟอร์มก่อน">🚀 สร้างจริง (บันเดิลที่เลือก)</button>
             <button id="btnCreateAll" class="warn" disabled>⚡ สร้างทุกบันเดิลในคิว (0)</button>
+            <button id="btnContinueQueue" type="button" hidden>รับทราบผลตรวจและปลดหยุดคิว</button>
           </div>
           <div id="runMsg" class="notice" role="status" aria-live="polite" hidden></div>
           <!-- A created bundle is only half the job: its number is what the next
@@ -586,16 +587,19 @@ $('rewardValue').onfocus=openRewardPicker;
 
 // ---- สร้างจริง ----
 function jobFrom(b){const random=b.type==='RANDOM';
-  return {client_key:b.key,name:b.name,bundle_type:b.type,deliver:b.deliver,rewards:b.rewards||[],
+  return {client_key:b.key,document_reference:b.document_reference||null,name:b.name,bundle_type:b.type,deliver:b.deliver,rewards:b.rewards||[],
           items:b.items.filter(it=>String(it.id).trim()).map(it=>({id:it.id,
             qty:String(parseInt(it.qty)||1),tier:it.tier||'Common',
             rate:random?String(it.rate||'').trim():''}))};}
 function rateGap(job){return job.bundle_type==='RANDOM'&&job.items.some(it=>!it.rate);}
-function paintRunButtons(){const n=state.queue.length;
+function queuePaused(){return state.results.some(r=>r.recheck&&r.recheck.outcome!=='passed'&&!r.continued);}
+function queueUncertain(){return state.queue.some(b=>b.creation_pending);}
+function paintRunButtons(){const n=state.queue.length,paused=queuePaused()||queueUncertain();
   $('btnCreateAll').textContent=`⚡ สร้างทุกบันเดิลในคิว (${n})`;
-  $('btnCreateAll').disabled=!n;
+  $('btnCreateAll').disabled=!n||paused;
+  $('btnContinueQueue').hidden=!queuePaused()||queueUncertain();
   $('btnPreview').disabled=!current();
-  if(!current())$('btnCreateOne').disabled=true;}
+  if(!current()||paused)$('btnCreateOne').disabled=true;}
 function renderResults(results,append){const box=$('bundleResults');
   let table=box.querySelector('.idtable');
   if(!append||!table){box.replaceChildren();
@@ -610,7 +614,8 @@ function renderResults(results,append){const box=$('bundleResults');
     tr.className='r-'+outcome;
     [r.name, r.bundle_id||(r.saved?'อ่านเลขไม่ได้':'-'), `${r.added}/${r.total}`,
      r.rewards_total?`${r.rewards_added}/${r.rewards_total}`:'-',
-     outcome==='ok'?'สร้างแล้ว':outcome==='noid'?'สร้างแล้ว (เช็คเลขบนเว็บ)':(r.error||'ไม่สำเร็จ')
+     (outcome==='ok'?'สร้างแล้ว':outcome==='noid'?'สร้างแล้ว (เช็คเลขบนเว็บ)':(r.error||'ไม่สำเร็จ'))
+       +(r.recheck?' · ตรวจ: '+({passed:'ผ่าน',mismatch:'ไม่ตรง',partial:'ตรวจได้บางส่วน',failed:'ตรวจไม่สำเร็จ',pending:'รอตรวจ'}[r.recheck.outcome]||'รอตรวจ'):'')
     ].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
     table.tBodies[0].appendChild(tr);
     if(r.submitted_values){
@@ -619,17 +624,50 @@ function renderResults(results,append){const box=$('bundleResults');
       detail.append(summary);const ref=r.document_reference;
       if(ref)appendReferenceTable(detail,'ต้นฉบับ',ref.items,ref.rewards,ref);
       appendReferenceTable(detail,'ค่าที่ส่งสร้าง',r.submitted_values.items,r.submitted_values.rewards,null);
+      if(r.recheck){
+        if(r.recheck.actual)appendReferenceTable(detail,'ค่าที่บันทึกจริงบน Aztek',r.recheck.actual.items,[],null);
+        const coverage=r.recheck.coverage;
+        if(coverage){const line=document.createElement('p');
+          line.textContent=`ตรวจคุณสมบัติ ${coverage.properties} ช่อง · อ่านรายการจริง ${coverage.saved_rows} แถว`;
+          detail.append(line);}
+        if(Array.isArray(r.recheck.rows)){
+          const labels={kind:'ItemKind',option:'Option',duration:'Duration',qty:'Amount',
+            id:'Item ID',submitted_qty:'จำนวนที่ส่ง',missing_item:'รายการขาด',extra_item:'รายการเกิน'};
+          const describe=row=>row?['id','kind','option','duration','qty']
+            .filter(key=>row[key]!==undefined&&row[key]!==null&&row[key]!=='')
+            .map(key=>`${labels[key]} ${row[key]}`).join(' · '):'—';
+          const comparison=document.createElement('table');comparison.className='idtable';
+          comparison.innerHTML='<thead><tr><th>แถวเอกสาร</th><th>ต้นฉบับ</th><th>ส่งสร้าง</th><th>บันทึกจริง</th><th>จุดต่าง</th></tr></thead><tbody></tbody>';
+          r.recheck.rows.forEach((row,index)=>{const tr=document.createElement('tr');
+            [`แถว ${row.source_row||index+1}`,describe(row.original),describe(row.submitted),
+             describe(row.actual),(row.different||[]).map(key=>labels[key]||key).join(', ')||'ตรงในส่วนที่ตรวจได้']
+              .forEach(value=>{const td=document.createElement('td');td.textContent=value;tr.append(td);});
+            comparison.tBodies[0].append(tr);});
+          detail.append(comparison);
+        }
+        const note=document.createElement('p');
+        const reasons={game:'เกมของเอกสารไม่ตรง',submitted_items:'Item ID หรือจำนวนที่ส่งต่างจากที่บันทึก',
+          document_count:'จำนวนแถวไม่ตรงเอกสาร',document_items:'คุณสมบัติหรือจำนวนต่างจากเอกสาร'};
+        const differences=(r.recheck.differences||[]).map(key=>reasons[key]||key).join(', ');
+        note.textContent=r.recheck.error||differences||
+          (r.recheck.incomplete?'ยังตรวจไม่ครบทุกส่วน — ห้ามถือว่าผ่านครบ':'ตรวจส่วนไอเทมครบแล้ว');
+        detail.append(note);
+      }
       box.append(detail);
     }
   });}
 
 async function runBundles(bundles, doSave){
+  if(doSave&&queuePaused()){showNotice('runMsg','warning','คิวหยุดรอตรวจผล','ตรวจผล Bundle ก่อนหน้าแล้วกดรับทราบเพื่อทำต่อ');return null;}
+  if(doSave&&bundles.some(b=>b.creation_pending)){
+    showNotice('runMsg','warning','ยังไม่ทราบผลการสร้างครั้งก่อน','ตรวจ Bundle ที่อาจสร้างไปแล้วก่อนทำรายการนี้ซ้ำ');return null;
+  }
   const jobs=bundles.map(jobFrom).filter(j=>j.items.length||j.rewards.length);
   if(!jobs.length){showNotice('runMsg','warning','ยังตรวจหรือสร้างไม่ได้','บันเดิลนี้ยังไม่มีไอเทมหรือ reward','เพิ่มอย่างน้อย 1 รายการแล้วลองอีกครั้ง');return null;}
   const short=jobs.filter(rateGap).map(j=>j.name);
   if(short.length){showNotice('runMsg','error','เรทสุ่มยังไม่ครบ 100%',short.join(', '),'แก้เรทของบันเดิลที่ระบุแล้วลองอีกครั้ง');return null;}
   if(doSave){
-    for(const b of bundles){b.submitted_values=structuredClone({...jobFrom(b),game:$('game').value});}
+    for(const b of bundles){b.submitted_values=structuredClone({...jobFrom(b),game:$('game').value});b.creation_pending=true;}
     try{localStorage.setItem(QUEUE_KEY,JSON.stringify(state.queue));}
     catch(e){showNotice('runMsg','error','ยังสร้างไม่ได้','บันทึกข้อมูลอ้างอิงในเครื่องไม่สำเร็จ','ตรวจพื้นที่จัดเก็บแล้วลองใหม่');return null;}
   }
@@ -653,7 +691,7 @@ $('btnPreview').onclick=async()=>{const b=current();if(!b)return;
   const r=(d.results||[])[0]||{};
   showNotice('runMsg','success','กรอก Bundle ครบแล้ว',`“${r.name}” · ไอเทม ${r.added}/${r.total}`,
     r.kept_open?'ตรวจในหน้าต่าง Chrome แล้วกด “สร้างจริง”':'ตรวจข้อมูลแล้วกด “สร้างจริง”');
-  $('btnCreateOne').disabled=false;};
+  $('btnCreateOne').disabled=queuePaused();};
 
 async function createThese(bundles){
   const total=bundles.reduce((n,b)=>n+b.items.filter(it=>String(it.id).trim()).length,0);
@@ -664,18 +702,31 @@ async function createThese(bundles){
     submitted_values:structuredClone({...jobFrom(b),game:$('game').value})}]));
   showNotice('runMsg','progress',`กำลังสร้าง ${bundles.length} Bundle`,'ดูความคืบหน้าได้ในหน้าต่าง Chrome');
   const d=await runBundles(bundles,true);if(!d)return;
+  for(const b of bundles){
+    const row=(d.results||[]).find(r=>r.client_key===b.key);
+    b.creation_pending=!!row?.creation_uncertain;
+  }
   const fresh=(d.results||[]).map(r=>{
     const snapshot=submitted.get(r.client_key)
       ||[...submitted.values()].find(value=>value.submitted_values.name===r.name);
     return {...r,...snapshot};});
-  state.results=fresh;
+  const updatedKeys=new Set(fresh.map(r=>r.client_key));
+  state.results=[...state.results.filter(r=>!updatedKeys.has(r.client_key)),...fresh];
   renderResults(state.results,false);
-  offerHandoff(fresh);
+  offerHandoff(state.results);
   // Created bundles leave the queue so a second pass cannot duplicate them.
   const made=new Set(fresh.filter(r=>r.saved).map(r=>r.client_key));
   state.queue=state.queue.filter(b=>!made.has(b.key));
   state.active=state.queue.length?state.queue[0].key:'';select(state.active);
-  if(d.created===d.planned){
+  saveQueue();paintRunButtons();
+  if(queueUncertain()){
+    showNotice('runMsg','warning','ผลสร้าง Bundle ยังไม่ชัดเจน',
+      'คำสั่งสร้างถูกส่งไปแล้ว แต่ยังระบุไม่ได้ว่ามี Bundle ใดถูกสร้าง',
+      'ตรวจรายการบน Aztek ก่อน ห้ามกดสร้างซ้ำ');
+  }else if(queuePaused()){
+    showNotice('runMsg','warning','หยุดคิวเพื่อให้ตรวจผล Bundle',`สร้างแล้ว ${d.created}/${d.planned} รายการ แต่ผล Recheck ยังไม่ผ่านครบ`,
+      'ดูรายละเอียดด้านล่าง รายการที่สร้างแล้วจะไม่ถูกสร้างซ้ำ หากต้องการทำรายการที่เหลือ ให้กดรับทราบผลตรวจและปลดหยุดคิว');
+  }else if(d.created===d.planned){
     showNotice('runMsg','success',`สร้างครบ ${d.created}/${d.planned} Bundle`,'เลข Bundle อยู่ในตารางด้านล่าง','ส่งเลขต่อไปหน้า Event หรือ Product ได้');
   }else{
     const failed=(d.results||[]).find(row=>!row.saved)||{};
@@ -685,16 +736,24 @@ async function createThese(bundles){
   }}
 $('btnCreateOne').onclick=()=>{const b=current();return b?createThese([b]):null;};
 $('btnCreateAll').onclick=()=>state.queue.length?createThese(state.queue.slice()):null;
+$('btnContinueQueue').onclick=()=>{
+  if(!confirm('รับทราบผลตรวจที่ยังไม่ผ่าน และอนุญาตให้เลือกสร้างรายการที่เหลือต่อหรือไม่? ผลตรวจเดิมจะไม่เปลี่ยนเป็นผ่าน'))return;
+  state.results.forEach(r=>{if(r.recheck&&r.recheck.outcome!=='passed')r.continued=true;});
+  saveQueue();paintRunButtons();
+};
 
 // ---- ส่งเลข bundle ต่อไปหน้าอื่น ----
 // Only bundles that really got a number: an id nobody could read is not
 // something the next page can use, and offering it would just send the
 // operator off with a blank field.
 function offerHandoff(results){
-  state.made=(results||[]).filter(r=>r.saved&&r.bundle_id)
+  const previous=new Map(state.made.map(row=>[row.client_key,row]));
+  state.made=(results||[]).filter(r=>r.saved&&r.bundle_id&&r.recheck?.outcome==='passed')
     .map(r=>{const source=state.queue.find(bundle=>r.client_key?bundle.key===r.client_key:bundle.name===r.name)||{};
-      return {workspace_id:source.workspace_id||state.workspaceId||'',
-        group:source.group||r.group||'',group_key:source.group_key||'',
+      const old=previous.get(r.client_key)||{};
+      return {client_key:r.client_key,game:r.submitted_values?.game||old.game||$('game').value,
+        workspace_id:source.workspace_id||old.workspace_id||state.workspaceId||'',
+        group:source.group||old.group||r.group||'',group_key:source.group_key||old.group_key||'',
         name:r.name||'',bundle_id:String(r.bundle_id)};});
   $('handoff').hidden=!state.made.length;saveQueue();}
 function sendMade(where){
@@ -747,7 +806,16 @@ async function init(){
     try{localStorage.setItem(GAME_KEY,$('game').value);}catch(e){}}catch(e){}
   if(!state.active&&state.queue.length)state.active=state.queue[0].key;
   select(state.active);
+  const passedKeys=new Set(state.results.filter(r=>r.recheck?.outcome==='passed')
+    .map(r=>`${r.client_key}|${r.bundle_id}|${r.submitted_values?.game||''}`));
+  state.made=state.made.filter(row=>passedKeys.has(`${row.client_key}|${row.bundle_id}|${row.game||''}`));
   renderResults(state.results,false);$('handoff').hidden=!state.made.length;
+  saveQueue();
+  if(queueUncertain())showNotice('runMsg','warning','ผลสร้าง Bundle ยังไม่ชัดเจน',
+    'คำสั่งก่อนหน้าถูกส่งออกไปแล้ว แต่ยังยืนยันไม่ได้ว่า Aztek สร้างรายการใดไปบ้าง',
+    'ตรวจรายการบน Aztek ก่อน ห้ามกดสร้างซ้ำ');
+  else if(queuePaused())showNotice('runMsg','warning','คิวหยุดรอตรวจผล',
+    'ตรวจผล Bundle ด้านล่างแล้วกดรับทราบเพื่อทำรายการที่เหลือ');
   try{const s=await apiFetch('/api/aztek/status').then(r=>r.json());paintAztek(s.status);}
   catch(e){paintAztek('disconnected');}}
 init().then(() => {window.afcUpdateReady = true;}).catch(e=>log(e.message,'ERROR'));

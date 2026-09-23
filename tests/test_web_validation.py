@@ -23,6 +23,23 @@ from web.models import AuditLog
 GAME = 'CabalM TH'
 
 
+@pytest.mark.parametrize('key', ['', '   '])
+def test_bundle_creation_requires_stable_key_before_any_aztek_access(client, key):
+    response = client.post('/api/bundles/run', json={
+        'game': GAME, 'bundles': [_bundle(key)], 'do_save': True})
+    assert response.status_code == 400
+    assert 'client_key' in response.json()['detail']
+
+
+def test_bundle_creation_rejects_reference_from_different_game(client):
+    bundle = _bundle()
+    bundle['document_reference'] = {'game': 'Cabal PC', 'items': []}
+    response = client.post('/api/bundles/run', json={
+        'game': GAME, 'bundles': [bundle], 'do_save': True})
+    assert response.status_code == 400
+    assert 'เกม' in response.json()['detail']
+
+
 def _validation():
     return importlib.import_module('web.validation')
 

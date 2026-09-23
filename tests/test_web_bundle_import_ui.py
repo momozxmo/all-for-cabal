@@ -1,11 +1,132 @@
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import sync_playwright, expect
 
 from test_web_bundle_import import workbook_bytes
 from test_web_product_ui import _route_live_game_tools
 
 STATIC = Path(__file__).resolve().parents[1] / 'web' / 'static'
+
+
+def test_recheck_mismatch_pauses_remaining_queue_until_explicit_continue():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        calls = []
+        def saved(route):
+            payload = route.request.post_data_json
+            calls.append(payload)
+            if len(calls) == 2:
+                assert [row['client_key'] for row in payload['bundles']] == ['b']
+                route.fulfill(json={'created': 1, 'planned': 1, 'results': [{
+                    'client_key': 'b', 'name': 'Later', 'saved': True, 'bundle_id': '43',
+                    'added': 1, 'total': 1, 'rewards_total': 0,
+                    'recheck': {'outcome': 'passed', 'incomplete': False}}]})
+                return
+            assert payload['bundles'][0]['document_reference']['filename'] == 'source.xlsx'
+            route.fulfill(json={'created': 1, 'planned': 2, 'results': [{
+                'client_key': 'a', 'name': 'First', 'saved': True, 'bundle_id': '42',
+                'added': 1, 'total': 1, 'rewards_total': 0,
+                'recheck': {'outcome': 'mismatch', 'incomplete': False,
+                            'actual': {'items': [{'id': '99', 'qty': '1'}]},
+                            'coverage': {'properties': '4/4', 'saved_rows': '1/1'},
+                            'rows': [{'source_row': 7, 'original': {'kind': '123', 'option': '0', 'duration': '9', 'qty': '1'},
+                                      'submitted': {'id': '11', 'qty': '1'},
+                                      'actual': {'id': '99', 'kind': '999', 'option': '0', 'duration': '9', 'qty': '1'},
+                                      'different': ['kind', 'id']}]}}]})
+        context.route('**/api/bundles/run', saved)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleQueue', JSON.stringify([
+          {key:'a',name:'First',type:'FIXED',deliver:true,rewards:[],items:[{id:'11',qty:'1'}],document_reference:{filename:'source.xlsx',items:[]}},
+          {key:'b',name:'Later',type:'FIXED',deliver:true,rewards:[],items:[{id:'12',qty:'1'}]}
+        ]))""")
+        page.reload()
+        page.on('dialog', lambda dialog: dialog.accept())
+        page.click('#btnCreateAll')
+        expect(page.locator('#queueCount')).to_have_text('1')
+        expect(page.locator('#bundleResults')).to_contain_text('ไม่ตรง')
+        expect(page.locator('#bundleResults')).to_contain_text('แถว 7')
+        expect(page.locator('#bundleResults')).to_contain_text('ItemKind, Item ID')
+        expect(page.locator('#bundleResults')).to_contain_text('4/4')
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        expect(page.locator('#handoff')).to_be_hidden()
+        page.reload()
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        page.click('#btnContinueQueue')
+        expect(page.locator('#btnCreateAll')).to_be_enabled()
+        assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))[0].recheck.outcome") == 'mismatch'
+        page.click('#btnCreateAll')
+        expect(page.locator('#queueCount')).to_have_text('0')
+        results = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))")
+        assert [(r['client_key'], r['recheck']['outcome']) for r in results] == [
+            ('a', 'mismatch'), ('b', 'passed')]
+        made = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleMade'))")
+        assert [r['bundle_id'] for r in made] == ['43']
+        browser.close()
+
+
+@pytest.mark.parametrize('response_kind', ['http_failure', 'api_uncertain'])
+def test_unknown_create_response_keeps_queue_locked_across_reload(response_kind):
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        requests = []
+        def failed(route):
+            requests.append(route.request.url)
+            if response_kind == 'http_failure':
+                route.fulfill(status=502, json={'detail': 'ผลการสร้างไม่ชัดเจน'})
+            else:
+                route.fulfill(json={'created': 0, 'planned': 1, 'results': [{
+                    'client_key': 'a', 'name': 'First', 'saved': False, 'bundle_id': None,
+                    'creation_uncertain': True, 'recheck': {'outcome': 'pending', 'incomplete': True},
+                    'added': 1, 'total': 1, 'rewards_added': 0, 'rewards_total': 0}]})
+        context.route('**/api/bundles/run', failed)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleQueue', JSON.stringify([
+          {key:'a',name:'First',type:'FIXED',deliver:true,rewards:[],items:[{id:'11',qty:'1'}]}
+        ]))""")
+        page.reload()
+        page.on('dialog', lambda dialog: dialog.accept())
+        page.click('#btnCreateAll')
+        expect(page.locator('#queueCount')).to_have_text('1')
+        assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleQueue'))[0].creation_pending") is True
+        page.reload()
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        expect(page.locator('#btnContinueQueue')).to_be_hidden()
+        assert len(requests) == 1
+        browser.close()
+
+
+def test_only_fully_rechecked_bundle_is_offered_for_handoff():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        context.route('**/api/bundles/run', lambda route: route.fulfill(json={
+            'created': 1, 'planned': 1, 'results': [{
+                'client_key': 'a', 'name': 'First', 'saved': True, 'bundle_id': '42',
+                'added': 1, 'total': 1, 'rewards_total': 0,
+                'recheck': {'outcome': 'passed', 'incomplete': False}}]}))
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleQueue', JSON.stringify([
+          {key:'a',name:'First',type:'FIXED',deliver:true,rewards:[],items:[{id:'11',qty:'1'}]}
+        ]))""")
+        page.reload()
+        page.on('dialog', lambda dialog: dialog.accept())
+        page.click('#btnCreateAll')
+        expect(page.locator('#handoff')).to_be_visible()
+        page.reload()
+        expect(page.locator('#handoff')).to_be_visible()
+        browser.close()
 
 
 def test_submitted_values_survive_successful_queue_removal():

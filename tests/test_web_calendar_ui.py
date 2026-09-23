@@ -481,7 +481,7 @@ def test_bundle_random_tier_and_rate_are_reachable_in_an_800px_shop_table():
         browser.close()
 
 
-def test_created_bundle_results_survive_leaving_and_returning_to_page():
+def test_legacy_unverified_bundle_result_survives_but_handoff_stays_hidden():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context()
@@ -502,8 +502,8 @@ def test_created_bundle_results_survive_leaving_and_returning_to_page():
 
         assert restored.locator('#bundleResults tbody tr').count() == 1
         assert '90210' in restored.locator('#bundleResults').inner_text()
-        assert restored.locator('#handoff').is_visible()
-        assert restored.evaluate("state.made[0].bundle_id") == '90210'
+        assert not restored.locator('#handoff').is_visible()
+        assert restored.evaluate("state.made.length") == 0
         context.close()
         browser.close()
 

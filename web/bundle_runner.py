@@ -23,6 +23,7 @@ import new_tool
 from web import browser_launch
 from web.create_flow import click_create_and_wait_for_write
 from web.search_runner import to_web_url
+from web.bundle_recheck import recheck_saved_bundle
 
 
 REWARD_KINDS = tuple(new_tool.REWARD_KINDS)
@@ -574,7 +575,8 @@ class BundleBuilder:
             fields_complete = self._blank_tiers_complete and fields_complete
         return FillOutcome(added, rewards_added, fields_complete)
 
-    async def run_many(self, game, bundles, storage_state, *, headed=False):
+    async def run_many(self, game, bundles, storage_state, *, headed=False,
+                       checkpoint=None):
         """Create every bundle in one browser session, and report each id.
 
         One window for the whole run rather than one per bundle: opening Chrome
@@ -583,7 +585,7 @@ class BundleBuilder:
 
         Every bundle here is created for real — this is the equivalent of the
         desktop "สร้างทุก bundle อัตโนมัติ" button, which has no preview phase.
-        Failures do not stop the run; each bundle reports its own outcome.
+        Only a full recheck pass permits the next creation.
         """
         url = bundle_create_url(game)
         self.log('==== สร้างทุกบันเดิลอัตโนมัติ %d อัน ====' % len(bundles), 'STEP')
@@ -636,11 +638,37 @@ class BundleBuilder:
                         self.log('ไม่กดสร้าง "%s" เพราะกรอกฟอร์มไม่ครบ (%s)'
                                  % (name, entry['error']), 'ERROR')
                     else:
+                        # The write may succeed even when Chromium loses its
+                        # response. Reserve this key durably before clicking.
+                        entry['creation_uncertain'] = True
+                        entry['recheck'] = {'outcome': 'pending', 'incomplete': True}
+                        if checkpoint is not None:
+                            checkpoint(bundle, entry)
                         entry['saved'], entry['bundle_id'] = await self._save(page)
+                        if entry['saved']:
+                            entry['creation_uncertain'] = False
+                            entry['recheck'] = {'outcome': 'pending', 'incomplete': True}
+                            # Persist the existence/ID before any read can fail.
+                            if checkpoint is not None:
+                                checkpoint(bundle, entry)
+                            try:
+                                if not entry['bundle_id']:
+                                    raise ValueError('สร้างแล้วแต่อ่าน Bundle ID ไม่ได้ ห้ามสร้างซ้ำ')
+                                entry['recheck'] = await recheck_saved_bundle(
+                                    page, url.rsplit('/create', 1)[0] + '/' + str(entry['bundle_id']),
+                                    bundle.get('document_reference'), dict(bundle, game=game))
+                            except Exception as exc:
+                                entry['recheck'] = {'outcome': 'failed', 'incomplete': True,
+                                                    'error': str(exc)[:200]}
+                            if checkpoint is not None:
+                                checkpoint(bundle, entry)
                 except Exception as exc:
                     entry['error'] = str(exc)[:200]
                     self.log('บันเดิล "%s" ไม่สำเร็จ: %s' % (name, exc), 'ERROR')
                 results.append(entry)
+                if entry.get('recheck', {}).get('outcome') != 'passed':
+                    self.log('หยุดคิว: ต้องตรวจผลและยืนยันก่อนทำรายการถัดไป', 'WARNING')
+                    break
                 await page.wait_for_timeout(1000)
         finally:
             await _shutdown(pw, browser, context)

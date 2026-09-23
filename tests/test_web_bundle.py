@@ -120,8 +120,8 @@ def test_bundle_item_limit_accepts_200_and_rejects_201_without_truncating():
         _clean_items([{'id': str(n)} for n in range(1, 202)])
 
 
-def test_one_failing_bundle_does_not_stop_the_rest():
-    """A batch that dies halfway must still report what it did create."""
+def test_unverified_created_bundle_stops_before_creating_the_next():
+    """Creation is retained even if the saved page cannot be read."""
     builder = _builder()
 
     async def fake_fill(page, name, *args):
@@ -134,8 +134,8 @@ def test_one_failing_bundle_does_not_stop_the_rest():
     builder._save = lambda page: _async(next(saves))
     results = asyncio.run(_run_many(builder, ['good', 'bad', 'later']))
     assert [(r['name'], r['saved'], r['bundle_id']) for r in results] == [
-        ('good', True, '111'), ('bad', False, None), ('later', True, '333')]
-    assert 'เพิ่มไอเทมไม่ได้' in results[1]['error']
+        ('good', True, '111')]
+    assert results[0]['recheck']['outcome'] == 'failed'
 
 
 def test_run_many_leaves_a_partially_filled_bundle_unsaved():

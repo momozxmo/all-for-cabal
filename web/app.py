@@ -105,6 +105,7 @@ class BundleSpec(BaseModel):
     page is a tool in its own right, so nothing here is tied to a search.
     """
     client_key: StrictStr = Field(default='', max_length=80)
+    document_reference: dict | None = None
     name: str = Field(default='', max_length=200)
     bundle_type: Literal['FIXED', 'CHOICE', 'RANDOM'] = 'FIXED'
     deliver: StrictBool = True
@@ -2066,6 +2067,7 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
                     'อย่างน้อย 1 รายการ')
             jobs.append({
                 'client_key': spec.client_key,
+                'document_reference': spec.document_reference,
                 'name': spec.name.strip() or f'Bundle {index}',
                 'type': spec.bundle_type,
                 'deliver': spec.deliver,
@@ -2086,6 +2088,14 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
     if not payload.do_save and len(jobs) != 1:
         raise HTTPException(status_code=400,
                             detail='ดูตัวอย่างได้ทีละบันเดิลเท่านั้น')
+    if payload.do_save:
+        if any(not job['client_key'].strip() for job in jobs):
+            raise HTTPException(status_code=400,
+                                detail='ต้องมี client_key เพื่อป้องกันสร้างซ้ำ')
+        if any((job.get('document_reference') or {}).get('game') not in
+               (None, '', payload.game) for job in jobs):
+            raise HTTPException(status_code=400,
+                                detail='เกมของเอกสารต้นฉบับไม่ตรงกับเกมที่เลือก')
 
     storage_state = request.app.state.aztek_session_service.load_storage_state(db, user)
     if storage_state is None:
@@ -2098,15 +2108,40 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
     # user's desktop — i.e. a local development run.
     headed = settings.app_env != 'production'
     action = 'bundle.create' if payload.do_save else 'bundle.preview_open'
+    checkpoints = {}
+
+    def checkpoint(bundle, entry):
+        key = bundle['client_key']
+        record = checkpoints.get(key)
+        if record is None:
+            record = Job(owner_user_id=user.id, tool='bundle_recheck',
+                         status='pending', config={'game': payload.game,
+                             'client_key': key, 'submitted_values': bundle})
+            db.add(record)
+            checkpoints[key] = record
+        record.result = json.loads(json.dumps(entry))
+        record.status = entry.get('recheck', {}).get('outcome', 'pending')
+        db.commit()
+
     try:
         async with request.app.state.browser_gate.slot():
             if payload.do_save:
+                # Re-check after taking the browser slot: two requests may have
+                # arrived together. An acknowledged creation must never replay.
+                for job in jobs:
+                    if job['client_key'] and db.scalar(select(Job.id).where(
+                        Job.owner_user_id == user.id, Job.tool == 'bundle_recheck',
+                        Job.config['game'].as_string() == payload.game,
+                        Job.config['client_key'].as_string() == job['client_key'],
+                    )):
+                        raise HTTPException(status_code=409,
+                            detail='รายการนี้สร้างแล้ว ห้ามสร้างซ้ำ ให้ตรวจ Bundle เดิม')
                 # This run owns the single browser slot, so a window an earlier
                 # preview left standing has to go first.
                 await bundle_runner.close_kept(str(user.id))
                 results = await builder.run_many(
                     game=payload.game, bundles=jobs, storage_state=storage_state,
-                    headed=headed)
+                    headed=headed, checkpoint=checkpoint)
             else:
                 job = jobs[0]
                 outcome = await builder.run(
@@ -2125,6 +2160,8 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
                     'error': None, 'kept_open': outcome['kept_open'],
                     'screenshot': outcome.get('screenshot'),
                 }]
+    except HTTPException:
+        raise
     except Exception as exc:
         write_audit(
             db, user_id=user.id, action=action, status='failed',
