@@ -1,5 +1,9 @@
 # Project Instructions
 
+## Resume and machine handoff
+
+When resuming work or moving to another computer, read `docs/HANDOFF.md`, then verify the checkout, branch and dirty files before editing. For new-machine setup and Git transfer steps, use `docs/MULTI_COMPUTER_DEV.md`.
+
 ## Agent skills
 
 ### Issue tracker

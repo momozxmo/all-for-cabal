@@ -1,0 +1,7 @@
+-r requirements.txt
+-r requirements-build.txt
+# Match the released router/HTTP behavior; upgrade these deliberately with tests.
+fastapi==0.128.7
+starlette==0.52.1
+# FastAPI TestClient and pairing API tests.
+httpx>=0.27,<1
