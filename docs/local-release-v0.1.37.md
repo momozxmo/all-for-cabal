@@ -12,6 +12,8 @@
 - Packaged executable smoke passed with an isolated runtime: `/api/health`, Local session login, Bundle Recheck UI and empty history API. The smoke process was stopped afterwards.
 - Setup size: **279,104,501 bytes**.
 - Setup SHA-256: `AA3FFFB2E364001BC4B64198EED756E5ACD041EC8276F7C744B61CE3AAADF30A`.
+- Published Setup and checksum were downloaded back from GitHub; size and SHA-256 match the local build exactly.
+- The app's `LocalUpdate.check()` discovers stable `0.1.37` as an available update from `0.1.36`, with both required assets present.
 - The installed user application is updated only when the user initiates the in-app update. This release was not installed over the user application.
 - No clean-VM installation or real Aztek creation was performed; Setup is unsigned.
 - Missing document properties remain partial. Saved Currency cards that expose only a display name cannot establish an exact currency code and remain partial.
