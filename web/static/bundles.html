@@ -130,6 +130,15 @@
             <button id="btnToProduct" type="button">➡ สร้าง Product</button>
           </div>
           <div id="bundleResults"></div>
+          <div class="result-actions" style="margin-top:12px">
+            <label>ประวัติ Recheck <select id="recheckFilter">
+              <option value="all">ทั้งหมด</option><option value="passed">ผ่าน</option>
+              <option value="mismatch">ไม่ตรง</option><option value="partial">ตรวจได้บางส่วน</option>
+              <option value="failed">ตรวจไม่สำเร็จ</option><option value="pending">รอตรวจ</option>
+            </select></label>
+            <button id="btnHistoryRefresh" type="button">โหลดประวัติอีกครั้ง</button>
+          </div>
+          <div id="recheckHistory" class="table-wrap" tabindex="0"></div>
           <div id="shot" style="margin-top:10px"></div>
         </div>
       </section>
@@ -164,7 +173,7 @@ const RESULTS_KEY='afc.bundleResults', MADE_KEY='afc.bundleMade';
 // misses follow the operator between the two pages.
 const GAME_KEY='afc.game', MODE_KEY='afc.mode', MISS_KEY='afc.notFound';
 const state={queue:[],active:'',rewardOptions:{},rewardOptionsGame:'',
-  eventDrafts:[],itemcodeDrafts:[],workspaceId:'',results:[],made:[]};
+  eventDrafts:[],itemcodeDrafts:[],workspaceId:'',results:[],made:[],history:[]};
 const deletedItems=new Map();
 
 async function apiFetch(url, options){
@@ -592,7 +601,9 @@ function jobFrom(b){const random=b.type==='RANDOM';
             qty:String(parseInt(it.qty)||1),tier:it.tier||'Common',
             rate:random?String(it.rate||'').trim():''}))};}
 function rateGap(job){return job.bundle_type==='RANDOM'&&job.items.some(it=>!it.rate);}
-function queuePaused(){return state.results.some(r=>r.recheck&&r.recheck.outcome!=='passed'&&!r.continued);}
+function resultGame(r){return r.submitted_values?.game||r.game||$('game').value;}
+function queuePaused(){const game=$('game').value;
+  return state.results.some(r=>resultGame(r)===game&&r.recheck&&r.recheck.outcome!=='passed'&&!r.continued);}
 function queueUncertain(){return state.queue.some(b=>b.creation_pending);}
 function paintRunButtons(){const n=state.queue.length,paused=queuePaused()||queueUncertain();
   $('btnCreateAll').textContent=`⚡ สร้างทุกบันเดิลในคิว (${n})`;
@@ -625,15 +636,17 @@ function renderResults(results,append){const box=$('bundleResults');
       if(ref)appendReferenceTable(detail,'ต้นฉบับ',ref.items,ref.rewards,ref);
       appendReferenceTable(detail,'ค่าที่ส่งสร้าง',r.submitted_values.items,r.submitted_values.rewards,null);
       if(r.recheck){
-        if(r.recheck.actual)appendReferenceTable(detail,'ค่าที่บันทึกจริงบน Aztek',r.recheck.actual.items,[],null);
+        if(r.recheck.actual)appendReferenceTable(detail,'ค่าที่บันทึกจริงบน Aztek',r.recheck.actual.items,r.recheck.actual.rewards,null);
         const coverage=r.recheck.coverage;
         if(coverage){const line=document.createElement('p');
           line.textContent=`ตรวจคุณสมบัติ ${coverage.properties} ช่อง · อ่านรายการจริง ${coverage.saved_rows} แถว`;
           detail.append(line);}
         if(Array.isArray(r.recheck.rows)){
           const labels={kind:'ItemKind',option:'Option',duration:'Duration',qty:'Amount',
-            id:'Item ID',submitted_qty:'จำนวนที่ส่ง',missing_item:'รายการขาด',extra_item:'รายการเกิน'};
-          const describe=row=>row?['id','kind','option','duration','qty']
+            id:'Item ID',type:'ชนิด Reward',value:'ชื่อ Reward',tier:'Rarity',rate:'เรทสุ่ม',
+            submitted_qty:'จำนวนที่ส่ง',missing_item:'รายการขาด',extra_item:'รายการเกิน',
+            missing_reward:'Reward ขาด',extra_reward:'Reward เกิน'};
+          const describe=row=>row?['type','value','id','kind','option','duration','qty','tier','rate']
             .filter(key=>row[key]!==undefined&&row[key]!==null&&row[key]!=='')
             .map(key=>`${labels[key]} ${row[key]}`).join(' · '):'—';
           const comparison=document.createElement('table');comparison.className='idtable';
@@ -647,15 +660,98 @@ function renderResults(results,append){const box=$('bundleResults');
         }
         const note=document.createElement('p');
         const reasons={game:'เกมของเอกสารไม่ตรง',submitted_items:'Item ID หรือจำนวนที่ส่งต่างจากที่บันทึก',
+          submitted_rewards:'Reward ที่ส่งต่างจากที่บันทึก',document_reward_count:'จำนวน Reward ไม่ตรง',
+          document_rewards:'Reward, จำนวน, Rarity หรือเรทสุ่มไม่ตรง',
           document_count:'จำนวนแถวไม่ตรงเอกสาร',document_items:'คุณสมบัติหรือจำนวนต่างจากเอกสาร'};
         const differences=(r.recheck.differences||[]).map(key=>reasons[key]||key).join(', ');
-        note.textContent=r.recheck.error||differences||
-          (r.recheck.incomplete?'ยังตรวจไม่ครบทุกส่วน — ห้ามถือว่าผ่านครบ':'ตรวจส่วนไอเทมครบแล้ว');
+        const limits=(r.recheck.limitations||[]).map(key=>key==='saved_currency_code_not_visible'
+          ?'Aztek แสดงเพียงชื่อ Currency ใน Bundle ที่บันทึก จึงยืนยันรหัส Currency ไม่ได้':key).join(', ');
+        note.textContent=r.recheck.error||differences||limits||
+          (r.recheck.incomplete?'ยังตรวจไม่ครบทุกส่วน — ห้ามถือว่าผ่านครบ':'ตรวจครบแล้ว');
         detail.append(note);
+      }
+      if(r.job_id&&(r.saved||r.creation_uncertain)){
+        const retry=document.createElement('button');retry.type='button';
+        retry.textContent='ตรวจซ้ำจากเลข Bundle เดิม';
+        retry.onclick=()=>retryRecheck(r);
+        detail.append(retry);
+      }
+      if(r.saved&&r.bundle_id&&r.recheck?.outcome!=='passed'&&!r.handoff_override){
+        const override=document.createElement('button');override.type='button';
+        override.textContent=`ยืนยันส่งต่อ ${r.name} แม้ตรวจไม่ผ่าน`;
+        override.onclick=()=>{
+          if(!confirm(`Bundle ${r.name} #${r.bundle_id} ผล Recheck: ${r.recheck?.outcome}\n\nยืนยันส่งเลขนี้ไปหน้าถัดไปหรือไม่? ผลตรวจและประวัติจะไม่เปลี่ยน`))return;
+          r.handoff_override=true;offerHandoff(state.results);saveQueue();paintRunButtons();
+          renderResults(state.results,false);
+        };
+        detail.append(override);
       }
       box.append(detail);
     }
   });}
+
+function renderRecheckHistory(){
+  const box=$('recheckHistory');box.replaceChildren();
+  const filter=$('recheckFilter').value;
+  const entries=state.history.flatMap(job=>((job.history||[]).length?job.history:[{
+      checked_at:job.created_at||'',bundle_id:job.bundle_id||null,
+      game:job.game,name:job.name,outcome:job.result?.recheck?.outcome||'pending'
+    }]).map(attempt=>({job,attempt})))
+    .filter(row=>filter==='all'||row.attempt.outcome===filter)
+    .sort((a,b)=>String(b.attempt.checked_at).localeCompare(String(a.attempt.checked_at)));
+  if(!entries.length){const empty=document.createElement('p');empty.className='hint';
+    empty.textContent='ยังไม่มีประวัติ Recheck ตามตัวกรองนี้';box.append(empty);return;}
+  entries.forEach(({job,attempt})=>{
+    const detail=document.createElement('details');
+    const summary=document.createElement('summary');
+    summary.textContent=`${job.name||attempt.name||'Bundle'} · #${attempt.bundle_id||'ไม่ทราบเลข'} · ${attempt.game||job.game||''} · ${attempt.outcome||'pending'} · ${attempt.checked_at||''} · ${attempt.coverage?.saved_rows||'อ่านไม่ครบ'}`;
+    detail.append(summary);
+    if(attempt.document_reference)appendReferenceTable(detail,'ต้นฉบับ',attempt.document_reference.items,attempt.document_reference.rewards,attempt.document_reference);
+    if(attempt.submitted_values)appendReferenceTable(detail,'ค่าที่ส่งสร้าง',attempt.submitted_values.items,attempt.submitted_values.rewards,null);
+    if(attempt.actual)appendReferenceTable(detail,'ค่าที่บันทึกจริง',attempt.actual.items,attempt.actual.rewards,null);
+    if(attempt.error){const note=document.createElement('p');note.className='hint';
+      note.textContent=`สาเหตุ: ${attempt.error}`;detail.append(note);}
+    box.append(detail);
+  });
+}
+async function refreshRecheckHistory(){
+  try{const response=await apiFetch('/api/bundles/rechecks');if(!response.ok)return;
+    const data=await response.json();state.history=Array.isArray(data.rows)?data.rows:[];
+    for(const job of state.history){
+      if(!job.client_key||!job.result)continue;
+      const index=state.results.findIndex(row=>row.client_key===job.client_key);
+      const old=index>=0?state.results[index]:{};
+      const restored={...old,...job.result,client_key:job.client_key,job_id:job.id,
+        document_reference:job.result.document_reference||old.document_reference||job.submitted_values?.document_reference||null,
+        submitted_values:old.submitted_values||job.result.submitted_values||job.submitted_values||null};
+      if(index>=0)state.results[index]=restored;else state.results.push(restored);
+    }
+    const savedKeys=new Set(state.results.filter(row=>row.saved).map(row=>row.client_key));
+    state.queue=state.queue.filter(row=>!savedKeys.has(row.key));
+    if(!state.queue.some(row=>row.key===state.active))state.active=state.queue[0]?.key||'';
+    select(state.active);renderResults(state.results,false);offerHandoff(state.results);
+    renderRecheckHistory();saveQueue();paintRunButtons();
+  }catch(e){renderRecheckHistory();}
+}
+async function retryRecheck(row){
+  let bundleId=String(row.bundle_id||'').trim();
+  if(!bundleId){bundleId=prompt('กรอกเลข Bundle ที่สร้างแล้วในเกมเดิม (ระบบจะอ่านอย่างเดียว ไม่สร้างซ้ำ)')||'';
+    bundleId=bundleId.trim();if(!bundleId)return;}
+  showNotice('runMsg','progress','กำลังตรวจ Bundle ซ้ำ',`อ่าน Bundle #${bundleId} โดยไม่กดสร้าง`);
+  try{const response=await apiFetch(`/api/bundles/rechecks/${encodeURIComponent(row.job_id)}/retry`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bundle_id:bundleId})});
+    const result=await response.json();
+    if(!response.ok){showNotice('runMsg','error','ตรวจซ้ำไม่ได้',result.detail||'อ่าน Bundle ไม่สำเร็จ');return;}
+    const index=state.results.findIndex(entry=>entry.client_key===row.client_key);
+    const fresh={...row,...result,client_key:row.client_key,job_id:row.job_id,handoff_override:false};
+    if(index>=0)state.results[index]=fresh;else state.results.push(fresh);
+    await refreshRecheckHistory();
+    showNotice('runMsg',result.recheck?.outcome==='passed'?'success':'warning',
+      `ผลตรวจซ้ำ: ${result.recheck?.outcome||'failed'}`,`Bundle #${bundleId} · ไม่ได้สร้างซ้ำ`);
+  }catch(e){showNotice('runMsg','error','เชื่อมต่อเพื่อตรวจซ้ำไม่ได้',e.message||'กรุณาลองใหม่');}
+}
+$('recheckFilter').onchange=renderRecheckHistory;
+$('btnHistoryRefresh').onclick=refreshRecheckHistory;
 
 async function runBundles(bundles, doSave){
   if(doSave&&queuePaused()){showNotice('runMsg','warning','คิวหยุดรอตรวจผล','ตรวจผล Bundle ก่อนหน้าแล้วกดรับทราบเพื่อทำต่อ');return null;}
@@ -719,6 +815,7 @@ async function createThese(bundles){
   state.queue=state.queue.filter(b=>!made.has(b.key));
   state.active=state.queue.length?state.queue[0].key:'';select(state.active);
   saveQueue();paintRunButtons();
+  await refreshRecheckHistory();
   if(queueUncertain()){
     showNotice('runMsg','warning','ผลสร้าง Bundle ยังไม่ชัดเจน',
       'คำสั่งสร้างถูกส่งไปแล้ว แต่ยังระบุไม่ได้ว่ามี Bundle ใดถูกสร้าง',
@@ -738,7 +835,8 @@ $('btnCreateOne').onclick=()=>{const b=current();return b?createThese([b]):null;
 $('btnCreateAll').onclick=()=>state.queue.length?createThese(state.queue.slice()):null;
 $('btnContinueQueue').onclick=()=>{
   if(!confirm('รับทราบผลตรวจที่ยังไม่ผ่าน และอนุญาตให้เลือกสร้างรายการที่เหลือต่อหรือไม่? ผลตรวจเดิมจะไม่เปลี่ยนเป็นผ่าน'))return;
-  state.results.forEach(r=>{if(r.recheck&&r.recheck.outcome!=='passed')r.continued=true;});
+  const game=$('game').value;
+  state.results.forEach(r=>{if(resultGame(r)===game&&r.recheck&&r.recheck.outcome!=='passed')r.continued=true;});
   saveQueue();paintRunButtons();
 };
 
@@ -748,7 +846,9 @@ $('btnContinueQueue').onclick=()=>{
 // operator off with a blank field.
 function offerHandoff(results){
   const previous=new Map(state.made.map(row=>[row.client_key,row]));
-  state.made=(results||[]).filter(r=>r.saved&&r.bundle_id&&r.recheck?.outcome==='passed')
+  state.made=(results||[]).filter(r=>r.saved&&r.bundle_id&&
+    (r.recheck?.outcome==='passed'||r.handoff_override)&&
+    r.submitted_values?.game===$('game').value)
     .map(r=>{const source=state.queue.find(bundle=>r.client_key?bundle.key===r.client_key:bundle.name===r.name)||{};
       const old=previous.get(r.client_key)||{};
       return {client_key:r.client_key,game:r.submitted_values?.game||old.game||$('game').value,
@@ -792,7 +892,10 @@ function paintAztek(status){const badge=$('aztekStatus');
 // One chosen server across both pages: a bundle built here has to be created on
 // the server its item ids came from.
 $('game').addEventListener('change',()=>{try{localStorage.setItem(GAME_KEY,$('game').value);}catch(e){}
-  if(state.rewardOptionsGame!==$('game').value){state.rewardOptions={};state.rewardOptionsGame='';fillRewardOptions();}});
+  if(state.rewardOptionsGame!==$('game').value){state.rewardOptions={};state.rewardOptionsGame='';fillRewardOptions();}
+  paintRunButtons();
+  $('handoff').hidden=!state.made.some(row=>row.game===$('game').value);
+});
 async function init(){
   loadQueue();drainHandoff();applyMode();renderMisses();
   try{const me=await apiFetch('/api/auth/me').then(r=>r.json());
@@ -806,11 +909,12 @@ async function init(){
     try{localStorage.setItem(GAME_KEY,$('game').value);}catch(e){}}catch(e){}
   if(!state.active&&state.queue.length)state.active=state.queue[0].key;
   select(state.active);
-  const passedKeys=new Set(state.results.filter(r=>r.recheck?.outcome==='passed')
+  const passedKeys=new Set(state.results.filter(r=>r.recheck?.outcome==='passed'||r.handoff_override)
     .map(r=>`${r.client_key}|${r.bundle_id}|${r.submitted_values?.game||''}`));
   state.made=state.made.filter(row=>passedKeys.has(`${row.client_key}|${row.bundle_id}|${row.game||''}`));
   renderResults(state.results,false);$('handoff').hidden=!state.made.length;
   saveQueue();
+  await refreshRecheckHistory();
   if(queueUncertain())showNotice('runMsg','warning','ผลสร้าง Bundle ยังไม่ชัดเจน',
     'คำสั่งก่อนหน้าถูกส่งออกไปแล้ว แต่ยังยืนยันไม่ได้ว่า Aztek สร้างรายการใดไปบ้าง',
     'ตรวจรายการบน Aztek ก่อน ห้ามกดสร้างซ้ำ');

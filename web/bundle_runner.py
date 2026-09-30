@@ -15,15 +15,45 @@ purpose-built filler rather than the desktop modal engine. Field labels and
 the id-extraction rule are imported from ``new_tool`` so both tools stay in
 step when the site's wording changes.
 """
+import asyncio
 import re
 
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, async_playwright
 
 import new_tool
 from web import browser_launch
 from web.create_flow import click_create_and_wait_for_write
 from web.search_runner import to_web_url
-from web.bundle_recheck import recheck_saved_bundle
+from web.bundle_recheck import SessionExpiredError, recheck_saved_bundle
+
+
+async def retry_saved_recheck(page, url, reference, submitted, *, attempts=3):
+    """Reread an existing ID, never save. A decisive mismatch is not transient."""
+    for attempt in range(1, attempts + 1):
+        try:
+            result = await recheck_saved_bundle(page, url, reference, submitted)
+            return dict(result, read_attempts=attempt)
+        except SessionExpiredError as exc:
+            return {'outcome': 'failed', 'incomplete': True,
+                    'session_expired': True, 'error': str(exc),
+                    'read_attempts': attempt}
+        except ValueError as exc:
+            # A wrong ID/game cannot become correct merely by polling again.
+            message = str(exc)
+            if not any(part in message for part in ('จำนวนแถว', 'อ่านจำนวน')):
+                return {'outcome': 'failed', 'incomplete': True,
+                        'error': message[:200], 'read_attempts': attempt}
+            if attempt == attempts:
+                return {'outcome': 'failed', 'incomplete': True,
+                        'error': message[:200], 'read_attempts': attempt}
+        except (TimeoutError, PlaywrightError) as exc:
+            if attempt == attempts:
+                return {'outcome': 'failed', 'incomplete': True,
+                        'error': str(exc)[:200], 'read_attempts': attempt}
+        except Exception as exc:
+            return {'outcome': 'failed', 'incomplete': True,
+                    'error': str(exc)[:200], 'read_attempts': attempt}
+        await asyncio.sleep(0.5)
 
 
 REWARD_KINDS = tuple(new_tool.REWARD_KINDS)
@@ -86,6 +116,22 @@ class FillOutcome(tuple):
 def bundle_create_url(game):
     """v2 'create bundle' page URL for a game (desktop targets the v1 host)."""
     return to_web_url(new_tool.game_url(game, 'bundles')) + '/create'
+
+
+async def read_existing_bundle(game, bundle_id, reference, submitted,
+                               storage_state, *, headed=False):
+    """Open a saved Bundle by ID and verify it without a create/save action."""
+    url = bundle_create_url(game).rsplit('/create', 1)[0] + '/' + str(bundle_id)
+    pw = await async_playwright().start()
+    browser = context = None
+    try:
+        browser = await pw.chromium.launch(**browser_launch.launch_kwargs(headed))
+        context = await browser.new_context(
+            **browser_launch.context_kwargs(headed, storage_state=storage_state))
+        page = await context.new_page()
+        return await retry_saved_recheck(page, url, reference, submitted)
+    finally:
+        await _shutdown(pw, browser, context)
 
 
 class BundleBuilder:
@@ -658,7 +704,7 @@ class BundleBuilder:
                             try:
                                 if not entry['bundle_id']:
                                     raise ValueError('สร้างแล้วแต่อ่าน Bundle ID ไม่ได้ ห้ามสร้างซ้ำ')
-                                entry['recheck'] = await recheck_saved_bundle(
+                                entry['recheck'] = await retry_saved_recheck(
                                     page, url.rsplit('/create', 1)[0] + '/' + str(entry['bundle_id']),
                                     bundle.get('document_reference'), dict(bundle, game=game))
                             except Exception as exc:

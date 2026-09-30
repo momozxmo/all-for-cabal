@@ -4,7 +4,7 @@ import pytest
 from playwright.sync_api import sync_playwright, expect
 
 from test_web_bundle_import import workbook_bytes
-from test_web_product_ui import _route_live_game_tools
+from test_web_product_ui import _route_live_game_tools, PRODUCTS
 
 STATIC = Path(__file__).resolve().parents[1] / 'web' / 'static'
 
@@ -66,6 +66,200 @@ def test_recheck_mismatch_pauses_remaining_queue_until_explicit_continue():
             ('a', 'mismatch'), ('b', 'passed')]
         made = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleMade'))")
         assert [r['bundle_id'] for r in made] == ['43']
+        browser.close()
+
+
+def test_recheck_history_recovery_and_read_only_retry():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        calls = []
+        job = {'id': 'job42', 'game': 'CabalM TH', 'client_key': 'one',
+               'name': 'Recovered', 'bundle_id': '42',
+               'submitted_values': {'game': 'CabalM TH', 'items': [], 'rewards': []},
+               'result': {'name': 'Recovered', 'saved': True, 'bundle_id': '42',
+                          'recheck': {'outcome': 'mismatch', 'incomplete': False}},
+               'history': [{'checked_at': '2026-09-23T01:00:00Z', 'bundle_id': '42',
+                            'game': 'CabalM TH', 'name': 'Recovered', 'outcome': 'mismatch',
+                            'coverage': {'saved_rows': '1/1'},
+                            'document_reference': {'items': [], 'rewards': []},
+                            'submitted_values': {'items': [], 'rewards': []},
+                            'actual': {'items': [], 'rewards': []}}]}
+        context.route('**/api/bundles/rechecks',
+                      lambda route: route.fulfill(json={'rows': [job]}))
+        def retry(route):
+            calls.append(route.request.post_data_json)
+            job['result'] = {'name': 'Recovered', 'saved': True, 'bundle_id': '42',
+                             'recheck': {'outcome': 'passed', 'incomplete': False}}
+            job['history'].append({'checked_at': '2026-09-23T02:00:00Z',
+                                   'bundle_id': '42', 'name': 'Recovered',
+                                   'game': 'CabalM TH', 'outcome': 'passed'})
+            route.fulfill(json=job['result'])
+        context.route('**/api/bundles/rechecks/job42/retry', retry)
+        context.route('**/api/bundles/run',
+                      lambda _route: pytest.fail('retry must not create a Bundle'))
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        expect(page.locator('#bundleResults')).to_contain_text('Recovered')
+        expect(page.locator('#handoff')).to_be_hidden()
+        expect(page.locator('#recheckHistory')).to_contain_text('mismatch')
+        page.select_option('#recheckFilter', 'passed')
+        expect(page.locator('#recheckHistory')).to_contain_text('ยังไม่มีประวัติ')
+        page.select_option('#recheckFilter', 'all')
+        page.locator('#bundleResults .submitted-reference > summary').click()
+        page.locator('#bundleResults .submitted-reference > button').first.click()
+        expect(page.locator('#runMsg')).to_contain_text('passed')
+        expect(page.locator('#handoff')).to_be_visible()
+        assert calls == [{'bundle_id': '42'}]
+        browser.close()
+
+
+def test_recheck_failure_from_another_game_does_not_pause_current_queue():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.select_option('#game', 'CabalPC TH')
+        page.evaluate("""() => {
+          state.results=[{client_key:'old',name:'Other game',
+            submitted_values:{game:'CabalPC TH'},
+            recheck:{outcome:'mismatch',incomplete:false}}];
+          state.queue=[{key:'new',name:'Current game',type:'FIXED',deliver:true,
+            items:[{id:'91',qty:'1'}],rewards:[]}];
+          state.active='new';paintRunButtons();
+        }""")
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        page.select_option('#game', 'CabalM TH')
+        expect(page.locator('#btnCreateAll')).to_be_enabled()
+        expect(page.locator('#btnContinueQueue')).to_be_hidden()
+        browser.close()
+
+
+def test_nonpass_handoff_requires_separate_confirmation():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleResults', JSON.stringify([{
+          client_key:'one',name:'Not verified',saved:true,bundle_id:'42',
+          submitted_values:{game:'CabalM TH',items:[],rewards:[]},
+          recheck:{outcome:'partial',incomplete:true}
+        }]))""")
+        page.reload()
+        expect(page.locator('#handoff')).to_be_hidden()
+        page.locator('#bundleResults .submitted-reference > summary').click()
+        override=page.locator('#bundleResults .submitted-reference > button')
+        expect(override).to_be_visible()
+        page.once('dialog', lambda dialog: dialog.dismiss())
+        override.click()
+        expect(page.locator('#handoff')).to_be_hidden()
+        page.once('dialog', lambda dialog: dialog.accept())
+        override.click()
+        expect(page.locator('#handoff')).to_be_visible()
+        assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))[0].recheck.outcome") == 'partial'
+        browser.close()
+
+
+@pytest.mark.parametrize('width', [360, 1280])
+def test_recheck_history_filter_keyboard_and_overflow(width):
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context(viewport={'width': width, 'height': 800})
+        _route_live_game_tools(context)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.evaluate("""state.history=[{name:'Long Bundle Name '.repeat(15),game:'CabalM TH',
+          history:[{checked_at:'2026-09-23T01:00:00Z',bundle_id:'42',outcome:'partial',
+          error:'อ่านแถวที่ 2 ไม่สำเร็จ',
+          coverage:{saved_rows:'1/2'},document_reference:{items:[{id:'91',qty:'1'}],rewards:[]},
+          submitted_values:{items:[{id:'91',qty:'1'}],rewards:[]},
+          actual:{items:[{id:'91',qty:'1'}],rewards:[]}}]}];renderRecheckHistory()""")
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.locator('#recheckFilter').focus()
+        page.keyboard.press('End')
+        page.locator('#recheckFilter').select_option('partial')
+        expect(page.locator('#recheckHistory > details')).to_have_count(1)
+        page.locator('#recheckHistory > details > summary').focus()
+        page.keyboard.press('Enter')
+        expect(page.locator('#recheckHistory > details')).to_have_attribute('open', '')
+        expect(page.locator('#recheckHistory')).to_contain_text('ค่าที่บันทึกจริง')
+        expect(page.locator('#recheckHistory')).to_contain_text('อ่านแถวที่ 2 ไม่สำเร็จ')
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        browser.close()
+
+
+@pytest.mark.parametrize('target,button', [
+    ('/itemcodes', '#btnToItemCode'), ('/events', '#btnToEvent'),
+    ('/products', '#btnToProduct'),
+])
+def test_passed_bundle_handoff_reaches_each_next_tool(target, button):
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        context.route('http://tool.test/products?*', lambda route: route.fulfill(
+            status=200, content_type='text/html; charset=utf-8',
+            body=PRODUCTS.read_text(encoding='utf-8')))
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""state.results=[{client_key:'one',name:'Passed',saved:true,bundle_id:'42',
+          submitted_values:{game:'CabalM TH'},recheck:{outcome:'passed',incomplete:false}}];
+          offerHandoff(state.results)""")
+        expect(page.locator('#handoff')).to_be_visible()
+        page.locator(button).click()
+        page.wait_for_url(lambda url: url.startswith('http://tool.test' + target))
+        browser.close()
+
+
+def test_restart_with_unknown_create_id_requires_manual_recovery_not_create():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context()
+        _route_live_game_tools(context)
+        job = {'id': 'pending42', 'client_key': 'one', 'game': 'CabalM TH',
+               'name': 'Pending', 'bundle_id': None,
+               'submitted_values': {'game': 'CabalM TH', 'name': 'Pending',
+                                    'items': [{'id': '91', 'qty': '1'}], 'rewards': []},
+               'result': {'name': 'Pending', 'saved': False, 'bundle_id': None,
+                          'creation_uncertain': True,
+                          'recheck': {'outcome': 'pending', 'incomplete': True}},
+               'history': []}
+        context.route('**/api/bundles/rechecks',
+                      lambda route: route.fulfill(json={'rows': [job]}))
+        calls = []
+        def retry(route):
+            calls.append(route.request.post_data_json)
+            job['result'] = {'name': 'Pending', 'saved': True, 'bundle_id': '42',
+                             'creation_uncertain': False,
+                             'recheck': {'outcome': 'passed', 'incomplete': False}}
+            route.fulfill(json=job['result'])
+        context.route('**/api/bundles/rechecks/pending42/retry', retry)
+        context.route('**/api/bundles/run',
+                      lambda _route: pytest.fail('recovery must not call create'))
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""localStorage.setItem('afc.bundleQueue', JSON.stringify([{
+          key:'one',name:'Pending',type:'FIXED',deliver:true,creation_pending:true,
+          items:[{id:'91',qty:'1'}],rewards:[]
+        }]))""")
+        page.reload()
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        expect(page.locator('#bundleResults')).to_contain_text('Pending')
+        page.locator('#bundleResults .submitted-reference > summary').click()
+        page.once('dialog', lambda dialog: dialog.accept('42'))
+        page.locator('#bundleResults .submitted-reference > button').click()
+        expect(page.locator('#queueCount')).to_have_text('0')
+        expect(page.locator('#handoff')).to_be_visible()
+        assert calls == [{'bundle_id': '42'}]
         browser.close()
 
 

@@ -36,7 +36,8 @@ def test_create_checkpoint_recheck_and_queue_gate(client, monkeypatch, mode, cre
         elif url.endswith('/bundles/42'):
             body = '''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม ( 1 )</div>
             <button>ขยายทั้งหมด</button><div><div><button aria-label="ย่อ" aria-expanded="true">ITEM</button></div>
-            <div><div><label>Item ID</label><p>91</p></div><input name="items.0.quantity" value="1"></div></div>'''
+            <div><div><label>Item ID</label><p>91</p></div><input name="items.0.quantity" value="1">
+            <select><option selected>Common</option></select></div></div>'''
             if mode == 'unreadable':
                 body = body.replace('value="1"', 'value="unreadable"')
         elif url.endswith('/items/91'):
@@ -62,7 +63,7 @@ def test_create_checkpoint_recheck_and_queue_gate(client, monkeypatch, mode, cre
 
     monkeypatch.setattr(bundle_runner, 'async_playwright', lambda: SimpleNamespace(start=start))
     reference = {'game': GAME, 'filename': 'source.xlsx', 'items': [
-        {'kind': '123', 'option': '0', 'duration': '9', 'qty': '1'}]}
+        {'kind': '123', 'option': '0', 'duration': '9', 'qty': '1', 'tier': 'Common'}]}
     payload = {'game': GAME, 'do_save': True, 'bundles': [
         {'client_key': key, 'name': key, 'items': [{'id': '91', 'qty': '1'}],
          'document_reference': reference} for key in ('first', 'later')]}

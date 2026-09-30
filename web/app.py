@@ -125,6 +125,10 @@ class BundleRunRequest(BaseModel):
     do_save: StrictBool = False
 
 
+class BundleRecheckRetryRequest(BaseModel):
+    bundle_id: StrictStr | None = Field(default=None, max_length=32)
+
+
 class ItemCodeSpec(BaseModel):
     """One Item Code as the operator filled it in.
 
@@ -2116,11 +2120,25 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
         if record is None:
             record = Job(owner_user_id=user.id, tool='bundle_recheck',
                          status='pending', config={'game': payload.game,
-                             'client_key': key, 'submitted_values': bundle})
+                             'client_key': key,
+                             'submitted_values': dict(bundle, game=payload.game)})
             db.add(record)
             checkpoints[key] = record
         record.result = json.loads(json.dumps(entry))
         record.status = entry.get('recheck', {}).get('outcome', 'pending')
+        if record.status not in ('pending', None):
+            record.log = [*(record.log or []), {
+                'checked_at': utc_now().isoformat(), 'bundle_id': entry.get('bundle_id'),
+                'name': entry.get('name'), 'game': payload.game,
+                'provenance': bundle.get('document_reference'),
+                'outcome': record.status, 'coverage': entry.get('recheck', {}).get('coverage'),
+                'document_reference': bundle.get('document_reference'),
+                'submitted_values': dict(bundle, game=payload.game),
+                'actual': entry.get('recheck', {}).get('actual'),
+                'rows': entry.get('recheck', {}).get('rows', []),
+                'error': entry.get('recheck', {}).get('error') or entry.get('error'),
+                'read_attempts': entry.get('recheck', {}).get('read_attempts'),
+                'incomplete': entry.get('recheck', {}).get('incomplete', True)}]
         db.commit()
 
     try:
@@ -2173,6 +2191,8 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
 
     for entry, job in zip(results, jobs):
         entry['client_key'] = job['client_key']
+        if job['client_key'] in checkpoints:
+            entry['job_id'] = checkpoints[job['client_key']].id
 
     screenshot_b64 = None
     for entry in results:
@@ -2195,6 +2215,93 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
             'screenshot_b64': screenshot_b64,
             'created': sum(1 for r in results if r['saved']),
             'planned': len(jobs)}
+
+
+@router.get('/api/bundles/rechecks')
+def list_bundle_rechecks(user: User = Depends(require_user),
+                         db: Session = Depends(get_db)):
+    """Owner-scoped saved checkpoints; history is append-only per Bundle."""
+    records = db.scalars(select(Job).where(
+        Job.owner_user_id == user.id, Job.tool == 'bundle_recheck'
+    ).order_by(Job.created_at.desc())).all()
+    return {'rows': [{
+        'id': record.id, 'game': record.config.get('game'),
+        'client_key': record.config.get('client_key'),
+        'name': record.result.get('name') or record.config.get('submitted_values', {}).get('name'),
+        'bundle_id': record.result.get('bundle_id'),
+        'created_at': record.created_at.isoformat(),
+        'submitted_values': dict(record.config.get('submitted_values') or {},
+                                 game=record.config.get('game')),
+        'result': record.result, 'history': record.log or [],
+    } for record in records]}
+
+
+@router.post('/api/bundles/rechecks/{job_id}/retry')
+async def retry_bundle_recheck(job_id: str, payload: BundleRecheckRetryRequest,
+                               request: Request, user: User = Depends(require_user),
+                               db: Session = Depends(get_db)):
+    """Explicitly reread an existing saved ID; this route cannot create one."""
+    from web import bundle_runner
+
+    record = db.scalar(select(Job).where(
+        Job.id == job_id, Job.owner_user_id == user.id,
+        Job.tool == 'bundle_recheck'))
+    if record is None:
+        raise HTTPException(status_code=404, detail='ไม่พบประวัติ Bundle นี้')
+    game = record.config.get('game')
+    if game not in item_finder.GAMES:
+        raise HTTPException(status_code=409, detail='เกมของ Bundle เดิมไม่ถูกต้อง')
+    existing_id = str(record.result.get('bundle_id') or '')
+    requested_id = (payload.bundle_id or '').strip()
+    if requested_id and existing_id and requested_id != existing_id:
+        raise HTTPException(status_code=409, detail='เลข Bundle เดิมเปลี่ยนไม่ได้')
+    bundle_id = existing_id or requested_id
+    if not re.fullmatch(r'[1-9][0-9]*', bundle_id):
+        raise HTTPException(status_code=400,
+                            detail='กรุณากรอกเลข Bundle ที่สร้างแล้วบนเกมเดิม')
+    storage_state = request.app.state.aztek_session_service.load_storage_state(db, user)
+    if storage_state is None:
+        raise HTTPException(status_code=409, detail='เซสชัน Aztek หมดอายุ กรุณาเชื่อมใหม่')
+    submitted = dict(record.config.get('submitted_values') or {}, game=game)
+    reference = submitted.get('document_reference')
+    try:
+        async with request.app.state.browser_gate.slot():
+            db.refresh(record)
+            current_id = str(record.result.get('bundle_id') or '')
+            if current_id and current_id != bundle_id:
+                raise HTTPException(status_code=409, detail='เลข Bundle เดิมเปลี่ยนไม่ได้')
+            checked = await bundle_runner.read_existing_bundle(
+                game, bundle_id, reference, submitted, storage_state,
+                headed=request.app.state.settings.app_env != 'production')
+    except HTTPException:
+        raise
+    except Exception as exc:
+        checked = {'outcome': 'failed', 'incomplete': True, 'error': str(exc)[:200]}
+    # A manually supplied ID is only bound after a successful read. A typo or
+    # expired session must not make an unknown ID impossible to correct later.
+    bound_id = bundle_id if checked.get('outcome') in ('passed', 'partial', 'mismatch') else existing_id or None
+    entry = dict(record.result or {}, bundle_id=bound_id, recheck=checked)
+    if checked.get('outcome') in ('passed', 'partial', 'mismatch'):
+        entry['saved'] = True
+        entry['creation_uncertain'] = False
+    record.result = json.loads(json.dumps(entry))
+    record.status = checked.get('outcome', 'failed')
+    record.log = [*(record.log or []), {
+        'checked_at': utc_now().isoformat(), 'bundle_id': bundle_id,
+        'name': entry.get('name'), 'game': game, 'provenance': reference,
+        'outcome': record.status, 'coverage': checked.get('coverage'),
+        'document_reference': reference, 'submitted_values': submitted,
+        'actual': checked.get('actual'), 'rows': checked.get('rows', []),
+        'error': checked.get('error'), 'read_attempts': checked.get('read_attempts'),
+        'incomplete': checked.get('incomplete', True)}]
+    db.commit()
+    write_audit(db, user_id=user.id, action='bundle.recheck_retry',
+                status='success' if record.status == 'passed' else 'failed',
+                summary={'game': game, 'bundle_id': bundle_id,
+                         'outcome': record.status}, tool='create_bundle',
+                resource_type='bundle_recheck', resource_id=record.id,
+                request=request)
+    return entry
 
 MAX_ACTIVITIES = 30
 MAX_REWARD_SETS = 20
