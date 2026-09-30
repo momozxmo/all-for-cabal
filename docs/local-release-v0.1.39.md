@@ -31,9 +31,14 @@ Build date: 2026-10-01. Source snapshot:
 - Setup: `All.for.Cabal.Web.Setup-0.1.39.exe`
 - Size: **279,111,803 bytes**
 - SHA-256: **EF72023BD2B005CDCAA6A39030A5D1DABB9053BA62606090131E68C72027FCE3**
-- Setup/checksum ต้องเผยแพร่จาก build เดียวกันที่
+- Setup/checksum เผยแพร่จาก build เดียวกันที่
   [GitHub Release v0.1.39](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.39)
-- สถานะ: build ตรวจครบ กำลังเผยแพร่; ต้องตรวจ production updater/download หลัง publish
+- สถานะ: เผยแพร่ stable/latest สำเร็จ ไม่ใช่ draft/prerelease; Local docs/tag commit `92e8ee8`
+- Production updater ใช้ runtime ทดสอบใหม่ จำลอง current version `0.1.38`,
+  พบ latest `0.1.39` และดาวน์โหลด asset จริงจาก GitHub จนเป็น **ready**
+- ชื่อ asset ที่ดาวน์โหลด: `All.for.Cabal.Web.Setup-0.1.39.exe`;
+  ขนาด 279,111,803 bytes และ SHA-256 ตรงกับ build ข้างต้น
+- ไม่เรียก install; ผลเปิดกลับ/รักษาร่างและคิวของผู้ใช้ยังไม่ยืนยัน
 
 ## Boundaries
 

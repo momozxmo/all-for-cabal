@@ -6,8 +6,10 @@ Snapshot: 2026-10-01 — อ่านแล้วตรวจสถานะ Git
 
 ## สถานะล่าสุด
 
-- ผู้ใช้อนุมัติ Setup/commit/push ทั้ง source main และ Local Release;
-  กำลังเตรียม v0.1.39 จาก 4 งานด้านล่าง ยังไม่ติดตั้งทับโปรแกรมผู้ใช้
+- Setup/commit/push ทั้ง source main และ Local Release สำเร็จสำหรับ v0.1.39;
+  source งานแก้ `d1a3d18`, Local docs/tag `92e8ee8`
+  production updater จำลองรุ่น 0.1.38 พบ/ดาวน์โหลด 0.1.39 แล้วเป็น `ready`;
+  ขนาดและ SHA-256 ตรงกับ build โดยไม่ติดตั้งทับหรือปิดโปรแกรมเดิม
 - Item Finder แยก “ส่งเฉพาะที่เลือก (N)” และ “ส่งทั้งหมด (N)”;
   การส่งจาก Product ใช้ขอบเขตกลุ่มที่แสดง ทั้งรีวิวและส่งเข้าคิว
   Regression: `tests/test_web_finder_bundle_handoff_ui.py` รวมไอเทมซ้ำหลาย Bundle
@@ -26,13 +28,14 @@ Snapshot: 2026-10-01 — อ่านแล้วตรวจสถานะ Git
   warning เดิมเรื่อง process-local development secrets
 - คง Document Reference จากเอกสารต้นฉบับไว้ครบ;
   หากเลือกส่งเพียงบางรายการ Bundle Recheck อาจรายงานรายการขาดตามเอกสาร
-- รุ่นเผยแพร่ก่อนงานนี้: [v0.1.38](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.38)
-  หลักฐานอยู่ใน [local-release-v0.1.38.md](local-release-v0.1.38.md)
+- รุ่นเผยแพร่ล่าสุด: [v0.1.39](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.39)
+  หลักฐาน build/test/hash และ updater อยู่ใน [local-release-v0.1.39.md](local-release-v0.1.39.md)
   รวม Bundle Recheck #9–#11, stable ID เรท RANDOM และตัวเลือกเบราว์เซอร์ Launcher แล้ว
 - เตรียมเครื่อง/เปิดโหมดพัฒนาแยกข้อมูลจากโปรแกรมที่ติดตั้ง:
   [MULTI_COMPUTER_DEV.md](MULTI_COMPUTER_DEV.md)
   Launcher ใช้ Default/Chrome/Edge/Firefox และขอสิทธิ์เข้าเว็บใหม่ทุกครั้ง;
   ร่าง/คิวในเบราว์เซอร์ไม่ย้ายตาม ดู [LOCAL_INSTALL.md](LOCAL_INSTALL.md#เลือกเบราว์เซอร์)
+- ณ snapshot นี้ไม่มีงานแก้โค้ดที่ต้องเริ่มต่ออัตโนมัติ รับคำขอถัดไปจากผู้ใช้
 
 ## ขอบเขตและจุดที่ยังไม่ยืนยัน
 
