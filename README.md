@@ -13,6 +13,10 @@ Python หรือ Docker โปรแกรมเปิดเว็บ local �
 All for Cabal ดูขั้นตอนติดตั้ง อัปเดต สำรองข้อมูล และตรวจ SHA-256 ที่
 [docs/LOCAL_INSTALL.md](docs/LOCAL_INSTALL.md)
 
+รุ่น v0.1.39 แยกส่งไอเทมที่เลือกเข้า Bundle, เพิ่ม Clear ข้อมูลวาง,
+รองรับเรต RANDOM เป็น 0 และแสดงชื่อ Currency ครบ;
+ดู [รายละเอียดและหลักฐาน release](docs/local-release-v0.1.39.md)
+
 รวม 4 เครื่องมือไว้ในโปรแกรมเดียว หน้าต่างเดียว แถบเมนูด้านบนสลับได้ (เปิดตรงเข้าเครื่องมือแรก):
 
 - 🔍 **Cabal Item ID Finder** — ค้นหา / ตรวจรหัสไอเทม (Aztek ID) จากเว็บ combo-interactive
