@@ -878,7 +878,7 @@ def test_product_domain_error_matrix_uses_only_safe_ordinals(
     assert calls == {'state': 0, 'gate': 0, 'builder': 0}
 
 
-@pytest.mark.parametrize('rate', ['', None, '0', '100.001', '12.5000', '1e3'])
+@pytest.mark.parametrize('rate', ['', None, '-0.001', '100.001', '12.5000', '1e3'])
 def test_random_bundle_rate_matrix_is_exact_and_never_echoes_input(
         client, monkeypatch, rate):
     calls = _forbid_live_boundary(client, monkeypatch)
@@ -892,7 +892,7 @@ def test_random_bundle_rate_matrix_is_exact_and_never_echoes_input(
     assert response.status_code == 400
     assert response.json() == {
         'detail': (
-            'Bundle ที่ 1: เรทสุ่มแถว 1 ต้องเป็นเลขทศนิยมมากกว่า 0 '
+            'Bundle ที่ 1: เรทสุ่มแถว 1 ต้องเป็นเลขทศนิยมตั้งแต่ 0 '
             'และไม่เกิน 100 โดยมีทศนิยมไม่เกิน 3 ตำแหน่ง'
         )
     }

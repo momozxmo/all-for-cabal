@@ -350,7 +350,8 @@
           </div></div>
         <div class="card-body result-actions">
           <button id="btnBundles" class="success" disabled>📦 รวมเป็นบันเดิล (รีวิว)</button>
-          <button id="btnBundleOpen" class="primary" disabled>➡ ส่งเข้าคิวสร้างบันเดิล</button>
+          <button id="btnBundleOpen" class="primary" disabled>➡ ส่งเฉพาะที่เลือก (0)</button>
+          <button id="btnBundleAll" disabled>ส่งทั้งหมด (0)</button>
           <button id="btnExportXlsx" class="warn" disabled>⬇ Excel</button>
           <button id="btnExportCsv" disabled>⬇ CSV</button>
           <button id="btnCopyAll" class="primary" disabled>Copy All IDs</button>
@@ -409,7 +410,7 @@ function showNotice(target,tone,title,detail='',nextStep=''){
   if(state==='error')notice.focus({preventScroll:false});
 }
 function clearNotice(target){const notice=typeof target==='string'?$(target):target;if(!notice)return;notice.hidden=true;notice.replaceChildren();}
-const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'', busy:false };
+const state = { mode:'event', modes:{}, workspaceId:'', criteria:[], results:[], selected:new Set(), pendingId:'', socket:null, user:null, aztekConnected:false, searchSourceGroupKey:'', busy:false, bundleSending:false };
 const sheetPickerSearch = createSheetPickerSearch({
   list:$('sheetList'),input:$('sheetSearch'),count:$('sheetSearchCount'),
   empty:$('sheetSearchEmpty'),selectAllButton:$('btnSheetsAll'),
@@ -438,7 +439,7 @@ function deepSummary(row){
 }
 function setBusy(busy){ state.busy=busy;$('btnSearch').disabled=busy||!state.workspaceId||!state.criteria.length||!state.aztekConnected; $('btnStop').disabled=!busy;
   $('btnImportPlan').disabled=busy; $('btnClearWorkspace').disabled=busy;
-  updateMissingActions();
+  updateMissingActions();resultActions();
   document.querySelectorAll('input[name=runMode]').forEach(input=>input.disabled=busy); }
 function applyRuntimeMode(me){
   const localMode=!!(me&&me.local_mode);
@@ -464,7 +465,12 @@ async function loadAztekStatus(){
   catch(error){ paintAztek('disconnected'); }
 }
 $('btnLogout').onclick=async()=>{ $('btnLogout').disabled=true; try{ await fetch('/api/auth/logout',{method:'POST'}); } finally{ window.location.replace('/login'); } };
-function resultActions(){ const has=state.results.length>0; ['btnBundles','btnBundleOpen','btnExportXlsx','btnExportCsv','btnCopyAll'].forEach(id=>$(id).disabled=!has);
+function resultActions(){ const has=state.results.length>0; ['btnBundles','btnExportXlsx','btnExportCsv','btnCopyAll'].forEach(id=>$(id).disabled=!has);
+  const locked=state.busy||state.bundleSending||!state.workspaceId;
+  $('btnBundleOpen').disabled=locked||!state.selected.size;
+  $('btnBundleOpen').textContent=`➡ ส่งเฉพาะที่เลือก (${state.selected.size})`;
+  $('btnBundleAll').disabled=locked||!has;
+  $('btnBundleAll').textContent=`ส่งทั้งหมด (${state.results.length})`;
   $('btnCopySelected').disabled=!state.selected.size; $('selectedCount').textContent=`เลือก ${state.selected.size}`; }
 
 async function init(){
@@ -677,17 +683,20 @@ function renderBundleReview(bundles){const list=$('bundleList');list.replaceChil
       cells.forEach(([cls,text])=>{const td=document.createElement('td');td.className=cls;td.textContent=text;tr.appendChild(td);});
       body.appendChild(tr);});
     table.appendChild(body);box.append(head,table);list.appendChild(box);});}
-$('btnBundles').onclick=async()=>{const response=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected]})});const data=await response.json();if(!response.ok){showNotice('finderNotice','error','รวม Bundle เพื่อรีวิวไม่สำเร็จ',data.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}renderBundleReview(data.bundles||[]);$('bundleDialog').showModal();};
+$('btnBundles').onclick=async()=>{const response=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[...state.selected],source_group_key:state.searchSourceGroupKey})});const data=await response.json();if(!response.ok){showNotice('finderNotice','error','รวม Bundle เพื่อรีวิวไม่สำเร็จ',data.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}renderBundleReview(data.bundles||[]);$('bundleDialog').showModal();};
 
 // ---- ส่งบันเดิลไปหน้าสร้าง Bundle ----
 // Item Finder hands the grouped results over and steps out of the way: making
 // the bundles is that page's job, and it can build them from typed item ids
 // just as well as from these. sessionStorage carries the payload across the
 // navigation; the receiving page consumes it once.
-async function sendToBundlePage(){
-  if(!state.workspaceId)return;
-  $('btnBundleOpen').disabled=true;
-  try{const r=await apiFetch(`/api/workspaces/${state.workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:[]})});
+async function sendToBundlePage(selectedOnly){
+  if(!state.workspaceId||state.busy||state.bundleSending)return;
+  const indexes=selectedOnly?[...state.selected]:[];
+  if(selectedOnly&&!indexes.length)return;
+  const workspaceId=state.workspaceId,game=$('game').value,sourceGroupKey=state.searchSourceGroupKey;
+  state.bundleSending=true;resultActions();
+  try{const r=await apiFetch(`/api/workspaces/${workspaceId}/bundles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_indexes:indexes,source_group_key:sourceGroupKey})});
     const d=await r.json();
     if(!r.ok){showNotice('finderNotice','error','ส่งไปหน้า Bundle ไม่สำเร็จ',d.detail||'ระบบจัดกลุ่มไม่ได้','ตรวจรายการที่เลือกแล้วลองอีกครั้ง');return;}
     if(!(d.bundles||[]).length){showNotice('finderNotice','warning','ยังไม่มี Bundle ให้ส่ง','ไม่มีไอเทมที่รวมเป็น Bundle ได้','เลือกผลลัพธ์อย่างน้อย 1 รายการ');return;}
@@ -695,14 +704,15 @@ async function sendToBundlePage(){
     // depends on the mode, and a document row that found no item has to stay
     // visible after leaving this page.
     sessionStorage.setItem('afc.bundleHandoff',JSON.stringify({
-      game:$('game').value,mode:d.mode||state.mode,
-      workspace_id:state.workspaceId,bundles:d.bundles,
+      game,mode:d.mode||state.mode,
+      workspace_id:workspaceId,bundles:d.bundles,
       event_drafts:d.event_drafts||[],itemcode_drafts:d.itemcode_drafts||[],
       not_found:d.not_found||[]}));
     window.location.href='/bundles';
   }catch(e){showNotice('finderNotice','error','ส่งไปหน้า Bundle ไม่สำเร็จ',e.message||'ติดต่อเซิร์ฟเวอร์ไม่ได้','ลองส่งอีกครั้ง');}
-  finally{resultActions();}}
-$('btnBundleOpen').onclick=sendToBundlePage;
+  finally{state.bundleSending=false;resultActions();}}
+$('btnBundleOpen').onclick=()=>sendToBundlePage(true);
+$('btnBundleAll').onclick=()=>sendToBundlePage(false);
 
 // ---- ส่งเงื่อนไขในไฟล์ไปหน้าสร้าง Item Code ----
 // Each prize table in the plan is its own Item Code, and the conditions above

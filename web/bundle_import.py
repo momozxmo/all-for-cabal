@@ -76,7 +76,7 @@ def _blocks(rows, name):
                 if _blank(rate):
                     raise ValueError('RANDOM ต้องระบุเรทสุ่มในคอลัมน์ 4 ทุกแถว')
                 rate = plain_decimal_text(str(rate).strip(), 'เรทสุ่ม',
-                                          minimum=Decimal('0.001'), maximum=Decimal('100'), places=3)
+                                          minimum=Decimal('0'), maximum=Decimal('100'), places=3)
             elif not _blank(rate):
                 raise ValueError('เรทสุ่มใช้เฉพาะประเภท RANDOM กรุณาล้างคอลัมน์ 4')
             else:

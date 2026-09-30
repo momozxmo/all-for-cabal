@@ -54,6 +54,11 @@ input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
 .log:empty{height:64px}.log:empty::before{content:'ยังไม่มีบันทึกการทำงาน';font-family:var(--sans,system-ui)}
 .table-wrap,#bundleResults,#productResults{max-width:100%;overflow:auto;overscroll-behavior-inline:contain}
 #bundleResults:empty,#productResults:empty{display:none}
+/* Bundle reward identity gets a full line; controls wrap without hiding it. */
+body[data-btype] .rwrow{flex-wrap:wrap}
+body[data-btype] .rwrow .v{flex:0 0 100%;white-space:normal;overflow-wrap:anywhere}
+body[data-btype] .rwrow select{width:auto}
+body[data-btype] .rwrow button{min-width:44px}
 .product-page .field{grid-template-columns:minmax(0,1fr);font-size:13px}
 .product-panel{background:transparent;border-radius:8px}
 .product-page .price-head{display:none}

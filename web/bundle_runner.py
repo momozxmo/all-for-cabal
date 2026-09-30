@@ -485,7 +485,8 @@ class BundleBuilder:
             return False
         done = 0
         for idx, it in enumerate(items):
-            rate = str(it.get('rate') or '').strip()
+            raw_rate = it.get('rate')
+            rate = '' if raw_rate is None else str(raw_rate).strip()
             if not rate:
                 continue
             prefix = 'items.%d.' % idx

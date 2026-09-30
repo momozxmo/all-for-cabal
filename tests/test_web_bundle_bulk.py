@@ -75,7 +75,7 @@ def test_template_currency_placeholder_is_not_ready_to_create(client):
 @pytest.mark.parametrize('text, row, message', [
     ('Pack\tRANDOM\n11\t1\tCommon', 2, 'เรท'),
     ('Pack\tRANDOM\n11\t1\tCommon\t50', 1, '100'),
-    ('Pack\tRANDOM\n11\t1\tCommon\t0', 2, 'เรท'),
+    ('Pack\tRANDOM\n11\t1\tCommon\t-0.001', 2, 'เรท'),
     ('Pack\tRANDOM\n11\t1\tCommon\t101', 2, 'เรท'),
     ('Pack\tFIXED\n11\t1\tCommon\t50', 2, 'RANDOM'),
     ('11\t1\tCommon', 1, 'บันเดิล'),

@@ -1087,7 +1087,7 @@ def games(user: User = Depends(require_user)):
 
 
 _RANDOM_RATE_RULE = (
-    'ต้องเป็นเลขทศนิยมมากกว่า 0 และไม่เกิน 100 '
+    'ต้องเป็นเลขทศนิยมตั้งแต่ 0 และไม่เกิน 100 '
     'โดยมีทศนิยมไม่เกิน 3 ตำแหน่ง')
 _PRODUCT_PRICE_RULE = (
     'ต้องเป็นเลขทศนิยมตั้งแต่ 0 ขึ้นไปในรูปแบบปกติ'
@@ -1153,7 +1153,7 @@ def _clean_rewards(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
         if entry.get('rate') not in (None, ''):
             entry_clean['rate'] = plain_decimal_text(
                 entry['rate'], f'Bundle ที่ {bundle_number}: เรทสุ่ม Reward',
-                minimum=Decimal('0.001'), maximum=Decimal('100'), places=3)
+                minimum=Decimal('0'), maximum=Decimal('100'), places=3)
         cleaned.append(entry_clean)
     return cleaned
 
@@ -1530,6 +1530,11 @@ def bundle_preview(workspace_id: str, payload: BundleRequest, request: Request,
     if source_group_key:
         rows = item_service.rows_for_source_group(
             workspace.results, source_group_key)
+        # Item Finder numbers checkboxes within the visible Product group.
+        # Apply selection after narrowing, rather than to workspace indexes.
+        if indexes:
+            rows = [rows[index] for index in sorted(set(indexes))
+                    if 0 <= index < len(rows)]
     elif indexes:
         rows = [workspace.results[index] for index in sorted(set(indexes))
                 if isinstance(index, int) and 0 <= index < len(workspace.results)]
@@ -1978,10 +1983,6 @@ def _clean_items(raw: list[dict], *, bundle_number: int = 1) -> list[dict]:
                 f'Bundle ที่ {bundle_number}: เรทสุ่มแถว {row}',
                 minimum=Decimal('0'), maximum=Decimal('100'), places=3,
                 rule=_RANDOM_RATE_RULE)
-            if Decimal(rate) <= 0:
-                raise PayloadValueError(
-                    f'Bundle ที่ {bundle_number}: เรทสุ่มแถว {row}',
-                    _RANDOM_RATE_RULE)
         items.append({
             'id': item_id, 'qty': qty, 'tier': tier, 'rate': rate})
     return items

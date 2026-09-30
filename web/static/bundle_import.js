@@ -22,6 +22,11 @@
   }
   fileInput.addEventListener('change', reset);
   pasteInput.addEventListener('input', reset);
+  $('btnBundlePasteClear').addEventListener('click', () => {
+    pasteInput.value = '';
+    reset();
+    pasteInput.focus();
+  });
   sheetPicker.addEventListener('change', () => {
     clearPreview(); clearNotice('bundleImportMsg');
   });

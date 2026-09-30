@@ -51,7 +51,10 @@
         <p class="hint">ใช้ Item ID บน Aztek ของเกมที่เลือก ไม่ใช่ Item Index · ทั้ง Excel และก็อปวางใช้รูปแบบเดียวกัน</p>
         <label for="bundlePasteText"><strong>วางข้อมูลจาก Excel</strong> — ก็อปเซลล์มาวางตรงนี้ (คั่นคอลัมน์ด้วย Tab หรือ |)</label>
         <textarea id="bundlePasteText" rows="7" style="width:100%;font-family:monospace" spellcheck="false" placeholder="กล่องสุ่มกิจกรรม&#9;RANDOM&#10;200479&#9;10&#9;Common&#9;60&#10;200480&#9;3&#9;Rare&#9;30&#10;200481&#9;1&#9;Epic&#9;10"></textarea>
-        <div><button id="btnBundlePastePreview" type="button" class="primary">พรีวิวข้อความที่วาง</button></div>
+        <div class="topline">
+          <button id="btnBundlePastePreview" type="button" class="primary">พรีวิวข้อความที่วาง</button>
+          <button id="btnBundlePasteClear" type="button" title="ล้างข้อความและพรีวิว ไม่ลบคิว Bundle">Clear ข้อมูล</button>
+        </div>
         <p class="hint">หัวชุด: ชื่อบันเดิล / FIXED, CHOICE หรือ RANDOM · รายการ: Item ID / จำนวน / Rarity / เรท (%) เฉพาะ RANDOM รวม 100% · Currency ใช้ CREDIT: Alz หรือ DEBIT: ชื่อ, MILEAGE: ชื่อ, PLAYER_EXP: ชื่อ</p>
         <div class="topline">
           <label>หรือเลือกไฟล์ Excel (.xlsx)<input id="bundleImportFile" type="file" accept=".xlsx"></label>
@@ -339,7 +342,7 @@ function drainHandoff(){
   let added=0;
   payload.bundles.forEach(b=>{
     const items=(b.items||[]).map(it=>({id:String(it.id),name:it.name||'',
-      qty:String(it.qty||'1'),tier:'Common',rate:String(it.rate||''),shared:!!it.shared,
+      qty:String(it.qty||'1'),tier:'Common',rate:String(it.rate??''),shared:!!it.shared,
       // Carried so the bundle can be checked against the document right here.
       file_name:it.file_name||'',name_mismatch:!!it.name_mismatch,
       params:it.params||'',desc:it.desc||'',doc_qty:String(it.doc_qty||'')}));
@@ -422,7 +425,7 @@ function renderItems(){const b=current();const body=$('itemsTable').tBodies[0];b
     ts.value=it.tier||'Common';ts.onchange=()=>{it.tier=ts.value;saveQueue();};tierTd.appendChild(ts);
     const rateTd=document.createElement('td');rateTd.className='rate-col';
     const ri=document.createElement('input');ri.type='number';ri.min='0';ri.max='100';ri.step='0.001';
-    ri.placeholder='0.000';ri.value=it.rate||'';ri.style.width='84px';
+    ri.placeholder='0.000';ri.value=it.rate??'';ri.style.width='84px';
     ri.oninput=()=>{it.rate=ri.value;saveQueue();};rateTd.appendChild(ri);
     // พารามิเตอร์ที่เช็ค: 'เว็บ✗ รูป✓ เทรด∅ …' — ✓ must be set, ✗ must not,
     // ∅ must be blank. Shown as deep check recorded it, because what counts as
@@ -499,7 +502,7 @@ function renderRewards(){const box=$('rewardList');box.replaceChildren();
     rm.onclick=()=>{bundleRewards().splice(i,1);renderRewards();renderQueue();};
     [k,v,q,tier].forEach(el=>row.appendChild(el));
     if(current()?.type==='RANDOM'){
-      const rate=document.createElement('input');rate.type='number';rate.min='0.001';rate.max='100';rate.step='0.001';rate.style.width='100px';rate.placeholder='เรท %';rate.value=rw.rate||'';rate.setAttribute('aria-label','เรท Reward');
+      const rate=document.createElement('input');rate.type='number';rate.min='0';rate.max='100';rate.step='0.001';rate.style.width='100px';rate.placeholder='เรท %';rate.value=rw.rate??'';rate.setAttribute('aria-label','เรท Reward');
       rate.oninput=()=>{rw.rate=rate.value;renderQueue();};row.append(rate);
     }
     row.append(rm);box.appendChild(row);});}
@@ -599,7 +602,7 @@ function jobFrom(b){const random=b.type==='RANDOM';
   return {client_key:b.key,document_reference:b.document_reference||null,name:b.name,bundle_type:b.type,deliver:b.deliver,rewards:b.rewards||[],
           items:b.items.filter(it=>String(it.id).trim()).map(it=>({id:it.id,
             qty:String(parseInt(it.qty)||1),tier:it.tier||'Common',
-            rate:random?String(it.rate||'').trim():''}))};}
+            rate:random?String(it.rate??'').trim():''}))};}
 function rateGap(job){return job.bundle_type==='RANDOM'&&job.items.some(it=>!it.rate);}
 function resultGame(r){return r.submitted_values?.game||r.game||$('game').value;}
 function queuePaused(){const game=$('game').value;
