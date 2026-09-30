@@ -5,6 +5,7 @@ import threading
 import os
 import queue
 import time
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,197 @@ def test_second_launcher_reuses_server_and_opens_new_bootstrap_url(monkeypatch):
     assert http.launch_headers == {
         'X-AFC-Launcher-Secret': 'launcher-secret'
     }
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows browser discovery')
+@pytest.mark.parametrize(('browser', 'relative'), [
+    ('chrome', 'Google/Chrome/Application/chrome.exe'),
+    ('edge', 'Microsoft/Edge/Application/msedge.exe'),
+    ('firefox', 'Mozilla Firefox/firefox.exe'),
+])
+def test_selected_browser_opens_directly_with_a_fresh_token_each_time(monkeypatch, tmp_path, browser, relative):
+    import winreg
+
+    def absent_registry(*_args, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(winreg, 'OpenKey', absent_registry)
+    monkeypatch.setenv('ProgramFiles', str(tmp_path))
+    monkeypatch.setenv('ProgramFiles(x86)', str(tmp_path / 'x86'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'appdata'))
+    executable = tmp_path / relative
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    opened = []
+    default_opened = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **kwargs: opened.append((args, kwargs)))
+    monkeypatch.setattr('local_app.server.webbrowser.open', default_opened.append)
+
+    class FreshHttp(FakeHttp):
+        def launch(self, secret):
+            self.launch_token = str(int(self.launch_token) + 1)
+            return super().launch(secret)
+
+    http = FreshHttp(health={'ok': True, 'product': 'all-for-cabal-local'}, launch_token='0')
+    server = LocalServer(_paths(), _config(), http=http)
+    server.open_browser(browser)
+    server.open_browser(browser)
+
+    assert [args for args, _options in opened] == [
+        [str(executable), 'http://127.0.0.1:8000/local-start#1'],
+        [str(executable), 'http://127.0.0.1:8000/local-start#2'],
+    ]
+    assert all(options.get('shell') is False for _args, options in opened)
+    assert default_opened == []
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows App Paths registry')
+def test_browser_installed_in_custom_location_uses_registered_app_path(monkeypatch, tmp_path):
+    import winreg
+    executable = tmp_path / 'custom-browser/chrome.exe'
+    executable.parent.mkdir()
+    executable.touch()
+
+    class RegistryKey:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    monkeypatch.setattr(winreg, 'OpenKey', lambda *_args: RegistryKey())
+    monkeypatch.setattr(winreg, 'QueryValueEx', lambda *_args: (str(executable), winreg.REG_SZ))
+    for name in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+        monkeypatch.setenv(name, str(tmp_path / 'no-standard-install'))
+    opened = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **_kwargs: opened.append(args))
+    server = LocalServer(_paths(), _config(), http=FakeHttp())
+    server.open_browser('chrome')
+    assert opened == [[str(executable), 'http://127.0.0.1:8000/local-start#one-use-token']]
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows browser discovery')
+def test_successful_browser_choice_is_used_on_next_launcher_open(monkeypatch, tmp_path):
+    monkeypatch.setattr('local_app.server.webbrowser.open', lambda _url: True)
+    # Use the actual preference API while replacing only the OS browser process.
+    import winreg
+    def absent_registry(*_args):
+        raise FileNotFoundError
+    monkeypatch.setattr(winreg, 'OpenKey', absent_registry)
+    for name in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+        monkeypatch.setenv(name, str(tmp_path))
+    executable = tmp_path / 'Microsoft/Edge/Application/msedge.exe'
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    opened = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **_kwargs: opened.append(args))
+    paths = _paths()
+    LocalServer(paths, _config(), http=FakeHttp()).open_browser('edge')
+    LocalServer(paths, _config(), http=FakeHttp()).open_browser()
+    assert len(opened) == 2
+    assert all(args[0] == str(executable) for args in opened)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows Launcher UI')
+def test_launcher_selection_routes_open_button_to_selected_browser(monkeypatch, tmp_path):
+    import tkinter as tk
+    import winreg
+    def absent_registry(*_args):
+        raise FileNotFoundError
+    monkeypatch.setattr(winreg, 'OpenKey', absent_registry)
+    for name in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+        monkeypatch.setenv(name, str(tmp_path))
+    executable = tmp_path / 'Mozilla Firefox/firefox.exe'
+    executable.parent.mkdir()
+    executable.touch()
+    opened = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **_kwargs: opened.append(args))
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        server = LocalServer(_paths(), _config(), http=FakeHttp())
+        controller = launcher.LauncherController(root, server)
+        assert tuple(controller.browser_selector['values']) == (
+            'Default (ตาม Windows)', 'Google Chrome', 'Microsoft Edge', 'Mozilla Firefox',
+        )
+        controller.browser_selector.set('Mozilla Firefox')
+        controller.open_button.invoke()
+        deadline = time.monotonic() + 2
+        while controller.status.get() != 'พร้อมใช้งาน' and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.01)
+        assert opened == [[str(executable), 'http://127.0.0.1:8000/local-start#one-use-token']]
+        assert controller.status.get() == 'พร้อมใช้งาน'
+        assert str(controller.browser_selector['state']) == 'readonly'
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows browser discovery')
+def test_missing_browser_does_not_fall_back_or_request_a_token(monkeypatch, tmp_path):
+    import winreg
+    def absent_registry(*_args):
+        raise FileNotFoundError
+    monkeypatch.setattr(winreg, 'OpenKey', absent_registry)
+    for name in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+        monkeypatch.setenv(name, str(tmp_path))
+    opened = []
+    monkeypatch.setattr('local_app.server.webbrowser.open', opened.append)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *_args, **_kwargs: opened.append('process'))
+    http = FakeHttp()
+    server = LocalServer(_paths(), _config(), http=http)
+    with pytest.raises(BrowserLaunchError, match='ไม่พบ Google Chrome'):
+        server.open_browser('chrome')
+    assert opened == []
+    assert http.launch_headers is None
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows browser discovery')
+def test_failed_browser_launch_preserves_preference_and_hides_token(monkeypatch, tmp_path):
+    import winreg
+    from local_app.browsers import read_browser_preference, save_browser_preference
+    def absent_registry(*_args):
+        raise FileNotFoundError
+    monkeypatch.setattr(winreg, 'OpenKey', absent_registry)
+    for name in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+        monkeypatch.setenv(name, str(tmp_path))
+    executable = tmp_path / 'Google/Chrome/Application/chrome.exe'
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    def failed_launch(args, **_kwargs):
+        raise OSError(f'cannot open {args}')
+    monkeypatch.setattr(subprocess, 'Popen', failed_launch)
+    paths = _paths()
+    save_browser_preference(paths.root, 'edge')
+    server = LocalServer(paths, _config(), http=FakeHttp())
+    with pytest.raises(BrowserLaunchError) as failure:
+        server.open_browser('chrome')
+    assert 'one-use-token' not in str(failure.value)
+    assert read_browser_preference(paths.root) == 'edge'
+
+
+@pytest.mark.parametrize('content', ['{', '[]', '{"browser": "unknown"}', '{"browser": []}'])
+def test_invalid_preference_defaults_to_windows_browser(monkeypatch, content):
+    paths = _paths()
+    (paths.root / 'launcher-preferences.json').write_text(content, encoding='utf-8')
+    opened = []
+    monkeypatch.setattr('local_app.server.webbrowser.open', opened.append)
+    LocalServer(paths, _config(), http=FakeHttp()).open_browser()
+    assert opened == ['http://127.0.0.1:8000/local-start#one-use-token']
+
+
+def test_preference_save_failure_does_not_cancel_browser_open(monkeypatch):
+    def failed_save(*_args):
+        raise OSError('disk full')
+    monkeypatch.setattr('local_app.server.save_browser_preference', failed_save)
+    opened = []
+    monkeypatch.setattr('local_app.server.webbrowser.open', opened.append)
+    paths = _paths()
+    result = LocalServer(paths, _config(), http=FakeHttp()).open_browser('default')
+    assert opened == [result]
+    log = (paths.logs / 'all-for-cabal-web.log').read_text(encoding='utf-8')
+    assert 'browser preference could not be saved' in log
+    assert 'one-use-token' not in log
 
 
 def test_unknown_process_on_port_8000_is_rejected():

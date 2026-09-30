@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -16,6 +17,7 @@ from typing import Any
 import uvicorn
 
 from local_app.runtime import RuntimePaths
+from local_app.browsers import browser_executable, read_browser_preference, save_browser_preference
 
 
 LOCAL_HOST = '127.0.0.1'
@@ -234,14 +236,34 @@ class LocalServer:
             'เซิร์ฟเวอร์เริ่มไม่สำเร็จภายใน 20 วินาที'
         )
 
-    def open_browser(self) -> str:
+    def open_browser(self, browser: str | None = None) -> str:
         self._check_running_version(self.http.health())
+        browser = browser if browser is not None else read_browser_preference(self.paths.root)
+        try:
+            executable = browser_executable(browser)
+        except (OSError, ValueError) as exc:
+            raise BrowserLaunchError(str(exc)) from None
         token = self.http.launch(self.config['launcher_secret'])
         url = f'{LOCAL_BASE_URL}/local-start#{token}'
-        if webbrowser.open(url) is False:
+        try:
+            if executable is None:
+                if webbrowser.open(url) is False:
+                    raise OSError
+            else:
+                subprocess.Popen(
+                    [str(executable), url], shell=False,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        except OSError:
             raise BrowserLaunchError(
-                'เปิดเบราว์เซอร์ไม่สำเร็จ กรุณากดปุ่มเปิดหน้าเว็บอีกครั้ง'
-            )
+                'เปิดเบราว์เซอร์ที่เลือกไม่สำเร็จ กรุณาลองใหม่หรือเลือกตัวอื่น'
+            ) from None
+        try:
+            save_browser_preference(self.paths.root, browser)
+        except OSError:
+            self._logger.warning('browser preference could not be saved')
         return url
 
     def restart(self) -> None:

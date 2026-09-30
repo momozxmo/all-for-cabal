@@ -8,6 +8,7 @@ import tkinter as tk
 from collections.abc import Callable
 from tkinter import messagebox, ttk
 
+from local_app.browsers import BROWSERS, read_browser_preference
 from local_app.runtime import (
     RuntimePaths,
     backup_and_migrate,
@@ -92,8 +93,8 @@ class LauncherController:
         )
 
         self.root.title('All for Cabal Web')
-        self.root.geometry('460x250')
-        self.root.minsize(420, 230)
+        self.root.geometry('460x310')
+        self.root.minsize(420, 300)
         self.root.protocol('WM_DELETE_WINDOW', self.request_close)
 
         frame = ttk.Frame(root, padding=24)
@@ -106,13 +107,22 @@ class LauncherController:
         ttk.Label(
             frame,
             text='http://127.0.0.1:8000',
-        ).pack(anchor='w', pady=(2, 18))
+        ).pack(anchor='w', pady=(2, 8))
+
+        ttk.Label(frame, text='เปิดเว็บด้วยเบราว์เซอร์').pack(anchor='w')
+        self.browser_selector = ttk.Combobox(
+            frame, state='readonly',
+            values=[label for label, _relative in BROWSERS.values()],
+        )
+        self.browser_selector.set(
+            BROWSERS[read_browser_preference(server.paths.root)][0])
+        self.browser_selector.pack(fill='x', pady=(4, 12))
 
         self.status = tk.StringVar(value='กำลังเตรียมโปรแกรม…')
         ttk.Label(
             frame,
             textvariable=self.status,
-            wraplength=400,
+            wraplength=360,
         ).pack(anchor='w', fill='x', pady=(0, 20))
 
         actions = ttk.Frame(frame)
@@ -139,12 +149,13 @@ class LauncherController:
         self.root.after(100, self._drain_messages)
 
     def start(self) -> None:
+        browser = self._selected_browser()
         self._set_controls_enabled(False)
         self._set_status('กำลังเริ่มเซิร์ฟเวอร์…')
 
         def action():
             result = self.server.ensure_started()
-            self.server.open_browser()
+            self.server.open_browser(browser)
             return result
 
         def ready(result):
@@ -157,10 +168,11 @@ class LauncherController:
         self._run_worker(action, ready)
 
     def open_web(self) -> None:
+        browser = self._selected_browser()
         self._set_controls_enabled(False)
         self._set_status('กำลังเปิดหน้าเว็บ…')
         self._run_worker(
-            self.server.open_browser,
+            lambda: self.server.open_browser(browser),
             lambda _result=None: (
                 self._set_controls_enabled(True),
                 self._set_status('พร้อมใช้งาน'),
@@ -168,12 +180,13 @@ class LauncherController:
         )
 
     def restart(self) -> None:
+        browser = self._selected_browser()
         self._set_controls_enabled(False)
         self._set_status('กำลังเริ่มเซิร์ฟเวอร์ใหม่…')
 
         def action():
             self.server.restart()
-            self.server.open_browser()
+            self.server.open_browser(browser)
 
         self._run_worker(
             action,
@@ -251,6 +264,11 @@ class LauncherController:
         state = 'normal' if enabled else 'disabled'
         self.open_button.configure(state=state)
         self.restart_button.configure(state=state)
+        self.browser_selector.configure(state='readonly' if enabled else 'disabled')
+
+    def _selected_browser(self) -> str:
+        label = self.browser_selector.get()
+        return next((key for key, (name, _relative) in BROWSERS.items() if name == label), 'default')
 
     def _set_status(self, text: str) -> None:
         self.status.set(text)

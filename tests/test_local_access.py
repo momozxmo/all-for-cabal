@@ -97,6 +97,26 @@ def test_local_token_is_single_use_and_sets_strict_httponly_cookie(
     }
 
 
+def test_each_browser_needs_a_fresh_token_without_invalidating_existing_session(
+    test_settings, test_database
+):
+    application = _local_app(test_settings, test_database)
+    first_browser = _local_client(application)
+    second_browser = _local_client(application)
+    first_token = _issue(first_browser).json()['token']
+    assert first_browser.post('/api/local/session', json={'token': first_token}).status_code == 204
+    assert first_browser.get('/bundles').status_code == 200
+
+    assert second_browser.get('/bundles').status_code == 307
+    assert second_browser.post('/api/local/session', json={'token': first_token}).status_code == 404
+    second_token = _issue(second_browser).json()['token']
+    assert second_token != first_token
+    assert second_browser.post('/api/local/session', json={'token': second_token}).status_code == 204
+    assert second_browser.get('/bundles').status_code == 200
+    assert first_browser.get('/bundles').status_code == 200
+    assert first_browser.get('/api/auth/me').json()['id'] == second_browser.get('/api/auth/me').json()['id']
+
+
 def test_local_token_expires_after_sixty_seconds(
     test_settings, test_database
 ):
