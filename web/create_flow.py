@@ -10,7 +10,8 @@ CONFIRM_CREATE_SELECTOR = (
 
 
 async def click_create_and_wait_for_write(
-        page, create_button, response_predicate, *, timeout=20000):
+        page, create_button, response_predicate, *, timeout=20000,
+        confirm_resolver=None):
     """Click Create, confirm its dialog when shown, and capture the write.
 
     Older Aztek pages write on the first click. Newer pages open a confirmation
@@ -19,20 +20,35 @@ async def click_create_and_wait_for_write(
     """
     response = None
     confirmed = False
+    confirmation_error = None
     try:
         async with page.expect_response(
                 response_predicate, timeout=timeout) as info:
             await create_button.click()
-            confirm = page.locator(CONFIRM_CREATE_SELECTOR).first
-            try:
-                await confirm.wait_for(state='visible', timeout=3000)
-            except Exception:
-                # Direct-write pages have no dialog; the first click is enough.
-                pass
+            if confirm_resolver is not None:
+                # Bundle validates its evidence-backed dialog contract. A write
+                # already observed must not trigger another confirmation click.
+                if not info.is_done():
+                    try:
+                        confirm = await confirm_resolver()
+                        if confirm is not None and not info.is_done():
+                            await confirm.click(timeout=1000)
+                            confirmed = True
+                    except Exception as exc:
+                        confirmation_error = exc
             else:
-                await confirm.click(timeout=8000)
-                confirmed = True
+                # Other flows retain their existing behavior until migrated.
+                confirm = page.locator(CONFIRM_CREATE_SELECTOR).first
+                try:
+                    await confirm.wait_for(state='visible', timeout=3000)
+                except Exception:
+                    pass
+                else:
+                    await confirm.click(timeout=8000)
+                    confirmed = True
         response = await info.value
     except Exception:
+        if confirmation_error is not None:
+            raise confirmation_error
         response = None
     return response, confirmed

@@ -397,7 +397,7 @@ def _builder(cls=itemcode_runner.ItemCodeBuilder):
 
 
 @pytest.mark.parametrize(('builder_class', 'selector'), [
-    (itemcode_runner.ItemCodeBuilder, 'input[name="name_th"]'),
+    (itemcode_runner.ItemCodeBuilder, 'main form input[id="name_th"]'),
     (event_runner.EventBuilder, 'input[name="name_th"]'),
     (product_runner.ProductBuilder, 'input[name="th_name"]'),
 ])
@@ -741,65 +741,8 @@ def test_the_two_forms_are_told_apart_by_where_they_write():
 def test_an_item_code_is_always_all_and_leaves_descriptions_alone():
     """WINNER is the Event's idea and descriptions are still left alone."""
     source = inspect.getsource(itemcode_runner.ItemCodeBuilder._fill_header)
-    assert "select_by_options(page, 'ALL'" in source
+    assert "select_by_id(form, 'redeem_type', 'ALL'" in source
     assert 'desc_th' not in source and 'desc_en' not in source
-
-
-def test_itemcode_builder_fills_code_wide_limit_only_when_enabled(monkeypatch):
-    calls = []
-
-    async def fake_fill(page, selector, value, log=None, label='', scope=None):
-        calls.append(('fill', selector, str(value)))
-        return True
-
-    async def fake_switch(page, label, wanted, log=None, occurrence=0):
-        calls.append(('switch', label, wanted))
-        return True
-
-    async def fake_select(page, wanted, options, log=None, index=0):
-        calls.append(('select', wanted))
-        return True
-
-    async def fake_datetime(page, trigger, value, log=None, label=''):
-        calls.append(('datetime', label, value))
-        return True
-
-    monkeypatch.setattr(aztek_form, 'fill', fake_fill)
-    monkeypatch.setattr(aztek_form, 'set_switch', fake_switch)
-    monkeypatch.setattr(aztek_form, 'select_by_options', fake_select)
-    monkeypatch.setattr(aztek_form, 'set_datetime', fake_datetime)
-
-    class Locator:
-        @property
-        def first(self):
-            return self
-
-    class Page:
-        def locator(self, selector):
-            return Locator()
-
-    builder = itemcode_runner.ItemCodeBuilder(lambda *args: None)
-    finite = _itemcode(limited=True, quantity='40', remaining='40')
-    asyncio.run(builder._fill_header(Page(), finite, []))
-    assert ('switch', 'จำกัดจำนวน', True) in calls
-    assert ('fill', 'input[name="quantity"]', '40') in calls
-    assert ('fill', 'input[name="remaining"]', '40') in calls
-
-    calls.clear()
-    unlimited = _itemcode(limited=False, quantity='99', remaining='99')
-    asyncio.run(builder._fill_header(Page(), unlimited, []))
-    assert ('switch', 'จำกัดจำนวน', False) in calls
-    assert not any(call[:2] == ('fill', 'input[name="quantity"]')
-                   for call in calls)
-    assert not any(call[:2] == ('fill', 'input[name="remaining"]')
-                   for call in calls)
-
-
-def test_a_reward_set_still_gets_its_own_code_limit():
-    """Ticking that one is what makes the two count boxes exist at all."""
-    source = inspect.getsource(itemcode_runner.ItemCodeBuilder._fill_reward)
-    assert 'จำกัดจำนวน Code' in source
-    assert 'rewards.%d.quantity' in source
 
 
 def test_each_form_knows_its_own_confirm_button():

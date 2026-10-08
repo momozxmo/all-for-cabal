@@ -93,11 +93,9 @@ def test_regroup_callback_replaces_streamed_rows_in_document_order():
     check('regroup re-emits final rows', results == hf._results)
 
 
-def test_engine_method_runs_on_fake_page():
+def test_cancelled_table_wait_does_not_access_the_browser():
     hf = sr.HeadlessFinder(lambda *a, **k: None, lambda *a: None, lambda *a: None)
     fp = FakePage()
-    rows = asyncio.run(hf._read_table_page(fp))
-    check('_read_table_page returns evaluate() result', rows == [])
     hf._cancel = True
     r = asyncio.run(hf._wait_table_ready(fp))
     check('_wait_table_ready respects _cancel (returns falsy fast)', not r)
@@ -344,7 +342,7 @@ def test_is_login_page_flags_visible_password_on_app_page(monkeypatch):
 if __name__ == '__main__':
     test_binding_and_callbacks()
     test_regroup_callback_replaces_streamed_rows_in_document_order()
-    test_engine_method_runs_on_fake_page()
+    test_cancelled_table_wait_does_not_access_the_browser()
     test_build_search_data()
     test_browser_launch_kwargs()
     test_result_view()

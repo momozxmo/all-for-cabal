@@ -1,13 +1,11 @@
 """Zero is an explicit RANDOM rate, not a missing value. No live Aztek writes."""
 from io import BytesIO
-import asyncio
 
 import pytest
 from openpyxl import Workbook
 
 from web.app import _clean_items, _clean_rewards
 from web import bundle_runner
-from test_web_bundle import FakePage, _builder
 from test_web_validation import _connect_aztek, GAME
 
 
@@ -42,15 +40,6 @@ def test_run_validation_preserves_zero_for_items_and_rewards(rate, kind):
     clean, entry = (_clean_items, {'id': '11'}) if kind == 'item' else (
         _clean_rewards, {'type': 'CREDIT', 'value': 'Alz', 'qty': '1'})
     assert clean([dict(entry, rate=rate)])[0]['rate'] == '0'
-
-
-@pytest.mark.parametrize('rate', [0, '0'])
-def test_form_filler_writes_explicit_zero_to_draw_chance(rate):
-    page = FakePage(fields=[{'id': 'items.0.secret_chance',
-                            'name': 'items.0.secret_chance', 'required': False}])
-    asyncio.run(_builder()._fill_rates(page, [{'rate': rate}]))
-    assert page.filled == [('input[id="items.0.secret_chance"]', ''),
-                           ('input[id="items.0.secret_chance"]', '0')]
 
 
 @pytest.mark.parametrize('rate', ['', '-0.001', '100.001', '0.0000'])

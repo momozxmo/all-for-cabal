@@ -2868,7 +2868,9 @@ class App:
                 await self._go_back(page, return_to)
                 return (False, '')
 
-            detail = await page.evaluate(_READ_ITEM_DETAIL)
+            reader = getattr(self, '_read_item_detail', None)
+            detail = (await reader(page, item) if reader is not None
+                      else await page.evaluate(_READ_ITEM_DETAIL))
 
             self.log(f"    web:{detail.get('webEnabled')} img:{detail.get('hasImage')} "
                      f"qty:{detail.get('qty')!r} trade:{detail.get('tradeable')} "
@@ -2949,6 +2951,8 @@ class App:
             return (True, ', '.join(notes_parts) if notes_parts else 'passed')
         except Exception as ex:
             self.log(f'    ⚠ {aztek_id}: {ex}', 'WARNING')
+            if isinstance(ex, getattr(self, '_locator_errors', ())):
+                raise
             try:
                 await self._go_back(page, return_to)
             except Exception:

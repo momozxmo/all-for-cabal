@@ -18,7 +18,12 @@ widgets, and this module knows how to drive those four:
 Nothing here clicks a save button: writing to the live site stays a decision
 the runners make.
 """
+import json
 import re
+from datetime import datetime
+
+from playwright.async_api import Error as PlaywrightError, expect
+from web.aztek_locator import AztekLocatorError, require_control
 
 # The calendar caption reads in English regardless of the page's own language.
 # Aztek may render it as one label ("July 2026") or split month and year into
@@ -93,6 +98,16 @@ async def fill(page, selector, value, log=None, label='', scope=None):
         return False
 
 
+async def fill_by_id(scope, element_id, value, label, *, tags=('input',),
+                     input_types=('text',)):
+    """Fill one verified field and report whether its value reads back."""
+    target = await require_control(
+        scope, label, element_id=element_id, tags=tags, input_types=input_types)
+    text = str(value)
+    await target.fill(text)
+    return await target.input_value() == text
+
+
 async def set_switch(page, label_text, want, log=None, occurrence=0):
     """Turn the switch named by ``label_text`` on or off."""
     try:
@@ -110,6 +125,66 @@ async def set_switch(page, label_text, want, log=None, occurrence=0):
     if result == 'clicked':
         # The fields a switch reveals arrive with an animation.
         await page.wait_for_timeout(1200)
+    return True
+
+
+async def set_switch_by_id(scope, element_id, want, label):
+    """Set a verified switch, stopping when its ID or state contract breaks."""
+    target = await require_control(
+        scope, label, element_id=element_id, tags=('button',),
+        roles=('switch',), input_types=('button',))
+    state = await target.get_attribute('aria-checked')
+    if state not in ('true', 'false'):
+        raise AztekLocatorError('Aztek: %s อ่านสถานะสวิตช์ไม่ได้' % label)
+    expected = 'true' if want else 'false'
+    if state != expected:
+        try:
+            # Wait without clicking, then atomically validate and activate.
+            # A locator shape filter alone does not protect an element that
+            # mutates while Playwright is waiting for it to become enabled.
+            await target.click(trial=True, timeout=5000)
+            activated = await target.evaluate('''(button, expected) => {
+                const state = button.getAttribute('aria-checked');
+                if (button.tagName !== 'BUTTON' || button.type !== 'button' ||
+                    button.getAttribute('role') !== 'switch' || button.disabled ||
+                    !button.isConnected || !['true','false'].includes(state)) return false;
+                if (state !== expected) button.click();
+                return true;
+            }''', expected)
+            if not activated:
+                raise AztekLocatorError('Aztek: %s ชนิด control เปลี่ยนระหว่างรอ' % label)
+            await expect(target).to_have_attribute('aria-checked', expected, timeout=5000)
+        except Exception as exc:
+            raise AztekLocatorError('Aztek: %s สถานะสวิตช์ไม่ตรงที่ขอ' % label) from exc
+    return True
+
+
+async def select_by_id(scope, element_id, wanted, label):
+    """Use the ID-bearing trigger's unique native sibling (no stable ID)."""
+    trigger = await require_control(
+        scope, label, element_id=element_id, tags=('button',),
+        roles=('combobox',), input_types=('button',))
+    native = trigger.locator('xpath=../select')
+    try:
+        # Verified Radix selects are aria-hidden and clipped to 1px, not
+        # display:none. Retain Playwright's normal actionability checks.
+        await native.wait_for(state='attached', timeout=5000)
+        if await native.count() != 1 or await native.evaluate('e => e.multiple'):
+            raise AztekLocatorError('Aztek: %s ตัวเลือกไม่ชัดเจน' % label)
+        value = str(wanted)
+        option = native.locator('option[value=%s]' % json.dumps(value))
+        await option.wait_for(state='attached', timeout=5000)
+        if await option.count() != 1:
+            raise AztekLocatorError('Aztek: %s ไม่พบค่าที่ขอหรือพบหลายตัว' % label)
+        option_label = await option.text_content()
+        await native.select_option(value=value, timeout=5000)
+        if await native.input_value() != value:
+            raise AztekLocatorError('Aztek: %s ค่าที่เลือกไม่ตรงที่ขอ' % label)
+        await expect(trigger).to_have_text(option_label, timeout=5000)
+    except AztekLocatorError:
+        raise
+    except Exception as exc:
+        raise AztekLocatorError('Aztek: %s เลือกค่าไม่ได้หรือยังไม่พร้อม' % label) from exc
     return True
 
 
@@ -282,6 +357,187 @@ async def set_datetime(page, trigger, value, log=None, label=''):
     if log:
         log('ตั้ง %s = %s' % (label, shown), 'INFO')
     return ok
+
+
+async def activate_verified_button(target, label, role=None):
+    """Activate an actionable non-submit button after its scoped lookup."""
+    try:
+        await target.click(trial=True, timeout=5000)
+        activated = await target.evaluate('''(button, role) => {
+            if (button.tagName !== 'BUTTON' || button.type !== 'button' ||
+                button.disabled || !button.isConnected ||
+                (role && button.getAttribute('role') !== role)) return false;
+            button.click();return true;
+        }''', role)
+    except PlaywrightError as exc:
+        raise AztekLocatorError('Aztek: %s ปุ่มยังไม่พร้อมหรือคลิกไม่ได้' % label) from exc
+    if not activated:
+        raise AztekLocatorError('Aztek: %s ชนิดปุ่มเปลี่ยนระหว่างรอ' % label)
+
+
+async def _related_popup(page, trigger, role, label):
+    # Runtime IDs are used only as the trigger's current ARIA relationship.
+    await expect(trigger).to_have_attribute('aria-controls', re.compile(r'\S+'), timeout=5000)
+    relation = await trigger.get_attribute('aria-controls')
+    if len(relation.split()) != 1:
+        raise AztekLocatorError('Aztek: %s ความสัมพันธ์ popup ไม่ชัดเจน' % label)
+    popup = await require_control(
+        page, label, selector='[id=%s]' % json.dumps(relation), roles=(role,))
+    await expect(popup).to_have_attribute('data-state', 'open', timeout=5000)
+    return popup
+
+
+async def set_datetime_by_id(page, scope, element_id, value, log=None, label=''):
+    """Set a verified date trigger through its own calendar/time popovers."""
+    parts = parse_datetime(value)
+    if parts is None:
+        return False
+    day, hour, minute, second = parts
+    try:
+        datetime.fromisoformat('%sT%s:%s:%s' % parts)
+    except ValueError:
+        return False
+    dialog = None
+    try:
+        trigger = await require_control(
+            scope, label, element_id=element_id, tags=('button',), input_types=('button',))
+        await activate_verified_button(trigger, label)
+        dialog = await _related_popup(page, trigger, 'dialog', label)
+        # These controls have no stable IDs in audited PC/M TH/SEA calendars.
+        for caption, value in (('Year', day[:4]), ('Month', str(int(day[5:7]) - 1))):
+            select = await require_control(
+                dialog, '%s: %s' % (label, caption),
+                selector='select[aria-label="Choose the %s"]' % caption,
+                tags=('select',), input_types=('select-one',))
+            await select.select_option(value=value, timeout=5000)
+            if await select.input_value() != value:
+                raise AztekLocatorError('Aztek: %s เดือน/ปีไม่ตรงที่ขอ' % label)
+        date_button = await require_control(
+            dialog, '%s: วันที่' % label,
+            selector='td[role="gridcell"][data-day=%s] button' % json.dumps(day),
+            tags=('button',), input_types=('button',))
+        await activate_verified_button(date_button, label)
+        wanted = '%s %s %s %s:%s:%s' % (
+            day[8:], MONTHS[int(day[5:7])-1][:3], day[:4], hour, minute, second)
+        for attempt in range(2):
+            hours = await require_control(
+                dialog, '%s: ชั่วโมง' % label,
+                selector='button[aria-label="ชั่วโมง"]', tags=('button',),
+                roles=('combobox',), input_types=('button',))
+            await activate_verified_button(hours, label, 'combobox')
+            choices = await _related_popup(page, hours, 'listbox', label)
+            option = await require_control(
+                choices, '%s: ชั่วโมง %s' % (label, hour),
+                selector='[role="option"]:text-is(%s)' % json.dumps(hour),
+                tags=('div',), roles=('option',))
+            await option.and_(choices.locator('div[role="option"]')).click(timeout=5000)
+            await expect(hours).to_have_text(hour, timeout=5000)
+            # Commit seconds before minutes, preserving the widget's order.
+            for caption, text in (('วินาที', second), ('นาที', minute)):
+                field = await require_control(
+                    dialog, '%s: %s' % (label, caption),
+                    selector='input[aria-label=%s]' % json.dumps(caption, ensure_ascii=False),
+                    tags=('input',), input_types=('text',))
+                await field.fill(text, timeout=5000)
+                await field.press('Tab', timeout=5000)
+            try:
+                await expect(trigger).to_have_text(wanted, timeout=1000)
+                return True
+            except AssertionError:
+                if attempt == 1:
+                    if log:
+                        log('ตั้ง "%s" ไม่ตรง: ขอ %s' % (label, wanted), 'WARNING')
+                    return False
+    except AztekLocatorError:
+        raise
+    except Exception as exc:
+        raise AztekLocatorError('Aztek: %s ปฏิทิน/เวลายังไม่พร้อมหรือ contract เปลี่ยน' % label) from exc
+    finally:
+        if dialog is not None and await dialog.is_visible():
+            await dialog.press('Escape', timeout=5000)
+
+
+async def pick_reward_bundle(page, form, index, bundle_id, label, log=None):
+    """Use the audited no-ID Bundle widget in the active reward's form.
+
+    The trigger, search and rows have no stable IDs. Runtime popup IDs are
+    followed only through the trigger's ARIA relationship, never cached.
+    """
+    wanted = str(bundle_id or '').strip()
+    if not re.fullmatch(r'[0-9]+', wanted):
+        return False
+    try:
+        anchor_id = 'rewards.%d.name_th' % index
+        anchor = await require_control(
+            form, label, element_id=anchor_id, tags=('input',), input_types=('text',))
+        code_id = 'rewards.%d.is_generate_code' % index
+        await require_control(
+            form, label, element_id=code_id, tags=('button',), roles=('combobox',),
+            input_types=('button',))
+        card = await require_control(
+            anchor, label,
+            selector='xpath=ancestor::div[.//*[@id="%s"]][1]' % code_id, tags=('div',))
+        owning_form = await form.element_handle(timeout=5000)
+        if owning_form is None or not await card.evaluate(
+                '(owner, form) => owner.closest("form") === form', owning_form):
+            raise AztekLocatorError('Aztek: %s ขอบเขตชุดรางวัลอยู่นอกฟอร์ม' % label)
+        section = await require_control(
+            card, label, selector='xpath=.//label[normalize-space(.)="Bundle *"]/parent::div',
+            tags=('div',))
+        change_selector = 'xpath=.//button[normalize-space(.)="เปลี่ยน"]'
+        badge_selector = 'xpath=.//div[button[normalize-space(.)="เปลี่ยน"]]/span'
+        if await section.locator(change_selector).count():
+            change = await require_control(
+                section, label + ': เปลี่ยน', selector=change_selector,
+                tags=('button',), input_types=('button',))
+            if await section.locator('xpath=.//button[normalize-space(.)="เลือก bundle"]').count():
+                raise AztekLocatorError('Aztek: %s สถานะตัวเลือกไม่ชัดเจน' % label)
+            badge = await require_control(
+                section, label + ': ค่าที่เลือก', selector=badge_selector, tags=('span',))
+            await expect(badge).to_have_text(re.compile(r'^\s*#[0-9]+\s+—\s+\S'), timeout=5000)
+            current = re.match(r'^\s*#([0-9]+)\s+—', await badge.inner_text()).group(1)
+            if current == wanted:
+                if log:
+                    log('Bundle %s ถูกเลือกอยู่แล้ว' % wanted, 'INFO')
+                return True
+            await activate_verified_button(change, label + ': เปลี่ยน')
+            await expect(change).to_have_count(0, timeout=5000)
+        trigger = await require_control(
+            section, label, selector='xpath=.//button[normalize-space(.)="เลือก bundle"]',
+            tags=('button',), input_types=('button',))
+        await expect(trigger).to_have_attribute('aria-haspopup', 'dialog', timeout=5000)
+        await activate_verified_button(trigger, label)
+        dialog = await _related_popup(page, trigger, 'dialog', label)
+        if await dialog.evaluate('el => el.tagName') != 'DIV':
+            raise AztekLocatorError('Aztek: %s ชนิด dialog ไม่ตรงกับที่ตรวจไว้' % label)
+        search = await require_control(
+            dialog, label + ': ค้นหา', selector='input[placeholder="ค้นหาด้วยชื่อหรือ id"]',
+            tags=('input',), input_types=('text',))
+        await search.fill(wanted)
+        if await search.input_value() != wanted:
+            raise AztekLocatorError('Aztek: %s คำค้นไม่ตรงที่ขอ' % label)
+        hit = await require_control(
+            dialog, label + ': รายการ',
+            selector='xpath=.//button[span[normalize-space(.)="ID: %s"]]' % wanted,
+            tags=('button',), input_types=('button',))
+        await require_control(
+            card, label, element_id=anchor_id, tags=('input',), input_types=('text',))
+        await activate_verified_button(hit, label)
+        await expect(dialog).to_be_hidden(timeout=5000)
+        badge = await require_control(
+            section, label + ': ค่าที่เลือก',
+            selector=badge_selector, tags=('span',))
+        await expect(badge).to_have_text(
+            re.compile(r'^\s*#%s\s+—\s+\S' % re.escape(wanted)), timeout=5000)
+        await require_control(
+            card, label, element_id=anchor_id, tags=('input',), input_types=('text',))
+    except AztekLocatorError:
+        raise
+    except (AssertionError, PlaywrightError) as exc:
+        raise AztekLocatorError('Aztek: %s ตัวเลือกยังไม่พร้อมหรือค่าที่เลือกไม่ตรง' % label) from exc
+    if log:
+        log('ผูก bundle %s แล้ว' % wanted, 'SUCCESS')
+    return True
 
 
 async def pick_bundle(page, scope, bundle_id, log=None):

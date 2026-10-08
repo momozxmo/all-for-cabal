@@ -6,6 +6,9 @@ from collections import Counter
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from web.aztek_locator import AztekLocatorError, require_control
+
 
 class SessionExpiredError(RuntimeError):
     """Aztek redirected a read-only verification to its login page."""
@@ -16,6 +19,174 @@ def _reward_display(value) -> str:
     text = str(value or '')
     match = re.fullmatch(r'[a-z0-9_-]+ - (.+)', text)
     return match.group(1) if match else text
+
+
+async def _read_saved_item(detail, item_url: str, item_id: str) -> dict:
+    """Read only the verified Item form after its numeric values settle."""
+    await detail.goto(item_url, wait_until='domcontentloaded', timeout=30000)
+    if any(part in urlsplit(detail.url).path.lower() for part in ('/login', '/signin')):
+        raise SessionExpiredError('เซสชัน Aztek หมดอายุ กรุณาเชื่อมใหม่ก่อนตรวจซ้ำ')
+    main = await require_control(detail, 'หน้ารายละเอียด Item', selector='main', tags=('main',))
+    await main.get_by_role('heading', name='แก้ไข Item', exact=True).wait_for(timeout=5000)
+    identity = main.get_by_text(re.compile(r'^ID:\s*[0-9]+$'))
+    expected_identity = re.compile(r'^ID:\s*' + re.escape(item_id) + r'$')
+    if urlsplit(detail.url).path != urlsplit(item_url).path or await identity.count() > 1:
+        raise ValueError('Item ID ของหน้ารายละเอียดไม่ตรงกับ Bundle')
+    try:
+        await identity.wait_for(state='visible', timeout=5000)
+    except PlaywrightTimeoutError as error:
+        raise ValueError('Item ID ของหน้ารายละเอียดไม่ตรงกับ Bundle') from error
+    if await identity.count() != 1 or not expected_identity.fullmatch(await identity.inner_text()):
+        raise ValueError('Item ID ของหน้ารายละเอียดไม่ตรงกับ Bundle')
+    form = await require_control(main, 'ฟอร์มรายละเอียด Item',
+                                 selector='form:has([id="item-name"])', tags=('form',))
+    await require_control(form, 'ชื่อ Item ที่บันทึกแล้ว', element_id='item-name',
+                          tags=('input',), input_types=('text',))
+    previous = None
+    for _ in range(18):
+        values = {}
+        for key, identifier in [('kind', 'item-game-item-id'),
+                                ('option', 'item-option'), ('duration', 'duration-index')]:
+            field = await require_control(form, '%s ของ Item %s' % (key, item_id),
+                                          element_id=identifier, tags=('input',),
+                                          input_types=('text', 'number'))
+            values[key] = await field.input_value()
+        if all(re.fullmatch(r'[0-9]+', value) for value in values.values()):
+            if values == previous:
+                if (urlsplit(detail.url).path != urlsplit(item_url).path
+                        or await identity.count() != 1 or not await identity.is_visible()
+                        or not expected_identity.fullmatch(await identity.inner_text())):
+                    raise ValueError('Item ID ของหน้ารายละเอียดไม่ตรงกับ Bundle')
+                return values
+            previous = values
+        else:
+            previous = None
+        await detail.wait_for_timeout(300)
+    raise AztekLocatorError('Aztek: ค่ารายละเอียด Item %s ยังไม่พร้อมอ่านครบ' % item_id)
+
+
+_CARD_BUTTONS = 'button[aria-label="ขยาย"][aria-expanded], button[aria-label="ย่อ"][aria-expanded]'
+_SAVED_EXPANDER_SHAPE = '''button => {
+    const form = button.closest('form'), card = button.parentElement?.parentElement;
+    return button.type === 'button' && !button.getAttribute('role') && button.form === form &&
+      button.getClientRects().length > 0 && getComputedStyle(button).visibility !== 'hidden' &&
+      ['true','false'].includes(button.getAttribute('aria-expanded')) &&
+      card && card !== form && card.closest('form') === form &&
+      card.querySelectorAll('button[aria-label="ขยาย"][aria-expanded], button[aria-label="ย่อ"][aria-expanded]').length === 1;
+}'''
+
+
+async def _saved_cards_snapshot(form):
+    """Read all occurrence identities and values in one synchronous DOM snapshot."""
+    try:
+        return await form.evaluate('''(form, buttonsSelector) => {
+      const validExpander = ''' + _SAVED_EXPANDER_SHAPE + ''';
+      const visible = el => el && el.getClientRects().length > 0 &&
+        getComputedStyle(el).visibility !== 'hidden';
+      const fail = (control, pending=false) => {throw {control, pending}};
+      const one = (scope, selector, control) => {
+        const found = scope.querySelectorAll(selector);
+        if (found.length > 1) fail(control + ' พบหลายตัว');
+        if (!found.length) fail(control + ' หาไม่พบ', true);
+        return found[0];
+      };
+      const field = (scope, name) => {
+        const labels = [...scope.querySelectorAll('label')].filter(e =>
+          e.textContent.trim().replace(/\\s*\\*$/, '') === name);
+        if (labels.length > 1) fail(name + ' กำกวม');
+        if (!labels.length || !visible(labels[0])) fail(name + ' ยังไม่พร้อมอ่าน', true);
+        return labels[0].parentElement;
+      };
+      const selection = (scope, name) => {
+        const block = field(scope, name);
+        const trigger = one(block, '[role="combobox"]', name);
+        if (trigger.tagName !== 'BUTTON' || trigger.type !== 'button') fail(name + ' ผิดชนิด');
+        if (!visible(trigger)) fail(name + ' ยังไม่พร้อมอ่าน', true);
+        const select = one(block, 'select', name);
+        if (select.type !== 'select-one') fail(name + ' ผิดชนิด');
+        if (select.selectedOptions.length !== 1) fail(name + ' ยังไม่พร้อมอ่าน', true);
+        return {value:select.value, text:select.selectedOptions[0].textContent.trim()};
+      };
+      try {
+        const marker = one(form, '[id="bundle-name"]', 'ชื่อ Bundle');
+        if (marker.tagName !== 'INPUT' || marker.type !== 'text') fail('ชื่อ Bundle ผิดชนิด');
+        if (!visible(marker)) fail('ชื่อ Bundle ยังไม่พร้อมอ่าน', true);
+        const type = selection(form, 'ประเภท Bundle').value;
+        if (!['CHOICE','FIXED','GACHAPON','GACHAPON_LIMIT','RANDOM'].includes(type))
+          fail('ประเภท Bundle ยังไม่พร้อมอ่าน', true);
+        const indexes = new Set();
+        const buttons = [...form.querySelectorAll(buttonsSelector)];
+        const countCandidates = [...form.querySelectorAll('*')].filter(e =>
+          /^รายการไอเท็ม\\s*\\(\\s*[0-9]+\\s*\\)$/.test(e.textContent.trim()));
+        const counts = countCandidates.filter(e => !countCandidates.some(other => other !== e && e.contains(other)));
+        if (counts.length > 1) fail('จำนวนแถวกำกวม');
+        if (!counts.length || !visible(counts[0])) fail('จำนวนแถวยังไม่พร้อมอ่าน', true);
+        const expected = Number(counts[0].textContent.match(/[0-9]+/)[0]);
+        if (buttons.length !== expected) fail('จำนวนแถวที่อ่านไม่ครบ', true);
+        const rows = buttons.map((button, position) => {
+          if (!validExpander(button)) fail('ปุ่มขยายการ์ดรายการที่ ' + (position + 1) + ' ผิดชนิดหรือไม่พร้อมอ่าน');
+          if (button.getAttribute('aria-expanded') !== 'true') fail('การ์ดยังไม่พร้อมอ่าน', true);
+          const card = button.parentElement.parentElement;
+          const badges = [...button.querySelectorAll('span')].filter(e =>
+            ['ITEM','CREDIT','DEBIT','MILEAGE','PLAYER_EXP','PLAYER_EXPERIENCE',
+             'WALLET_CREDIT','WALLET','WALLET_MILEAGE'].includes(e.textContent.trim()));
+          if (badges.length > 1) fail('ประเภทการ์ดกำกวม');
+          if (badges.length && !visible(badges[0])) fail('ประเภทการ์ดยังไม่พร้อมอ่าน', true);
+          const badge = badges[0]?.textContent.trim();
+          const quantity = one(card, 'input[name^="items."][name$=".quantity"]', 'Quantity');
+          if (quantity.type !== 'number') fail('Quantity ผิดชนิด');
+          const index = quantity.name.match(/^items\\.([0-9]+)\\.quantity$/)?.[1];
+          if (!index || indexes.has(index)) fail('เลขแถว Quantity กำกวมหรือไม่ตรงกับการ์ด');
+          indexes.add(index);
+          if (!visible(quantity) || !/^[0-9]+$/.test(quantity.value)) fail('Quantity ยังไม่พร้อมอ่าน', true);
+          const tier = selection(card, 'Tier').text;
+          if (!['Common','Rare','Epic','Mystic','Legend'].includes(tier)) fail('Tier ยังไม่พร้อมอ่าน', true);
+          let value = null;
+          if (badge) {
+            const label = badge === 'ITEM' ? 'Item ID' :
+              ['PLAYER_EXP','PLAYER_EXPERIENCE'].includes(badge) ? 'ชื่อ Monarchy' : 'ชื่อ';
+            const identity = one(field(card, label), 'p', label);
+            value = identity.textContent.trim();
+            if (!visible(identity) || !value || (badge === 'ITEM' && !/^[0-9]+$/.test(value)))
+              fail(label + ' ยังไม่พร้อมอ่าน', true);
+          }
+          let rate = null;
+          if (type === 'RANDOM') {
+            const draw = one(card, '[id=' + JSON.stringify('items.' + index + '.secret_chance') + ']', 'เรทสุ่ม');
+            if (draw.tagName !== 'INPUT' || draw.type !== 'number') fail('เรทสุ่มผิดชนิด');
+            if (!visible(draw) || !/^[0-9]+(?:\\.[0-9]+)?$/.test(draw.value)) fail('เรทสุ่มยังไม่พร้อมอ่าน', true);
+            rate = draw.value;
+          }
+          const types = {PLAYER_EXPERIENCE:'PLAYER_EXP',WALLET_CREDIT:'CREDIT',
+                         WALLET:'DEBIT',WALLET_MILEAGE:'MILEAGE'};
+          return {type:types[badge] || badge || null, id:badge === 'ITEM' ? value : null,
+                  value:badge === 'ITEM' ? null : value, qty:quantity.value, tier, rate, index};
+        });
+        return {rows, type};
+      } catch (error) {
+        if (error.control) return {error:error.control, pending:error.pending};
+        throw error;
+      }
+    }''', _CARD_BUTTONS, timeout=5000)
+    except PlaywrightTimeoutError as error:
+        raise AztekLocatorError('Aztek: ฟอร์มรายละเอียด Bundle ยังไม่พร้อมอ่าน') from error
+
+
+async def _ready_saved_cards(page, form):
+    previous = None
+    snapshot = {}
+    for _ in range(18):
+        snapshot = await _saved_cards_snapshot(form)
+        if snapshot.get('error'):
+            if not snapshot.get('pending'):
+                raise AztekLocatorError('Aztek: ' + snapshot['error'])
+            previous = None
+        elif snapshot == previous:
+            return snapshot
+        else:
+            previous = snapshot
+        await page.wait_for_timeout(300)
+    raise AztekLocatorError('Aztek: ' + snapshot.get('error', 'ข้อมูลการ์ดเปลี่ยนระหว่างอ่าน'))
 
 
 async def read_saved_bundle(page, url: str) -> dict:
@@ -30,41 +201,70 @@ async def read_saved_bundle(page, url: str) -> dict:
     await page.goto(url, wait_until='domcontentloaded', timeout=30000)
     if any(part in urlsplit(page.url).path.lower() for part in ('/login', '/signin')):
         raise SessionExpiredError('เซสชัน Aztek หมดอายุ กรุณาเชื่อมใหม่ก่อนตรวจซ้ำ')
-    await page.get_by_role('heading', name='แก้ไข Bundle', exact=True).wait_for()
+    main = await require_control(page, 'หน้ารายละเอียด Bundle', selector='main', tags=('main',))
+    await main.get_by_role('heading', name='แก้ไข Bundle', exact=True).wait_for(timeout=5000)
     bundle_id = parsed.path.rsplit('/', 1)[-1]
-    if (urlsplit(page.url).path != parsed.path or not await page.get_by_text(
-            re.compile(r'^ID:\s*' + re.escape(bundle_id) + r'$')).count()):
+    # No stable header ID: the saved record marker is outside forms. Item-picker
+    # results inside the form also render "ID:" and may mount during detail reads.
+    identity = main.get_by_text(re.compile(r'^ID:\s*[0-9]+$')).and_(
+        main.locator(':not(form *)'))
+    expected_identity = re.compile(r'^ID:\s*' + re.escape(bundle_id) + r'$')
+    if urlsplit(page.url).path != parsed.path or await identity.count() > 1:
         raise ValueError('Bundle ID ของหน้าที่เปิดไม่ตรงกับรายการที่สร้าง')
-    expand_all = page.get_by_role('button', name='ขยายทั้งหมด', exact=True)
-    if await expand_all.count():
-        await expand_all.click()
-    cards = page.locator('button[aria-label="ขยาย"][aria-expanded], '
-                         'button[aria-label="ย่อ"][aria-expanded]')
-    await cards.first.wait_for()
-    rows = await cards.evaluate_all('''buttons => buttons.map(button => {
-        const card = button.parentElement.parentElement;
-        const field = name => [...card.querySelectorAll('label')]
-          .find(e => e.textContent.trim().replace(/\\s*\\*$/, '') === name)?.parentElement;
-        const id = field('Item ID')?.querySelector('p')?.textContent.trim();
-        const qty = card.querySelector('input[name$=".quantity"]')?.value;
-        const badge = [...button.querySelectorAll('span')].map(e => e.textContent.trim())
-          .find(v => ['ITEM','CREDIT','DEBIT','MILEAGE','PLAYER_EXP','PLAYER_EXPERIENCE',
-            'WALLET_CREDIT','WALLET','WALLET_MILEAGE'].includes(v));
-        const tier = [...card.querySelectorAll('select')].find(s =>
-          [...s.options].some(o => o.textContent.trim() === 'Common'))?.selectedOptions[0]?.textContent.trim();
-        const rate = card.querySelector('input[name$=".secret_chance"]')?.value;
-        const value = field('ชื่อ')?.querySelector('p')?.textContent.trim()
-          || button.querySelector('p')?.textContent.trim();
-        const types = {PLAYER_EXPERIENCE:'PLAYER_EXP',WALLET_CREDIT:'CREDIT',
-          WALLET:'DEBIT',WALLET_MILEAGE:'MILEAGE'};
-        return {type: types[badge] || badge || (id ? 'ITEM' : null), id: id || null,
-          value: value || null, qty: qty ?? null, tier: tier ?? null, rate: rate ?? null};
-    })''')
-    count_text = await page.get_by_text(
-        re.compile(r'^รายการไอเท็ม\s*\(\s*\d+\s*\)$')).inner_text()
+    try:
+        await identity.wait_for(state='visible', timeout=5000)
+    except PlaywrightTimeoutError as error:
+        raise ValueError('Bundle ID ของหน้าที่เปิดไม่ตรงกับรายการที่สร้าง') from error
+    if await identity.count() != 1 or not expected_identity.fullmatch(await identity.inner_text()):
+        raise ValueError('Bundle ID ของหน้าที่เปิดไม่ตรงกับรายการที่สร้าง')
+    form = await require_control(main, 'ฟอร์มรายละเอียด Bundle',
+                                 selector='form:has([id="bundle-name"])', tags=('form',))
+    await require_control(form, 'ชื่อ Bundle ที่บันทึกแล้ว', element_id='bundle-name',
+                          tags=('input',), input_types=('text',))
+    cards = form.locator(_CARD_BUTTONS)
+    try:
+        await cards.first.wait_for(timeout=5000)
+    except PlaywrightTimeoutError as error:
+        raise AztekLocatorError('Aztek: การ์ด Bundle หาไม่พบหรือยังไม่พร้อมอ่าน') from error
+    count_label = form.get_by_text(re.compile(r'^รายการไอเท็ม\s*\(\s*\d+\s*\)$'))
+    if await count_label.count() > 1:
+        raise AztekLocatorError('Aztek: จำนวนแถวกำกวม')
+    try:
+        await count_label.wait_for(state='visible', timeout=5000)
+    except PlaywrightTimeoutError as error:
+        raise AztekLocatorError('Aztek: จำนวนแถวยังไม่พร้อมอ่าน') from error
+    count_text = await count_label.inner_text(timeout=5000)
     expected_count = int(re.search(r'\d+', count_text).group())
-    if len(rows) != expected_count:
-        raise ValueError('จำนวนแถวที่อ่านไม่ครบ: %d/%d' % (len(rows), expected_count))
+    for _ in range(18):
+        count = await cards.count()
+        if count == expected_count or count > expected_count:
+            break
+        await page.wait_for_timeout(300)
+    if count != expected_count:
+        raise ValueError('จำนวนแถวที่อ่านไม่ครบ: %d/%d' % (await cards.count(), expected_count))
+    for index in range(expected_count):
+        expander = cards.nth(index)
+        for _ in range(18):
+            if await expander.is_visible() and await expander.is_enabled():
+                break
+            await page.wait_for_timeout(300)
+        if not await expander.evaluate(_SAVED_EXPANDER_SHAPE):
+            raise AztekLocatorError('Aztek: ปุ่มขยายการ์ดรายการที่ %d ไม่ตรงกับที่ตรวจไว้' % (index + 1))
+        if await expander.get_attribute('aria-expanded') == 'false':
+            # The final click locator retains the type contract during actionability waits.
+            safe_expander = expander.and_(form.locator('button[type="button"]:not([role])'))
+            try:
+                await safe_expander.click(timeout=5000)
+            except PlaywrightTimeoutError as error:
+                raise AztekLocatorError('Aztek: ปุ่มขยายการ์ดไม่พร้อมอ่านหรือเปลี่ยนชนิด') from error
+        for _ in range(18):
+            if await expander.get_attribute('aria-expanded') == 'true':
+                break
+            await page.wait_for_timeout(300)
+        else:
+            raise AztekLocatorError('Aztek: การ์ดรายการที่ %d ยังไม่พร้อมอ่าน' % (index + 1))
+    snapshot = await _ready_saved_cards(page, form)
+    rows = snapshot['rows']
     items, rewards, unsupported = [], [], []
     detail = await page.context.new_page()
     try:
@@ -87,28 +287,18 @@ async def read_saved_bundle(page, url: str) -> dict:
                 unsupported.append(index + 1)
                 continue
             item_url = url.rsplit('/bundles/', 1)[0] + '/items/' + row['id']
-            await detail.goto(item_url, wait_until='domcontentloaded', timeout=30000)
-            if any(part in urlsplit(detail.url).path.lower() for part in ('/login', '/signin')):
-                raise SessionExpiredError('เซสชัน Aztek หมดอายุ กรุณาเชื่อมใหม่ก่อนตรวจซ้ำ')
-            await detail.get_by_role('heading', name='แก้ไข Item', exact=True).wait_for()
-            if (urlsplit(detail.url).path != urlsplit(item_url).path or
-                    not await detail.get_by_text(re.compile(
-                        r'^ID:\s*' + re.escape(row['id']) + r'$')).count()):
-                raise ValueError('Item ID ของหน้ารายละเอียดไม่ตรงกับ Bundle')
-            for key, selector in [('kind', '#item-game-item-id'),
-                                  ('option', '#item-option'),
-                                  ('duration', '#duration-index')]:
-                field = detail.locator(selector)
-                await field.wait_for(state='visible')
-                value = await field.input_value()
-                if not re.fullmatch(r'[0-9]+', value):
-                    raise ValueError('อ่าน %s ของ Item %s ไม่สำเร็จ' % (key, row['id']))
-                row[key] = value
-            items.append({key: value for key, value in row.items()
+            saved_item = dict(row, **await _read_saved_item(detail, item_url, row['id']))
+            items.append({key: value for key, value in saved_item.items()
                           if key in ('id', 'qty', 'kind', 'option', 'duration', 'tier', 'rate')
                           and value is not None})
     finally:
         await detail.close()
+    if (urlsplit(page.url).path != parsed.path or await identity.count() != 1
+            or not await identity.is_visible()
+            or not expected_identity.fullmatch(await identity.inner_text())):
+        raise ValueError('Bundle ID เปลี่ยนระหว่างอ่านรายละเอียด')
+    if await _saved_cards_snapshot(form) != snapshot:
+        raise AztekLocatorError('Aztek: ข้อมูลการ์ดเปลี่ยนระหว่างอ่าน กรุณาตรวจซ้ำ')
     return {'items': items, 'rewards': rewards,
             'complete': not unsupported, 'unsupported': unsupported}
 
@@ -240,16 +430,45 @@ async def recheck_saved_bundle(page, url: str, reference: dict | None,
                      'submitted': submitted_for_actual.get(actual_index),
                      'actual': actual['items'][actual_index],
                      'different': ['extra_item']})
-    remaining_rewards = list(actual_rewards)
-    for original in expected_rewards:
-        identity = ('type', 'value')
-        match_index = next((index for index, saved in enumerate(remaining_rewards)
-                            if all(same(key, original.get(key), saved.get(key))
-                                   for key in identity)), None)
-        saved = remaining_rewards.pop(match_index) if match_index is not None else None
-        sent = next((entry for entry in submitted.get('rewards') or []
-                     if all(same(key, original.get(key), entry.get(key))
-                            for key in identity)), None)
+    identity = ('type', 'value')
+    reward_matches = {}
+
+    def match_reward(source_index, seen):
+        original = expected_rewards[source_index]
+        for actual_index, saved in enumerate(actual_rewards):
+            if (actual_index in seen
+                    or not all(same(key, original.get(key), saved.get(key)) for key in identity)
+                    or any(original.get(key) not in (None, '') and saved.get(key) not in (None, '')
+                           and not same(key, original[key], saved[key]) for key in ('qty', 'tier', 'rate'))):
+                continue
+            seen.add(actual_index)
+            if actual_index not in reward_matches or match_reward(reward_matches[actual_index], seen):
+                reward_matches[actual_index] = source_index
+                return True
+        return False
+
+    for source_index in range(len(expected_rewards)):
+        match_reward(source_index, set())
+    reward_sources = {source: actual_index for actual_index, source in reward_matches.items()}
+    remaining_rewards = [index for index in range(len(actual_rewards)) if index not in reward_matches]
+    remaining_sent_rewards = list(submitted.get('rewards') or [])
+    for source_index, original in enumerate(expected_rewards):
+        actual_index = reward_sources.get(source_index)
+        if actual_index is None:
+            actual_index = next((index for index in remaining_rewards
+                                 if all(same(key, original.get(key), actual_rewards[index].get(key))
+                                        for key in identity)), None)
+            if actual_index is not None:
+                remaining_rewards.remove(actual_index)
+        saved = actual_rewards[actual_index] if actual_index is not None else None
+        sent_index = next((index for index, entry in enumerate(remaining_sent_rewards)
+                           if all(same(key, original.get(key), entry.get(key)) for key in identity)
+                           and all(original.get(key) in (None, '') or entry.get(key) in (None, '')
+                                   or same(key, original[key], entry[key]) for key in ('qty', 'tier', 'rate'))), None)
+        if sent_index is None:
+            sent_index = next((index for index, entry in enumerate(remaining_sent_rewards)
+                               if all(same(key, original.get(key), entry.get(key)) for key in identity)), None)
+        sent = remaining_sent_rewards.pop(sent_index) if sent_index is not None else None
         different = ['missing_reward' if actual['complete'] else 'unreadable_reward'] if saved is None else [
             key for key in ('qty', 'tier', 'rate')
             if original.get(key) not in (None, '')
@@ -264,7 +483,8 @@ async def recheck_saved_bundle(page, url: str, reference: dict | None,
         rows.append({'source_row': original.get('source_row'), 'original': original,
                      'submitted': sent, 'actual': saved, 'different': different})
     if 'rewards' in reference:
-        for saved in remaining_rewards:
+        for actual_index in remaining_rewards:
+            saved = actual_rewards[actual_index]
             rows.append({'source_row': None, 'original': None, 'submitted': None,
                          'actual': saved, 'different': ['extra_reward']})
             if 'document_rewards' not in differences:

@@ -4,7 +4,20 @@ import asyncio
 import pytest
 from playwright.async_api import async_playwright
 
+from web.aztek_locator import AztekLocatorError
 from web.bundle_recheck import SessionExpiredError, read_saved_bundle, recheck_saved_bundle
+
+_TIER = '''<div><label>Tier *</label><button type="button" role="combobox">Common</button>
+<select><option value="0" selected>Common</option></select></div>'''
+
+def _saved_page(content, bundle_type='FIXED'):
+    # The verified saved page keeps its record heading/ID outside the form;
+    # picker-result IDs belong inside it. Preserve the supplied wrong-ID cases.
+    heading_and_id, end_id, cards = content.partition('</p>')
+    assert content.lstrip().startswith('<h1>แก้ไข Bundle</h1><p>ID: ') and end_id
+    return f'''<main>{heading_and_id}{end_id}<form><input id="bundle-name" value="Saved">
+    <div><label>ประเภท Bundle *</label><button type="button" role="combobox">{bundle_type}</button>
+    <select><option selected>{bundle_type}</option></select></div>{cards}</form></main>'''
 
 
 @pytest.mark.parametrize('reward_kind,reward_value', [
@@ -90,15 +103,18 @@ def test_saved_reader_expands_rows_and_reads_fresh_item_details(change, outcome)
                     <div>รายการไอเท็ม ( 2 )</div>
                     <button onclick="document.querySelectorAll('[hidden]').forEach(e=>e.hidden=false)">ขยายทั้งหมด</button>'''
                     for index in range(2):
-                        body += f'''<div><div><button aria-label="ขยาย" aria-expanded="false">ITEM stale cached attributes</button></div>
+                        body += f'''<div><div><button type="button" aria-label="ขยาย" aria-expanded="false"
+                        onclick="this.setAttribute('aria-expanded','true');this.parentElement.nextElementSibling.hidden=false"><span>ITEM</span> stale cached attributes</button></div>
                         <div hidden><div><label>Item ID</label><p>91</p></div>
-                        <label>จำนวน (Quantity)</label><input name="items.{index}.quantity" value="{index + 1}"></div></div>'''
+                        <label>จำนวน (Quantity)</label><input name="items.{index}.quantity" type="number" value="{index + 1}">{_TIER}</div></div>'''
+                    body = _saved_page(body)
                 elif path.endswith('/items/91'):
                     displayed_id = '92' if change == 'wrong_detail_id' else '91'
-                    body = f'''<h1>แก้ไข Item</h1><p>ID: {displayed_id}</p>
+                    body = f'''<main><h1>แก้ไข Item</h1><p>ID: {displayed_id}</p>
+                    <form><input id="item-name" value="Item">
                     <input id="item-game-item-id" value="123">
                     <input id="item-option" value="0">
-                    <input id="duration-index" value="9">'''
+                    <input id="duration-index" value="9"></form></main>'''
                 else:
                     raise AssertionError(path)
                 await route.fulfill(content_type='text/html; charset=utf-8', body=body)
@@ -112,8 +128,8 @@ def test_saved_reader_expands_rows_and_reads_fresh_item_details(change, outcome)
                 return
             result = await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
             assert result == {'items': [
-                {'id': '91', 'qty': '1', 'kind': '123', 'option': '0', 'duration': '9'},
-                {'id': '91', 'qty': '2', 'kind': '123', 'option': '0', 'duration': '9'},
+                {'id': '91', 'qty': '1', 'kind': '123', 'option': '0', 'duration': '9', 'tier': 'Common'},
+                {'id': '91', 'qty': '2', 'kind': '123', 'option': '0', 'duration': '9', 'tier': 'Common'},
             ], 'rewards': [], 'complete': True, 'unsupported': []}
             assert any(url.endswith('/items/91') for url in visited)
             reference = {'game': 'Cabal PC', 'items': [
@@ -171,10 +187,10 @@ def test_saved_reader_rejects_missing_cards_instead_of_reporting_complete():
             context = await browser.new_context()
             page = await context.new_page()
             await page.route('**/*', lambda route: route.fulfill(
-                content_type='text/html; charset=utf-8', body='''
+                content_type='text/html; charset=utf-8', body=_saved_page('''
                 <h1>แก้ไข Bundle</h1><p>ID: 42</p>
                 <div>รายการไอเท็ม ( 2 )</div><button>ขยายทั้งหมด</button>
-                <div><div><button aria-label="ย่อ" aria-expanded="true">CREDIT</button></div></div>'''))
+                <div><div><button aria-label="ย่อ" aria-expanded="true">CREDIT</button></div></div>''')))
             with pytest.raises(ValueError, match='จำนวนแถว'):
                 await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
             await browser.close()
@@ -189,21 +205,26 @@ def test_saved_reader_reads_reward_tier_and_random_rate_from_saved_cards():
             context = await browser.new_context()
             async def serve(route):
                 if route.request.url.endswith('/items/91'):
-                    body = '''<h1>แก้ไข Item</h1><p>ID: 91</p>
+                    body = '''<main><h1>แก้ไข Item</h1><p>ID: 91</p>
+                    <form><input id="item-name" value="Item">
                     <input id="item-game-item-id" value="123">
-                    <input id="item-option" value="0"><input id="duration-index" value="9">'''
+                    <input id="item-option" value="0"><input id="duration-index" value="9"></form></main>'''
                 else:
-                    body = '''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม ( 2 )</div>
+                    body = f'''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม ( 2 )</div>
                     <button onclick="document.querySelectorAll('[hidden]').forEach(e=>e.hidden=false)">ขยายทั้งหมด</button>
-                    <div><div><button aria-label="ขยาย" aria-expanded="false"><span>ITEM</span></button></div>
+                    <div><div><button type="button" aria-label="ขยาย" aria-expanded="false"
+                    onclick="this.setAttribute('aria-expanded','true');this.parentElement.nextElementSibling.hidden=false"><span>ITEM</span></button></div>
                     <div hidden><div><label>Item ID</label><p>91</p></div>
-                    <input name="items.0.quantity" value="2">
-                    <select><option selected>Common</option></select>
-                    <input name="items.0.secret_chance" value="60"></div></div>
-                    <div><div><button aria-label="ขยาย" aria-expanded="false"><p>Player Experience - PC</p><span>PLAYER_EXP</span></button></div>
-                    <div hidden><input name="items.1.quantity" value="6">
-                    <select><option selected>Common</option></select>
-                    <input name="items.1.secret_chance" value="40"></div></div>'''
+                    <input name="items.0.quantity" type="number" value="2">
+                    {_TIER}
+                    <input id="items.0.secret_chance" name="items.0.secret_chance" type="number" value="60"></div></div>
+                    <div><div><button type="button" aria-label="ขยาย" aria-expanded="false"
+                    onclick="this.setAttribute('aria-expanded','true');this.parentElement.nextElementSibling.hidden=false"><p>Player Experience - PC</p><span>PLAYER_EXP</span></button></div>
+                    <div hidden><div><label>ชื่อ Monarchy</label><p>Player Experience - PC</p></div>
+                    <input name="items.1.quantity" type="number" value="6">
+                    {_TIER}
+                    <input id="items.1.secret_chance" name="items.1.secret_chance" type="number" value="40"></div></div>'''
+                    body = _saved_page(body, 'RANDOM')
                 await route.fulfill(content_type='text/html; charset=utf-8', body=body)
             await context.route('**/*', serve)
             page = await context.new_page()
@@ -224,19 +245,120 @@ def test_single_saved_card_does_not_require_expand_all_button():
             context = await browser.new_context()
             page = await context.new_page()
             async def serve(route):
-                body = ('''<h1>แก้ไข Item</h1><p>ID: 91</p>
+                body = ('''<main><h1>แก้ไข Item</h1><p>ID: 91</p>
+                    <form><input id="item-name" value="Item">
                     <input id="item-game-item-id" value="123"><input id="item-option" value="0">
-                    <input id="duration-index" value="9">'''
+                    <input id="duration-index" value="9"></form></main>'''
                     if route.request.url.endswith('/items/91') else
-                    '''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
-                    <div><div><button aria-label="ย่อ" aria-expanded="true">ITEM</button></div>
+                    f'''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
+                    <div><div><button type="button" aria-label="ย่อ" aria-expanded="true"><span>ITEM</span></button></div>
                     <div><div><label>Item ID</label><p>91</p></div>
-                    <input name="items.0.quantity" value="1"></div></div>''')
+                    <input name="items.0.quantity" type="number" value="1">{_TIER}</div></div>''')
+                if route.request.url.endswith('/bundles/42'):
+                    body = _saved_page(body)
                 await route.fulfill(content_type='text/html; charset=utf-8', body=body)
             await context.route('**/*', serve)
             result = await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
             assert result['complete'] is True
             assert result['items'][0]['id'] == '91'
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('field', ['item-game-item-id', 'item-option', 'duration-index'])
+@pytest.mark.parametrize('defect', ['missing', 'duplicate', 'wrong_type', 'hidden'])
+def test_saved_item_contract_failure_cannot_use_a_misleading_fallback(field, defect):
+    """A page-wide/name-based read must not turn a broken ID into a pass."""
+    async def scenario():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            context = await browser.new_context()
+
+            async def serve(route):
+                assert route.request.method == 'GET'
+                if route.request.url.endswith('/bundles/42'):
+                    body = f'''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
+                    <div><div><button type="button" aria-label="ย่อ" aria-expanded="true"><span>ITEM</span></button></div>
+                    <div><label>Item ID</label><p>91</p><input name="items.0.quantity" type="number" value="1">{_TIER}</div></div>'''
+                    body = _saved_page(body)
+                else:
+                    values = {'item-game-item-id': '123', 'item-option': '0', 'duration-index': '9'}
+                    controls = ''
+                    for identifier, value in values.items():
+                        control = f'<input id="{identifier}" value="{value}">'
+                        if identifier == field:
+                            if defect == 'missing':
+                                control = f'<input name="{identifier}" value="{value}">'
+                            elif defect == 'duplicate':
+                                control += control
+                            elif defect == 'wrong_type':
+                                control = f'<textarea id="{identifier}">{value}</textarea>'
+                            else:
+                                control = f'<input id="{identifier}" value="{value}" hidden>'
+                        controls += control
+                    # A correct-looking ID outside the verified form is not evidence.
+                    body = f'''<input id="{field}" value="{values[field]}">
+                    <main><h1>แก้ไข Item</h1><p>ID: 91</p>
+                    <form><input id="item-name" value="Item">{controls}</form></main>'''
+                await route.fulfill(content_type='text/html; charset=utf-8', body=body)
+
+            await context.route('**/*', serve)
+            page = await context.new_page()
+            with pytest.raises(AztekLocatorError):
+                await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
+            await browser.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('mode', ['outside_decoys', 'delayed_values', 'wrong_identity',
+                                  'delayed_identity', 'hidden_identity', 'identity_disappears'])
+def test_saved_item_read_uses_ready_values_in_the_verified_form(mode):
+    """Fresh form values, not external decoys or early empty hydration, win."""
+    async def scenario():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            context = await browser.new_context()
+
+            async def serve(route):
+                assert route.request.method == 'GET'
+                if route.request.url.endswith('/bundles/42'):
+                    body = f'''<h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
+                    <div><div><button type="button" aria-label="ย่อ" aria-expanded="true"><span>ITEM</span></button></div>
+                    <div><label>Item ID</label><p>91</p><input name="items.0.quantity" type="number" value="1">{_TIER}</div></div>'''
+                    body = _saved_page(body)
+                else:
+                    identity = '92' if mode == 'wrong_identity' else '91'
+                    body = f'''<aside><p>ID: 91</p><input id="item-game-item-id" value="999">
+                    <input id="item-option" value="999"><input id="duration-index" value="999"></aside>
+                    <main><h1>แก้ไข Item</h1><p>ID: {identity}</p>
+                    <form><input id="item-name" value="Item">
+                    <input id="item-game-item-id" value="123"><input id="item-option" value="0">
+                    <input id="duration-index" value="9"></form></main>'''
+                    if mode == 'delayed_values':
+                        body = body.replace('value="123"', 'value=""').replace('value="0"', 'value=""').replace('value="9"', 'value=""')
+                        body += '''<script>setTimeout(()=>{const f=document.querySelector('form');
+                        f.querySelector('[id="item-game-item-id"]').value='123';
+                        f.querySelector('[id="item-option"]').value='0';
+                        f.querySelector('[id="duration-index"]').value='9'},700)</script>'''
+                    elif mode == 'delayed_identity':
+                        body = body.replace('<p>ID: 91</p>\n                    <form>', '<p id="record-identity"></p>\n                    <form>')
+                        body += '''<script>setTimeout(()=>{document.getElementById('record-identity').textContent='ID: 91'},700)</script>'''
+                    elif mode == 'hidden_identity':
+                        body = body.replace('<main><h1>แก้ไข Item</h1><p>ID: 91</p>',
+                                            '<main><h1>แก้ไข Item</h1><p hidden>ID: 91</p><p>ID: 92</p>')
+                    elif mode == 'identity_disappears':
+                        body += '''<script>setTimeout(()=>{document.querySelector('main p').hidden=true},150)</script>'''
+                await route.fulfill(content_type='text/html; charset=utf-8', body=body)
+
+            await context.route('**/*', serve)
+            page = await context.new_page()
+            if mode in ('wrong_identity', 'hidden_identity', 'identity_disappears'):
+                with pytest.raises(ValueError, match='Item ID'):
+                    await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
+            else:
+                result = await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
+                assert result == {'items': [dict(id='91', qty='1', kind='123', option='0', duration='9', tier='Common')],
+                                  'rewards': [], 'complete': True, 'unsupported': []}
             await browser.close()
     asyncio.run(scenario())
 
@@ -252,12 +374,12 @@ def test_saved_reward_badges_match_template_types(badge, kind):
             context = await browser.new_context()
             page = await context.new_page()
             await context.route('**/*', lambda route: route.fulfill(
-                content_type='text/html; charset=utf-8', body=f'''
+                content_type='text/html; charset=utf-8', body=_saved_page(f'''
                 <h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
-                <div><div><button aria-label="ย่อ" aria-expanded="true"><p>Pirate Coin</p><span>{badge}</span></button></div>
-                <div><div><label>ชื่อ</label><p>Pirate Coin</p></div>
-                <input name="items.0.quantity" value="2">
-                <select><option selected>Common</option></select></div></div>'''))
+                <div><div><button type="button" aria-label="ย่อ" aria-expanded="true"><p>Pirate Coin</p><span>{badge}</span></button></div>
+                <div><div><label>{'ชื่อ Monarchy' if badge == 'PLAYER_EXPERIENCE' else 'ชื่อ'}</label><p>Pirate Coin</p></div>
+                <input name="items.0.quantity" type="number" value="2">
+                {_TIER}</div></div>''')))
             result = await read_saved_bundle(page, 'https://aztek.test/combo/cabalpc/shop/bundles/42')
             assert result['complete'] is True
             assert result['rewards'] == [dict(type=kind, value='Pirate Coin', qty='2', tier='Common')]
@@ -315,11 +437,11 @@ def test_item_detail_login_redirect_stops_recheck_immediately():
             async def serve(route):
                 path = route.request.url
                 if path.endswith('/bundles/42'):
-                    await route.fulfill(content_type='text/html; charset=utf-8', body='''
+                    await route.fulfill(content_type='text/html; charset=utf-8', body=_saved_page(f'''
                         <h1>แก้ไข Bundle</h1><p>ID: 42</p><div>รายการไอเท็ม (1)</div>
-                        <div><div><button aria-label="ย่อ" aria-expanded="true"><span>ITEM</span></button></div>
+                        <div><div><button type="button" aria-label="ย่อ" aria-expanded="true"><span>ITEM</span></button></div>
                         <div><label>Item ID</label><p>91</p>
-                        <input name="items.0.quantity" value="1"></div></div>''')
+                        <input name="items.0.quantity" type="number" value="1">{_TIER}</div></div>'''))
                 elif path.endswith('/items/91'):
                     await route.fulfill(content_type='text/html',
                                         body='<script>location.replace("/login")</script>')

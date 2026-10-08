@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import aztek_core as core
 
 from web import item_service, search_runner
+from web.aztek_locator import AztekLocatorError
 from web.audit import write_audit
 from web.browser_gate import BrowserOperationGate
 from web.models import Job, User, utc_now
@@ -436,6 +437,12 @@ class SearchCoordinator:
             outcome['reason'] = str(error)
             say({'type': 'error', 'code': 'aztek_session_expired',
                  'msg': str(error)})
+            say({'type': 'done', 'count': 0, 'not_found': []})
+        except AztekLocatorError as error:
+            outcome['code'] = 'aztek_locator_changed'
+            outcome['reason'] = str(error)
+            say({'type': 'error', 'code': 'aztek_locator_changed',
+                 'msg': str(error) + ' — หยุดค้นหาแล้ว กรุณาตรวจหน้า Aztek ก่อนลองใหม่'})
             say({'type': 'done', 'count': 0, 'not_found': []})
         except core.BrowserBusy as error:
             outcome['code'] = 'browser_busy'

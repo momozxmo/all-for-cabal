@@ -6,6 +6,7 @@ from playwright.async_api import async_playwright
 
 import item_finder
 from web import browser_launch, item_service
+from web.aztek_locator import AztekLocatorError, require_control
 
 # The desktop tool targets the v1 host (its own logged-in Chrome profile). The
 # web app's users log in to the v2 host, so web searches must run against v2.
@@ -64,6 +65,8 @@ class _ImmediateRoot:
 
 
 class HeadlessFinder:
+    _locator_errors = (AztekLocatorError,)
+
     def __init__(self, on_log, on_result, on_progress, *, occurrences=None,
                  on_reset=None):
         self._on_log = on_log
@@ -146,6 +149,225 @@ _ENGINE_METHODS = (
 for _method_name in _ENGINE_METHODS:
     setattr(HeadlessFinder, _method_name, getattr(item_finder.App, _method_name))
 del _method_name
+
+
+async def _apply_id_first_filters(self, page, criteria):
+    if not criteria.get('kind'):
+        return
+    # Live PC/M list: search has no stable ID; only this main/form exception
+    # is allowed. Option/Duration remain Python filters to retain pagination.
+    main = await require_control(page, 'Item Finder main', selector='main', tags=('main',))
+    form = await require_control(
+        main, 'ฟอร์มค้นหา Item',
+        selector='form:has(input[placeholder="ค้นหา Item..."])', tags=('form',))
+    box = await require_control(
+        form, 'ช่องค้นหา Item', selector='input[placeholder="ค้นหา Item..."]',
+        tags=('input',), input_types=('text',))
+    submit = await require_control(
+        form, 'ปุ่มค้นหา Item', selector='button[type="submit"]', tags=('button',))
+    await box.fill(criteria['kind'])
+    self.log('  Top search: %s' % criteria['kind'], 'INFO')
+    await submit.click()
+    await page.wait_for_timeout(1500)
+    await self._wait_table_ready(page)
+
+
+HeadlessFinder._apply_filters = _apply_id_first_filters
+
+
+async def _read_id_first_detail(self, page, item):
+    main = await require_control(page, 'Item detail main', selector='main', tags=('main',))
+    form = await require_control(
+        main, 'ฟอร์มรายละเอียด Item', selector='form:has([id="item-name"])', tags=('form',))
+    await require_control(form, 'ชื่อ Item', element_id='item-name', tags=('input',), input_types=('text',))
+    for key, element_id, label in (
+            ('item_kind', 'item-game-item-id', 'ItemKind'),
+            ('item_option', 'item-option', 'ItemOption'),
+            ('duration_index', 'duration-index', 'DurationIndex')):
+        field = await require_control(form, label, element_id=element_id, tags=('input',),
+                                      input_types=('text', 'number'))
+        if (await field.input_value()).strip() != str(item.get(key, '')).strip():
+            raise AztekLocatorError('Aztek: %s ในรายละเอียดไม่ตรงกับแถว Item ที่ค้นหา' % label)
+    description = await require_control(
+        form, 'คำอธิบาย Item', element_id='item-detail', tags=('textarea',))
+    enabled = await require_control(
+        form, 'แสดงผลบนเว็บ', element_id='display-option-enable', tags=('button',), roles=('switch',))
+    trade = await require_control(
+        form, 'แลกเปลี่ยนได้', element_id='game-tradeable', tags=('button',), roles=('checkbox',))
+    web_state = await enabled.get_attribute('aria-checked')
+    trade_state = await trade.get_attribute('aria-checked')
+    if web_state not in ('true', 'false'):
+        raise AztekLocatorError('Aztek: แสดงผลบนเว็บ อ่านสถานะไม่ได้')
+    if trade_state not in ('true', 'false'):
+        raise AztekLocatorError('Aztek: แลกเปลี่ยนได้ อ่านสถานะไม่ได้')
+    web_enabled = web_state == 'true'
+    detail = {'webEnabled': web_enabled, 'tradeable': trade_state == 'true',
+              'qty': '', 'critVal': '', 'drillable': None,
+              'desc': (await description.input_value()).strip(), 'hasImage': False}
+    if web_enabled:
+        for key, element_id, label in (
+                ('qty', 'displayOptions-quantity', 'จำนวน'),
+                ('critVal', 'displayOptions-critical', 'คริติคอล')):
+            target = await require_control(form, label, element_id=element_id, tags=('input',),
+                                           input_types=('text', 'number'))
+            detail[key] = (await target.input_value()).strip()
+        drill = await require_control(
+            form, 'เจาะรูได้', element_id='displayOptions-is_slotable', tags=('button',), roles=('checkbox',))
+        drill_state = await drill.get_attribute('aria-checked')
+        if drill_state not in ('true', 'false'):
+            raise AztekLocatorError('Aztek: เจาะรูได้ อ่านสถานะไม่ได้')
+        detail['drillable'] = drill_state == 'true'
+    # The saved image has no stable ID. Scope the observed Preview exception
+    # to this form so unrelated branding images cannot satisfy image criteria.
+    previews = form.locator('img[alt="Preview"]')
+    if await previews.count() > 1:
+        raise AztekLocatorError('Aztek: รูป Preview พบหลายเป้าหมายในฟอร์ม Item')
+    if await previews.count() == 1:
+        preview = await require_control(form, 'รูป Preview', selector='img[alt="Preview"]', tags=('img',))
+        try:
+            await preview.evaluate('''img => new Promise((resolve, reject) => {
+                if (img.complete) return resolve();
+                const timer = setTimeout(() => reject(new Error('Preview timeout')), 5000);
+                img.addEventListener('load', () => {clearTimeout(timer); resolve();}, {once:true});
+                img.addEventListener('error', () => {clearTimeout(timer); resolve();}, {once:true});
+            })''')
+        except Exception as error:
+            raise AztekLocatorError('Aztek: รูป Preview ยังโหลดไม่เสร็จ') from error
+        detail['hasImage'] = await preview.evaluate(
+            'img => img.naturalWidth > 0 && img.naturalHeight > 0 '
+            '&& !!img.src && !img.src.startsWith("data:") && img.getBoundingClientRect().width > 30')
+    return detail
+
+
+HeadlessFinder._read_item_detail = _read_id_first_detail
+
+
+async def _read_scoped_table_state(self, page):
+    main = await require_control(page, 'Item Finder main', selector='main', tags=('main',))
+    tables = main.locator('table')
+    empty = main.locator('p:text-is("ไม่พบ Item ที่ตรงกับเงื่อนไข")')
+    if await empty.count() > 1 or (await empty.count() and await tables.count()):
+        raise AztekLocatorError('Aztek: สถานะตาราง Item พบหลายเป้าหมาย')
+    if not await tables.count():
+        # Observed completed-empty state removes the table entirely. Absence
+        # alone is not evidence of zero results while the SPA is loading.
+        return {'rows': [], 'ready': await empty.count() == 1 and await empty.is_visible()}
+    table = await require_control(main, 'ตาราง Item', selector='table', tags=('table',))
+    data = await table.evaluate('''table => {
+        const headers = [...table.querySelectorAll('thead th')].map(
+            th => (th.innerText || '').replace(/\\s+/g, ' ').trim());
+        const fields = {aztek_id:'Aztek Item Id', item_name:'ชื่อ', item_kind:'ItemKind',
+                        item_option:'ItemOption', duration_index:'DurationIndex'};
+        const indexes = {};
+        for (const [field, label] of Object.entries(fields)) {
+            if (headers.filter(text => text === label).length !== 1)
+                return {error:label};
+            indexes[field] = headers.indexOf(label);
+        }
+        const rows = [];
+        let loading = false;
+        for (const tr of table.querySelectorAll('tbody tr')) {
+            const cells = [...tr.querySelectorAll('td')];
+            // Empty/loading state uses one colspan cell, not an Item record.
+            if (cells.length === 1 && cells[0].hasAttribute('colspan')) { loading = true; continue; }
+            if (!cells.length) continue;
+            if (cells.length < headers.length) return {error:'จำนวนคอลัมน์'};
+            const row = {};
+            for (const [field, index] of Object.entries(indexes))
+                row[field] = (cells[index].innerText || '').trim();
+            if (!/^\\d+$/.test(row.aztek_id)) return {error:'Aztek Item Id'};
+            rows.push(row);
+        }
+        return {rows, ready:rows.length > 0 && !loading};
+    }''')
+    if data.get('error'):
+        raise AztekLocatorError('Aztek: ตาราง Item อ่านคอลัมน์ %s ไม่ได้แน่นอน' % data['error'])
+    return data
+
+
+HeadlessFinder._read_table_state = _read_scoped_table_state
+
+
+async def _read_scoped_table(self, page):
+    data = await self._read_table_state(page)
+    if not data['ready']:
+        raise AztekLocatorError('Aztek: ตาราง Item ยังโหลดไม่เสร็จ หยุดก่อนอ่านผล')
+    return data['rows']
+
+
+HeadlessFinder._read_table_page = _read_scoped_table
+
+
+async def _wait_scoped_table(self, page, tries=10, interval=250):
+    last, stable = None, 0
+    for _ in range(tries):
+        if self._cancel:
+            return
+        data = await self._read_table_state(page)
+        signature = tuple(tuple(row.values()) for row in data['rows']) if data['ready'] else None
+        stable = stable + 1 if signature is not None and signature == last else 0
+        if stable >= 2:
+            return
+        last = signature
+        await page.wait_for_timeout(interval)
+    raise AztekLocatorError('Aztek: ตาราง Item ยังไม่นิ่ง หยุดก่อนอ่านผล')
+
+
+async def _go_scoped_next_page(self, page, prev_first_id=None):
+    state = await self._read_table_state(page)
+    if state['ready'] and not state['rows']:
+        return False
+    main = await require_control(page, 'Item Finder main', selector='main', tags=('main',))
+    next_button = await require_control(
+        main, 'หน้าถัดไป Item', selector='button:text-is("Next ›")', tags=('button',))
+    if not await next_button.is_enabled():
+        return False
+    await next_button.click()
+    for _ in range(20):
+        if self._cancel:
+            return False
+        state = await self._read_table_state(page)
+        rows = state['rows'] if state['ready'] else []
+        first_id = rows[0]['aztek_id'] if rows else None
+        if rows and first_id != prev_first_id:
+            await self._wait_table_ready(page)
+            return True
+        await page.wait_for_timeout(250)
+    raise AztekLocatorError('Aztek: หน้าถัดไป Item ไม่เปลี่ยนผล หยุดก่อนอ่านซ้ำ')
+
+
+async def _dump_scoped_pager(self, page):
+    if self._pager_dumped:
+        return
+    self._pager_dumped = True
+    self.log('  [pager] อ่าน Next ภายใน Item main; กรอง Option/Duration หลังอ่านครบทุกหน้า', 'INFO')
+
+
+HeadlessFinder._wait_table_ready = _wait_scoped_table
+HeadlessFinder._go_next_page = _go_scoped_next_page
+HeadlessFinder._dump_pager = _dump_scoped_pager
+
+
+async def _wait_id_first_detail(self, page, tries=18, interval=300):
+    main = await require_control(page, 'Item detail main', selector='main', tags=('main',))
+    form = await require_control(
+        main, 'ฟอร์มรายละเอียด Item', selector='form:has([id="item-name"])', tags=('form',))
+    kind = await require_control(form, 'ItemKind', element_id='item-game-item-id',
+                                 tags=('input',), input_types=('text', 'number'))
+    last, stable = None, 0
+    for _ in range(tries):
+        if self._cancel:
+            return False
+        value = (await kind.input_value()).strip()
+        stable = stable + 1 if value.isascii() and value.isdigit() and value == last else 0
+        if stable >= 2:
+            return True
+        last = value
+        await page.wait_for_timeout(interval)
+    raise AztekLocatorError('Aztek: ItemKind ยังไม่พร้อมในรายละเอียด Item')
+
+
+HeadlessFinder._wait_detail_ready = _wait_id_first_detail
 
 
 def build_search_data(game, criteria, web_mode=None, *, mode='event',

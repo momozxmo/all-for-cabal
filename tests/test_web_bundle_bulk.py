@@ -122,7 +122,6 @@ def test_reward_tier_and_rate_are_filled_after_successful_item_rows():
     builder._add_reward = lambda *args: _async(True)
     builder._fill_qty_tier = qty_tier
     builder._fill_rates = rates
-    builder._fill_blank_tiers = lambda *args: _async(0)
     item = {'id':'22','qty':'5','tier':'Rare','rate':'75'}
     reward = {'type':'CREDIT','value':'Alz','qty':'1000','tier':'Epic','rate':'25'}
     result = asyncio.run(builder._fill_form(FakePage(), 'Pack', 'RANDOM', True,
