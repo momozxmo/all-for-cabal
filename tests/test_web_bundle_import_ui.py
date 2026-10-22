@@ -264,7 +264,8 @@ def test_restart_with_unknown_create_id_requires_manual_recovery_not_create():
 
 
 @pytest.mark.parametrize('response_kind', ['http_failure', 'api_uncertain'])
-def test_unknown_create_response_keeps_queue_locked_across_reload(response_kind):
+@pytest.mark.parametrize('button_id', ['btnCreateAll', 'btnCreateAllChecked'])
+def test_unknown_create_response_keeps_queue_locked_across_reload(response_kind, button_id):
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         context = browser.new_context()
@@ -288,13 +289,82 @@ def test_unknown_create_response_keeps_queue_locked_across_reload(response_kind)
         ]))""")
         page.reload()
         page.on('dialog', lambda dialog: dialog.accept())
-        page.click('#btnCreateAll')
+        page.click('#' + button_id)
         expect(page.locator('#queueCount')).to_have_text('1')
         assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleQueue'))[0].creation_pending") is True
         page.reload()
         expect(page.locator('#btnCreateAll')).to_be_disabled()
+        expect(page.locator('#btnCreateAllChecked')).to_be_disabled()
         expect(page.locator('#btnContinueQueue')).to_be_hidden()
         assert len(requests) == 1
+        browser.close()
+
+
+def test_manual_checked_action_is_scoped_to_one_batch():
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context(service_workers='block')
+        context.route('**/*', lambda route: route.abort())
+        _route_live_game_tools(context)
+        calls = []
+
+        def saved(route):
+            payload = route.request.post_data_json
+            calls.append(payload)
+            route.fulfill(json={'created': len(payload['bundles']), 'planned': len(payload['bundles']),
+                'results': [dict(client_key=row['client_key'], name=row['name'], saved=True,
+                    bundle_id=str(42 + index), added=1, total=1, rewards_total=0,
+                    recheck={'outcome': 'partial', 'incomplete': True},
+                    **({'continued': True} if payload.get('manual_checked') else {}))
+                    for index, row in enumerate(payload['bundles'])]})
+
+        context.route('**/api/bundles/run', saved)
+        page = context.new_page()
+        page.goto('http://tool.test/bundles')
+        page.wait_for_function("document.querySelectorAll('#game option').length === 3")
+        page.evaluate("""() => {
+          localStorage.setItem('afc.bundleQueue',JSON.stringify([
+            {key:'a',name:'First',type:'FIXED',items:[{id:'11',qty:'1'}],rewards:[]},
+            {key:'b',name:'Later',type:'FIXED',items:[{id:'12',qty:'1'}],rewards:[]} ]));
+          localStorage.setItem('afc.bundleResults',JSON.stringify([
+            {client_key:'old',name:'Previous',saved:true,bundle_id:'40',
+             submitted_values:{game:'CabalM TH',items:[],rewards:[]},
+             recheck:{outcome:'mismatch',incomplete:false}}]));
+        }""")
+        page.reload()
+        checked = page.locator('#btnCreateAllChecked')
+        expect(page.locator('#btnCreateAll')).to_be_disabled()
+        expect(checked).to_be_enabled()
+        for width in (360, 768, 1280, 1600):
+            page.set_viewport_size({'width': width, 'height': 1000})
+            checked.scroll_into_view_if_needed()
+            bounds = checked.bounding_box()
+            assert bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= width
+            if width in (360, 1280):
+                output = Path('build-cache') / f'manual-queue-ui-{width}.png'
+                output.parent.mkdir(exist_ok=True)
+                page.screenshot(path=str(output))
+        checked.focus()
+        expect(checked).to_be_focused()
+        page.once('dialog', lambda dialog: dialog.dismiss())
+        checked.press('Enter')
+        assert calls == []
+        assert page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))[0].continued || false") is False
+        page.on('dialog', lambda dialog: dialog.accept())
+        checked.click()
+        expect(page.locator('#queueCount')).to_have_text('0')
+        assert calls[0]['manual_checked'] is True
+        expect(page.locator('#handoff')).to_be_hidden()
+        page.evaluate("""localStorage.setItem('afc.bundleQueue',JSON.stringify([
+          {key:'c',name:'New queue',type:'FIXED',items:[{id:'13',qty:'1'}],rewards:[]}]))""")
+        page.reload()
+        page.locator('#btnCreateAll').click()
+        expect(page.locator('#queueCount')).to_have_text('0')
+        assert len(calls) == 2 and 'manual_checked' not in calls[1]
+        rows = page.evaluate("JSON.parse(localStorage.getItem('afc.bundleResults'))")
+        assert [row['recheck']['outcome'] for row in rows] == ['mismatch', 'partial', 'partial', 'partial']
+        assert all(not row.get('handoff_override') for row in rows)
+        expect(page.locator('#handoff')).to_be_hidden()
         browser.close()
 
 

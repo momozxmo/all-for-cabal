@@ -123,6 +123,8 @@ class BundleRunRequest(BaseModel):
     # replayed or malformed preview request can never reach the live site.
     # A preview takes exactly one bundle; a create takes the whole queue.
     do_save: StrictBool = False
+    # Explicit acknowledgement for this batch, never a replacement Recheck pass.
+    manual_checked: StrictBool = False
 
 
 class BundleRecheckRetryRequest(BaseModel):
@@ -2045,6 +2047,9 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
     from web import bundle_runner
 
     settings: Settings = request.app.state.settings
+    if payload.manual_checked and not payload.do_save:
+        raise HTTPException(status_code=400,
+                            detail='ยืนยันตรวจเองได้เฉพาะการสร้างจริงเท่านั้น')
     if payload.game not in item_finder.GAMES:
         raise HTTPException(status_code=400, detail='ไม่รู้จักเกม: %s' % payload.game)
 
@@ -2160,7 +2165,8 @@ async def bundles_run(payload: BundleRunRequest, request: Request,
                 await bundle_runner.close_kept(str(user.id))
                 results = await builder.run_many(
                     game=payload.game, bundles=jobs, storage_state=storage_state,
-                    headed=headed, checkpoint=checkpoint)
+                    headed=headed, checkpoint=checkpoint,
+                    **({'manual_checked': True} if payload.manual_checked else {}))
             else:
                 job = jobs[0]
                 outcome = await builder.run(

@@ -2392,7 +2392,7 @@ class App:
                 item['game'] = data['game']
                 item['file_name'] = criteria.get('name', '')   # ชื่อจากไฟล์ — ไว้เทียบกับชื่อในเว็บ
                 for k in ('web', 'img', 'qty_val', 'trade', 'drill', 'crit_val', 'sources', 'amt',
-                          '_show_web_vals'):
+                          '_show_web_vals', 'document_reference'):
                     if k in criteria:
                         item[k] = criteria[k]
                 new_items.append(item)

@@ -937,7 +937,7 @@ class BundleBuilder:
         return FillOutcome(added, rewards_added, fields_complete)
 
     async def run_many(self, game, bundles, storage_state, *, headed=False,
-                       checkpoint=None):
+                       checkpoint=None, manual_checked=False):
         """Create every bundle in one browser session, and report each id.
 
         One window for the whole run rather than one per bundle: opening Chrome
@@ -946,7 +946,9 @@ class BundleBuilder:
 
         Every bundle here is created for real — this is the equivalent of the
         desktop "สร้างทุก bundle อัตโนมัติ" button, which has no preview phase.
-        Only a full recheck pass permits the next creation.
+        By default only a full recheck pass permits the next creation. Explicit
+        manual_checked acknowledges non-passing reads for this batch only;
+        incomplete, unconfirmed or unidentified creations still stop the queue.
         """
         url = bundle_create_url(game)
         self.log('==== สร้างทุกบันเดิลอัตโนมัติ %d อัน ====' % len(bundles), 'STEP')
@@ -1024,6 +1026,9 @@ class BundleBuilder:
                             except Exception as exc:
                                 entry['recheck'] = {'outcome': 'failed', 'incomplete': True,
                                                     'error': str(exc)[:200]}
+                            if (manual_checked and entry['bundle_id']
+                                    and entry['recheck'].get('outcome') != 'passed'):
+                                entry['continued'] = True
                             if checkpoint is not None:
                                 checkpoint(bundle, entry)
                 except Exception as exc:
@@ -1032,7 +1037,8 @@ class BundleBuilder:
                     entry['error'] = str(exc)[:200]
                     self.log('บันเดิล "%s" ไม่สำเร็จ: %s' % (name, exc), 'ERROR')
                 results.append(entry)
-                if entry.get('recheck', {}).get('outcome') != 'passed':
+                if (entry.get('recheck', {}).get('outcome') != 'passed'
+                        and not entry.get('continued')):
                     self.log('หยุดคิว: ต้องตรวจผลและยืนยันก่อนทำรายการถัดไป', 'WARNING')
                     break
                 await page.wait_for_timeout(1000)
