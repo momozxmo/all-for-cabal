@@ -36,7 +36,12 @@ based on ID-first checkpoint `bb12059f118e691279222c0766eaee16e25b4fa1`.
 - Local Setup: `All for Cabal Web Setup-0.1.40.exe`
 - Size: **279,146,982 bytes**
 - SHA256: **31ABC0280BC9D055142884369C6A4E243E6DBCBC89807B10C44FE82BB6DD28FF**
-- Setup/sidecar match. Publication/download verification is pending at this commit.
+- Published stable/latest at [GitHub Release v0.1.40](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.40),
+  2026-10-22T14:42:28Z. Source code commit: `2ff80782182f0dfca87e2df83aa2cb01ba712a34`;
+  Local release docs/tag commit: `c76a99d10909c99109148a5f6a6daad185924258`.
+- Downloaded both public assets without download authentication; Setup size/hash match the local build
+  and downloaded sidecar. Published filename is `All.for.Cabal.Web.Setup-0.1.40.exe`.
+- Sidecar SHA256: `BB2A60AFE08AB267BA7D9D147079A14FE093826319311E571CC89F7B6B881242`.
 
 ## Boundaries
 

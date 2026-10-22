@@ -176,3 +176,21 @@ Isolated packaged smoke script build-cache/release-smoke-v040.ps1 completedexit0
 health0.1.40,Localsession/bootstrap,alltoolpages,checked-allUI,zero-rateparser,emptyhistory.
 Only ownedPID/path/starttime was stopped and port8000 released; no real Aztek request/create.
 Actual user install/reopen/drafts remain unverified. Source commit/push/publication/downloadhash next.
+
+## Delivered release
+
+Source2ff80782182f0dfca87e2df83aa2cb01ba712a34 pushed normal fast-forward toorigin/main.
+Only approved7code/testpaths and2verificationdocs were staged; no artifact/runtime/userdirty files.
+Local release docs c76a99d10909c99109148a5f6a6daad185924258 pushed fast-forward,
+annotatedtagv0.1.40 points to that release-docs commit. No forcepush/PR/issueclosure.
+https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.40 publishedstable/latest,
+notdraft/notprerelease,published_at2026-10-22T14:42:28Z.
+Downloaded Setup and checksum via public browser_download_url without authentication to fresh
+build-cache/published-v040-20261022. Setup279146982bytes/SHA256
+31ABC0280BC9D055142884369C6A4E243E6DBCBC89807B10C44FE82BB6DD28FF matcheslocalbuild+sidecar.
+Sidecarbytes102/SHA256BB2A60AFE08AB267BA7D9D147079A14FE093826319311E571CC89F7B6B881242
+matcheslocalbuildsidecar. GitHub normalized asset spaces to dots as expected.
+OriginalCONTEXT/item_finder user-owned hashes unchanged; freeze147 independently0drift afterpush,
+ownedsmokeprocessstopped and port8000notlistening. Worktrees/evidence retained.
+Actual user installation/reopen/browser drafts still not verified; user updates when ready.
+Automatic follow-through monitor is removed after delivery verification; no indefinite polling remains.

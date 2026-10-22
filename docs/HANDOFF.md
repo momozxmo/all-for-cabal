@@ -6,6 +6,14 @@ Snapshot: 2026-10-08 — อ่านแล้วตรวจสถานะ Git
 
 ## สถานะล่าสุด
 
+- 2026-10-22: ส่งมอบ Setup v0.1.40 สำหรับปุ่มตรวจเองครบแล้ว—สร้างทุกบันเดิลต่อเนื่องตามสิทธิ์ผู้ใช้
+  ใช้ clean release candidate แยกจาก dirty migrations; source `2ff8078`, Local docs/tag `c76a99d`
+  Full exact-source2,113 passed1warning3168.61s/JUnit2113/0/0/0/exit0/evidence_errorsว่าง/freeze147ตรง
+  Build/privacy/helper/staticSHA/runtime0.1.40 และ packaged smoke ข้อมูลทดสอบแยกผ่าน
+  เผยแพร่ stable/latest และดาวน์โหลด Setup+checksum กลับมาแล้ว size/SHA256ตรงbuild
+  ดู [หลักฐานv0.1.40](local-release-v0.1.40.md) และ [scope/evidence ledger](bundle-manual-queue-release-20261022.md)
+  ไม่ติดตั้งทับ/ปิดแอปผู้ใช้ ไม่สร้างAztekจริง และไม่ปิด#13/#19/NewItem12
+  การอัปเดตจริง/เปิดกลับ/ร่างและคิวต้องตรวจหลังผู้ใช้เลือกอัปเดตเอง; dirty Event/Product/ItemCode migrations ไม่รวมรุ่นนี้
 - 2026-10-08 ผู้ใช้อนุมัติ commit จุดพักงาน ID-first ปัจจุบันเท่านั้น ไม่ push/Setup/publish
   ไม่รวม CONTEXT.md, เอกสาร New Item และไฟล์อื่นนอกงาน; #15/#16 ยังไม่ปิด และ #17–#19 ยังเหลือ
   Pre-commit picker guards รอบใหม่31 passed/129 deselected in127.73s; staged Python syntax20filesผ่าน
