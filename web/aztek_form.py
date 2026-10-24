@@ -15,8 +15,8 @@ widgets, and this module knows how to drive those four:
 * the **bundle** dialog, which searches by name or id and reports each hit as
   ``…ID: <id>``.
 
-Nothing here clicks a save button: writing to the live site stays a decision
-the runners make.
+Runners decide whether to save. The create-action helpers below only activate
+the audited submit button when a runner explicitly enters its save path.
 """
 import json
 import re
@@ -164,6 +164,19 @@ async def select_by_id(scope, element_id, wanted, label):
     trigger = await require_control(
         scope, label, element_id=element_id, tags=('button',),
         roles=('combobox',), input_types=('button',))
+    return await _select_native_sibling(trigger, wanted, label)
+
+
+async def select_without_id(scope, selector, wanted, label):
+    """Select through a documented no-ID trigger in its owning section."""
+    trigger = await require_control(
+        scope, label, selector=selector, tags=('button',),
+        roles=('combobox',), input_types=('button',))
+    return await _select_native_sibling(trigger, wanted, label)
+
+
+async def _select_native_sibling(trigger, wanted, label):
+    """Native option and visible trigger must agree after selection."""
     native = trigger.locator('xpath=../select')
     try:
         # Verified Radix selects are aria-hidden and clipped to 1px, not
@@ -177,6 +190,19 @@ async def select_by_id(scope, element_id, wanted, label):
         if await option.count() != 1:
             raise AztekLocatorError('Aztek: %s ไม่พบค่าที่ขอหรือพบหลายตัว' % label)
         option_label = await option.text_content()
+        # Hydration may enable the trigger late, or change its shape while
+        # the native select/option mounts. Finish native readiness first, then
+        # check the current trigger immediately before writing.
+        await expect(native).to_be_visible(timeout=5000)
+        await expect(native).to_be_enabled(timeout=5000)
+        await expect(trigger).to_be_visible(timeout=5000)
+        await expect(trigger).to_be_enabled(timeout=5000)
+        ready = await trigger.evaluate('''e => e.isConnected &&
+            e.tagName === 'BUTTON' && e.type === 'button' &&
+            e.getAttribute('role') === 'combobox' && !e.disabled &&
+            e.getAttribute('aria-disabled') !== 'true' ''')
+        if not ready:
+            raise AztekLocatorError('Aztek: %s ชนิด control เปลี่ยนหรือยังไม่พร้อม' % label)
         await native.select_option(value=value, timeout=5000)
         if await native.input_value() != value:
             raise AztekLocatorError('Aztek: %s ค่าที่เลือกไม่ตรงที่ขอ' % label)
@@ -375,6 +401,149 @@ async def activate_verified_button(target, label, role=None):
         raise AztekLocatorError('Aztek: %s ชนิดปุ่มเปลี่ยนระหว่างรอ' % label)
 
 
+async def require_create_button(page, kind, *, name_id='name_th'):
+    """Resolve the audited no-ID submit in one ID-anchored form.
+
+    Item Code, Event and Product were independently inspected in all four
+    games. Product's verified name anchor is th_name, not name_th.
+    """
+    label = 'สร้าง %s' % kind
+    form = await require_control(
+        page, 'ฟอร์ม %s' % kind, selector='main form', tags=('form',))
+    await require_control(form, 'ชื่อ %s (ไทย)' % kind, element_id=name_id,
+                          tags=('input',), input_types=('text',))
+    contract = dict(selector='button:text-is(%s)' % json.dumps(label, ensure_ascii=False),
+                    tags=('button',), roles=(None, 'button'), input_types=('submit',))
+    button = await require_control(form, label, **contract)
+    try:
+        await expect(button).to_be_enabled(timeout=5000)
+    except (AssertionError, PlaywrightError) as exc:
+        raise AztekLocatorError('Aztek: %s ยังไม่พร้อมใช้งาน' % label) from exc
+    # Readiness can replace the form/action; resolve their current ownership.
+    form = await require_control(
+        page, 'ฟอร์ม %s' % kind, selector='main form', tags=('form',))
+    await require_control(form, 'ชื่อ %s (ไทย)' % kind, element_id=name_id,
+                          tags=('input',), input_types=('text',))
+    button = await require_control(form, label, **contract)
+    owner = await form.element_handle(timeout=5000)
+    if await button.get_attribute('type') != 'submit':
+        raise AztekLocatorError('Aztek: %s ไม่ได้ระบุชนิด submit ตามที่ตรวจไว้' % label)
+    if owner is None or not await button.evaluate(
+            '(b, f) => b.form === f && b.closest("form") === f && !b.hasAttribute("form")', owner):
+        raise AztekLocatorError('Aztek: %s ผูกกับฟอร์มอื่นหรือเปลี่ยนขอบเขต' % label)
+    return button
+
+
+async def activate_create_button(button, kind, *, name_id='name_th'):
+    """Recheck the current ID anchor/action owner atomically before submit."""
+    label = 'สร้าง %s' % kind
+    try:
+        await button.click(trial=True, timeout=5000)
+        activated = await button.evaluate('''(b, args) => {
+            const forms=[...document.querySelectorAll('main form')];
+            if(forms.length!==1) return false;
+            const form=forms[0];
+            const name=[...form.querySelectorAll('[id]')].filter(e=>e.id===args.nameId);
+            const actions=[...form.querySelectorAll('button')].filter(e=>
+                e.textContent.replace(/\\s+/g,' ').trim()===args.label);
+            if(!b.isConnected || b.disabled || !b.getClientRects().length ||
+               ['hidden','collapse'].includes(getComputedStyle(b).visibility) || b.tagName!=='BUTTON' ||
+               b.type!=='submit' || b.getAttribute('type')!=='submit' ||
+               ![null,'button'].includes(b.getAttribute('role')) ||
+               b.hasAttribute('form') || b.form!==form || b.closest('form')!==form ||
+               name.length!==1 || name[0].tagName!=='INPUT' || name[0].type!=='text' ||
+               actions.length!==1 || actions[0]!==b) return false;
+            b.click();return true;
+        }''', {'label': label, 'nameId': name_id})
+        if not activated:
+            raise AztekLocatorError('Aztek: %s ชนิดหรือเจ้าของฟอร์มเปลี่ยนก่อนกด' % label)
+    except AztekLocatorError:
+        raise
+    except (AssertionError, PlaywrightError) as exc:
+        raise AztekLocatorError('Aztek: %s ไม่พร้อมกดหรือขอบเขตเปลี่ยน' % label) from exc
+
+
+async def require_confirmation_button(page, create_url, kind):
+    """Resolve one audited no-ID confirmation; callers gate verified games."""
+    description = 'ต้องการสร้าง %s ใช่หรือไม่?' % kind
+    selector = ('[role="alertdialog"][data-state="open"]'
+                ':has(h2:text-is("ยืนยันการสร้าง"))'
+                ':has(p:text-is(%s))' % json.dumps(description, ensure_ascii=False))
+    contract = dict(selector='button:text-is("ยืนยัน")', tags=('button',),
+                    roles=(None, 'button'), input_types=('button',))
+    if page.url != create_url:
+        raise AztekLocatorError('Aztek: หน้า %s เปลี่ยนก่อนยืนยัน ต้องตรวจผลบนเว็บ' % kind)
+    try:
+        dialog = await require_control(page, 'กล่องยืนยัน %s' % kind, selector=selector,
+                                       tags=('div',), roles=('alertdialog',))
+    except AztekLocatorError:
+        if (page.url == create_url and await page.locator(
+                'h2:text-is("ยืนยันการสร้าง"), p:text-is(%s)'
+                % json.dumps(description, ensure_ascii=False)).count() == 0):
+            return None  # Direct-write form; never guess a confirmation.
+        raise
+    button = await require_control(dialog, 'ยืนยัน %s' % kind, **contract)
+    try:
+        await expect(button).to_be_enabled(timeout=5000)
+    except (AssertionError, PlaywrightError) as exc:
+        raise AztekLocatorError('Aztek: ยืนยัน %s ยังไม่พร้อมใช้งาน' % kind) from exc
+    dialog = await require_control(page, 'กล่องยืนยัน %s' % kind, selector=selector,
+                                   tags=('div',), roles=('alertdialog',))
+    button = await require_control(dialog, 'ยืนยัน %s' % kind, **contract)
+    if not await _check_confirmation_button(button, create_url, description):
+        raise AztekLocatorError('Aztek: กล่องยืนยัน %s มี scope หรือ ARIA ไม่ตรง' % kind)
+    return button
+
+
+async def _check_confirmation_button(button, create_url, description, *, activate=False):
+    # Runtime IDs are only the current dialog's unique, typed ARIA links.
+    return await button.evaluate('''(b, args) => {
+        const text=e=>e.textContent.replace(/\\s+/g,' ').trim();
+        const candidates=[...document.querySelectorAll('[role="alertdialog"][data-state="open"]')]
+            .filter(d=>[...d.querySelectorAll('h2')].some(e=>text(e)==='ยืนยันการสร้าง')
+                && [...d.querySelectorAll('p')].some(e=>text(e)===args.description));
+        const d=b.closest('[role="dialog"],[role="alertdialog"]');
+        if(location.href!==args.url || candidates.length!==1 || candidates[0]!==d
+            || d.tagName!=='DIV' || !d.getClientRects().length
+            || getComputedStyle(d).visibility==='hidden' || !b.isConnected || b.disabled
+            || !b.getClientRects().length || ['hidden','collapse'].includes(getComputedStyle(b).visibility)
+            || b.tagName!=='BUTTON' || b.type!=='button' || b.getAttribute('type')!=='button'
+            || ![null,'button'].includes(b.getAttribute('role'))
+            || b.form!==null || b.hasAttribute('form')) return false;
+        const actions=[...d.querySelectorAll('button')].filter(e=>text(e)==='ยืนยัน');
+        if(actions.length!==1 || actions[0]!==b) return false;
+        const linked=(id,tag,text) => {
+            const nodes=[...document.querySelectorAll('[id]')].filter(e=>e.id===id);
+            return !!id && nodes.length===1 && nodes[0].tagName===tag
+                && nodes[0].textContent.trim()===text && d.contains(nodes[0])
+                && nodes[0].closest('[role="dialog"],[role="alertdialog"]')===d;
+        };
+        const valid=linked(d.getAttribute('aria-labelledby'),'H2','ยืนยันการสร้าง')
+            && linked(d.getAttribute('aria-describedby'),'P',args.description)
+            && !d.querySelector('[role="dialog"],[role="alertdialog"]');
+        if(valid && args.activate) b.click();
+        return valid;
+    }''', {'url': create_url, 'description': description, 'activate': activate})
+
+
+async def activate_confirmation_button(button, create_url, kind, write_pending):
+    """Activate the same verified dialog only while its write is outstanding."""
+    try:
+        if not write_pending():
+            return False
+        await button.click(trial=True, timeout=5000)
+        if not write_pending():
+            return False
+        description = 'ต้องการสร้าง %s ใช่หรือไม่?' % kind
+        if not await _check_confirmation_button(button, create_url, description, activate=True):
+            raise AztekLocatorError('Aztek: ยืนยัน %s มีชนิด ขอบเขต หรือ ARIA เปลี่ยนก่อนกด' % kind)
+        return True
+    except AztekLocatorError:
+        raise
+    except (AssertionError, PlaywrightError) as exc:
+        raise AztekLocatorError('Aztek: ยืนยัน %s ไม่พร้อมกดหรือขอบเขตเปลี่ยน' % kind) from exc
+
+
 async def _related_popup(page, trigger, role, label):
     # Runtime IDs are used only as the trigger's current ARIA relationship.
     await expect(trigger).to_have_attribute('aria-controls', re.compile(r'\S+'), timeout=5000)
@@ -428,8 +597,14 @@ async def set_datetime_by_id(page, scope, element_id, value, log=None, label='')
             choices = await _related_popup(page, hours, 'listbox', label)
             option = await require_control(
                 choices, '%s: ชั่วโมง %s' % (label, hour),
-                selector='[role="option"]:text-is(%s)' % json.dumps(hour),
+                selector='[role="option"]:has-text(%s)' % json.dumps(hour),
                 tags=('div',), roles=('option',))
+            # Live Radix options put the label in a child span. Require the
+            # complete hour text before clicking, not just a substring match.
+            try:
+                await expect(option).to_have_text(hour, timeout=5000)
+            except AssertionError as exc:
+                raise AztekLocatorError('Aztek: %s: ชั่วโมง %s ข้อความไม่ตรงที่ขอ' % (label, hour)) from exc
             await option.and_(choices.locator('div[role="option"]')).click(timeout=5000)
             await expect(hours).to_have_text(hour, timeout=5000)
             # Commit seconds before minutes, preserving the widget's order.
@@ -457,7 +632,8 @@ async def set_datetime_by_id(page, scope, element_id, value, log=None, label='')
             await dialog.press('Escape', timeout=5000)
 
 
-async def pick_reward_bundle(page, form, index, bundle_id, label, log=None):
+async def pick_reward_bundle(page, form, index, bundle_id, label, log=None, *,
+                             event_reward=False):
     """Use the audited no-ID Bundle widget in the active reward's form.
 
     The trigger, search and rows have no stable IDs. Runtime popup IDs are
@@ -470,19 +646,24 @@ async def pick_reward_bundle(page, form, index, bundle_id, label, log=None):
         anchor_id = 'rewards.%d.name_th' % index
         anchor = await require_control(
             form, label, element_id=anchor_id, tags=('input',), input_types=('text',))
-        code_id = 'rewards.%d.is_generate_code' % index
+        # Event has no code-type field. Its independently audited name pair
+        # bounds the active reward body; Item Code retains its original pair.
+        peer_id = 'rewards.%d.%s' % (index, 'name_en' if event_reward else 'is_generate_code')
         await require_control(
-            form, label, element_id=code_id, tags=('button',), roles=('combobox',),
-            input_types=('button',))
+            form, label, element_id=peer_id,
+            tags=('input',) if event_reward else ('button',),
+            roles=(None,) if event_reward else ('combobox',),
+            input_types=('text',) if event_reward else ('button',))
         card = await require_control(
             anchor, label,
-            selector='xpath=ancestor::div[.//*[@id="%s"]][1]' % code_id, tags=('div',))
+            selector='xpath=ancestor::div[.//*[@id="%s"]][1]' % peer_id, tags=('div',))
         owning_form = await form.element_handle(timeout=5000)
         if owning_form is None or not await card.evaluate(
                 '(owner, form) => owner.closest("form") === form', owning_form):
             raise AztekLocatorError('Aztek: %s ขอบเขตชุดรางวัลอยู่นอกฟอร์ม' % label)
         section = await require_control(
-            card, label, selector='xpath=.//label[normalize-space(.)="Bundle *"]/parent::div',
+            card, label, selector='xpath=.//label[normalize-space(.)="%s"]/parent::div'
+            % ('Bundle' if event_reward else 'Bundle *'),
             tags=('div',))
         change_selector = 'xpath=.//button[normalize-space(.)="เปลี่ยน"]'
         badge_selector = 'xpath=.//div[button[normalize-space(.)="เปลี่ยน"]]/span'

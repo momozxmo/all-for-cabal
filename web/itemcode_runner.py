@@ -9,6 +9,7 @@ so a plan that names several bundles for one prize needs several reward sets.
 The desktop tool drives the v1 page, whose fields are laid out differently;
 this is the v2 form and keeps its own selectors.
 """
+from urllib.parse import urlsplit
 from playwright.async_api import Error as PlaywrightError, expect
 from web import aztek_form
 from web.activity_runner import ActivityBuilder
@@ -16,6 +17,14 @@ from web.aztek_locator import AztekLocatorError, require_control
 
 #: value of the "ประเภทของ Code" select
 CODE_FIX, CODE_SERVER = '1', '2'
+
+# Independently captured POST operations, not paths inferred between games.
+_VERIFIED_WRITE_PATHS = {
+    'CabalM TH': '/cabalm/itemcode/events',
+    'CabalM SEA': '/cabalmsea/itemcode/events',
+    'CabalPC TH': '/cabalpc/itemcode/events',
+    'CabalPC SEA': '/cabalpcsea/itemcode/events',
+}
 
 
 def code_type_value(text):
@@ -36,6 +45,65 @@ class ItemCodeBuilder(ActivityBuilder):
     KIND = 'Item Code'
     WRITE_MARK = 'itemcode'
     READY_SELECTOR = 'main form input[id="name_th"]'
+
+    def _verified_write_path(self, create_url):
+        return next((path for game, path in _VERIFIED_WRITE_PATHS.items()
+                     if create_url == self.create_url(game)), None)
+
+    def _write_matcher(self, page, create_url):
+        write_path = self._verified_write_path(create_url)
+        if write_path is None:
+            return super()._write_matcher(page, create_url)
+
+        def matches(response):
+            parsed = urlsplit(response.url)
+            try:
+                return (response.request.method == 'POST'
+                        and (parsed.scheme, parsed.netloc, parsed.path) == (
+                            'https', 'admin-api-v2.combo-interactive.com', write_path)
+                        and response.request.frame == page.main_frame)
+            except PlaywrightError:
+                return False  # No verified owning frame (e.g. service worker).
+
+        return matches
+
+    def _confirmation_resolver(self, page, create_url):
+        # All four create dialogs were independently observed on Oct 8–9.
+        if self._verified_write_path(create_url) is None:
+            return None
+        return lambda: aztek_form.require_confirmation_button(page, create_url, self.KIND)
+
+    def _confirmation_activator(self, page, create_url):
+        if self._verified_write_path(create_url) is None:
+            return None
+        return lambda button, write_pending: aztek_form.activate_confirmation_button(
+            button, create_url, self.KIND, write_pending)
+
+    async def _read_created_id(self, page, response, create_url):
+        if self._verified_write_path(create_url) is None:
+            return await super()._read_created_id(page, response, create_url)
+        if response is not None:
+            try:
+                payload = await response.json()
+            except (PlaywrightError, ValueError):
+                payload = None
+            # Preserve the existing flat numeric-id compatibility. The shared
+            # Bundle reader recursively prefers bundle_id, which can identify
+            # a reward's Bundle instead of this Item Code. Unknown envelopes
+            # must not borrow those IDs (including Reward Set IDs).
+            value = payload.get('id') if isinstance(payload, dict) else None
+            if ((isinstance(value, int) and not isinstance(value, bool))
+                    or (isinstance(value, str) and value.isdigit())):
+                return str(value)
+        # Preserve only the existing same-origin/game result-URL behavior;
+        # never feed an unknown response to the recursive Bundle extractor.
+        return await super()._read_created_id(page, None, create_url)
+
+    async def _create_button(self, page):
+        return await aztek_form.require_create_button(page, self.KIND)
+
+    async def _activate_create(self, button):
+        await aztek_form.activate_create_button(button, self.KIND)
 
     async def _open_reward_tab(self, page, index):
         form = await require_control(

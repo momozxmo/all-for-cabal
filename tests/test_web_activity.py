@@ -398,8 +398,7 @@ def _builder(cls=itemcode_runner.ItemCodeBuilder):
 
 @pytest.mark.parametrize(('builder_class', 'selector'), [
     (itemcode_runner.ItemCodeBuilder, 'main form input[id="name_th"]'),
-    (event_runner.EventBuilder, 'input[name="name_th"]'),
-    (product_runner.ProductBuilder, 'input[name="th_name"]'),
+    (product_runner.ProductBuilder, 'main form input[id="th_name"]'),
 ])
 def test_open_waits_for_each_form_own_ready_field_after_dom_content_loaded(
         builder_class, selector):
@@ -480,8 +479,12 @@ def test_open_reraises_the_ready_field_failure_when_still_on_the_form():
         asyncio.run(builder._open(Page(), 'https://x/itemcodes/create'))
 
 
-def test_save_without_write_response_or_detail_id_is_not_reported_created():
-    builder = _builder()
+def test_legacy_save_without_write_response_or_detail_id_is_not_reported_created():
+    # Migrated concrete actions use public synthetic runner tests. Keep only
+    # the unmigrated base lifecycle here, not a fake Product DOM contract.
+    builder = _builder(activity_runner.ActivityBuilder)
+    builder.PATH, builder.SAVE_LABEL, builder.KIND, builder.WRITE_MARK = (
+        'products', 'สร้าง Product', 'Product', 'product')
 
     class Button:
         async def count(self):
@@ -513,14 +516,14 @@ def test_save_without_write_response_or_detail_id_is_not_reported_created():
 
 
 @pytest.mark.parametrize('builder_class', [
-    itemcode_runner.ItemCodeBuilder,
-    event_runner.EventBuilder,
-    product_runner.ProductBuilder,
+    activity_runner.ActivityBuilder,
 ])
-def test_save_confirms_the_create_dialog_before_waiting_for_the_write(
+def test_legacy_save_confirms_the_create_dialog_before_waiting_for_the_write(
         builder_class):
     """Aztek writes only after the second, dialog-scoped confirmation click."""
     builder = _builder(builder_class)
+    builder.PATH, builder.SAVE_LABEL, builder.KIND, builder.WRITE_MARK = (
+        'products', 'สร้าง Product', 'Product', 'product')
     create_selector = "button:has-text('%s')" % builder.SAVE_LABEL
     confirm_selector = (
         '[role="dialog"] button:text-is("ยืนยัน"), '

@@ -13,12 +13,13 @@ import asyncio
 import re
 from contextlib import suppress
 
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, async_playwright
 
 import aztek_core as core
 import new_tool
 from web import browser_launch
 from web.create_flow import click_create_and_wait_for_write
+from web.aztek_locator import AztekLocatorError
 from web.search_runner import to_web_url
 
 
@@ -92,6 +93,42 @@ class ActivityBuilder:
 
     # ------------------------------------------------------------------ save
 
+    async def _create_button(self, page):
+        """Legacy consumers keep their locator until their contracts migrate."""
+        button = page.locator("button:has-text('%s')" % self.SAVE_LABEL).first
+        if await button.count() == 0:
+            self.log('หาปุ่ม "%s" ไม่เจอ — ไม่ได้สร้าง' % self.SAVE_LABEL, 'ERROR')
+            return None
+        return button
+
+    def _confirmation_resolver(self, page, create_url):
+        return None
+
+    def _confirmation_activator(self, page, create_url):
+        return None
+
+    def _write_matcher(self, page, create_url):
+        return lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
+                          and self.WRITE_MARK in r.url.lower())
+
+    async def _read_created_id(self, page, response, create_url):
+        """Default legacy result reader; forms can reject unverified ID shapes."""
+        made_id = None
+        if response is not None:
+            try:
+                made_id = new_tool.extract_bundle_id(await response.json())
+            except Exception:
+                made_id = None
+        if not made_id:
+            if self._confirmation_resolver(page, create_url) is not None:
+                match = re.fullmatch(re.escape(create_url.rsplit('/create', 1)[0])
+                                     + r'/(\d+)(?:[/?#].*)?', page.url)
+            else:
+                match = re.search(r'/%s/(\d+)' % self.PATH, page.url)
+            if match:
+                made_id = match.group(1)
+        return made_id
+
     async def _save(self, page):
         """Press confirm and report the new id.
 
@@ -99,15 +136,33 @@ class ActivityBuilder:
         can carry numbers of its own, and reporting one as an id would send the
         operator looking for something that was never created.
         """
-        button = page.locator("button:has-text('%s')" % self.SAVE_LABEL).first
-        if await button.count() == 0:
-            self.log('หาปุ่ม "%s" ไม่เจอ — ไม่ได้สร้าง' % self.SAVE_LABEL, 'ERROR')
+        button = await self._create_button(page)
+        if button is None:
             return False, None
-        response, confirmed = await click_create_and_wait_for_write(
-            page, button,
-            lambda r: (r.request.method in ('POST', 'PUT', 'PATCH')
-                       and self.WRITE_MARK in r.url.lower()),
-        )
+        create_url = page.url
+        resolver = self._confirmation_resolver(page, create_url)
+        activator = getattr(self, '_activate_create', None)
+        create_activated = False
+        confirmation_error = None
+
+        async def activate_create(target):
+            nonlocal create_activated
+            await activator(target)
+            create_activated = True
+
+        try:
+            response, confirmed = await click_create_and_wait_for_write(
+                page, button,
+                self._write_matcher(page, create_url),
+                create_activator=activate_create if activator is not None else None,
+                confirm_resolver=resolver,
+                confirm_activator=self._confirmation_activator(page, create_url),
+            )
+        except (AztekLocatorError, PlaywrightError) as exc:
+            if resolver is None or not create_activated:
+                raise
+            confirmation_error = exc
+            response, confirmed = None, False
         if confirmed:
             self.log('กด "ยืนยัน" ในหน้าต่างยืนยันการสร้างแล้ว', 'INFO')
         await page.wait_for_timeout(1500)
@@ -116,21 +171,18 @@ class ActivityBuilder:
             self.log('เว็บตอบกลับ HTTP %d — %s อาจไม่ถูกสร้าง'
                      % (response.status, self.KIND), 'ERROR')
             return False, None
-        made_id = None
         if response is not None:
             self.log('เว็บตอบกลับ HTTP %d' % response.status, 'INFO')
-            try:
-                made_id = new_tool.extract_bundle_id(await response.json())
-            except Exception:
-                made_id = None
-        if not made_id:
-            match = re.search(r'/%s/(\d+)' % self.PATH, page.url)
-            if match:
-                made_id = match.group(1)
+        made_id = await self._read_created_id(page, response, create_url)
         if response is None and not made_id:
+            if confirmation_error is not None:
+                raise confirmation_error
             self.log('ยืนยันการสร้าง%sไม่ได้ — ไม่พบคำตอบที่สำเร็จหรือเลขใน URL'
                      % self.KIND, 'ERROR')
             return False, None
+        if confirmation_error is not None:
+            self.log('กล่องยืนยันอ่านไม่ได้ แต่พบเลข %s จากหน้าผลสร้างของเกมเดิม '
+                     '— เก็บผลไว้และห้ามสร้างซ้ำ' % self.KIND, 'WARNING')
         self.log('กดยืนยันการสร้าง%sแล้ว' % self.KIND, 'SUCCESS')
         if made_id:
             self.log('สร้าง%sสำเร็จ — เลข: %s' % (self.KIND, made_id), 'SUCCESS')

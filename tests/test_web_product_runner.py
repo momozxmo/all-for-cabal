@@ -18,12 +18,16 @@ GAME = 'CabalM TH'
 
 
 CUSTOM_PRODUCT_FORM = r'''
+<main><form>
+<section><h2>ข้อมูลทั่วไป</h2>
 <label>หมวดหมู่</label>
 <button type="button" role="combobox" data-slot="popover-trigger"
         data-kind="categories">เลือก Category</button>
-<input name="th_name"><input name="en_name">
+<input id="th_name" name="th_name"><input id="en_name" name="en_name">
+</section><section><h2>สกุลเงิน</h2>
 <button type="button" id="addCurrency">เพิ่มสกุลเงิน</button>
 <div id="priceRows"></div>
+</section>
 <label>รูปแบบการจำกัดการซื้อ</label>
 <select id="limitType">
   <option value="NONE">ไม่จำกัด</option>
@@ -44,6 +48,9 @@ function openPicker(kind, trigger) {
   document.querySelector('[role="dialog"]')?.remove();
   const dialog = document.createElement('div');
   dialog.setAttribute('role', 'dialog');
+  dialog.dataset.slot = 'popover-content';
+  dialog.tabIndex = -1;
+  dialog.onkeydown = event => { if (event.key === 'Escape') dialog.remove(); };
   for (const row of liveOptions[kind]) {
     const option = document.createElement('div');
     option.setAttribute('role', 'option');
@@ -57,6 +64,7 @@ function openPicker(kind, trigger) {
     dialog.appendChild(option);
   }
   document.body.appendChild(dialog);
+  dialog.focus();
 }
 document.querySelector('[data-kind="categories"]').onclick = event =>
   openPicker('categories', event.currentTarget);
@@ -66,13 +74,14 @@ document.querySelector('#addCurrency').onclick = () => {
   const row = document.createElement('div');
   row.innerHTML = `<button type="button" role="combobox"
     data-slot="popover-trigger" data-kind="currencies">เลือกสกุลเงิน</button>
-    <input name="prices.${index}.original_price">
-    <input name="prices.${index}.price">`;
+    <input name="prices.${index}.original_price" type="number">
+    <input name="prices.${index}.price" type="number">`;
   row.querySelector('[data-kind="currencies"]').onclick = event =>
     openPicker('currencies', event.currentTarget);
   document.querySelector('#priceRows').appendChild(row);
 };
 </script>
+</form></main>
 '''
 
 
@@ -184,50 +193,6 @@ def test_product_options_read_custom_popovers_not_purchase_limit_select():
     }
 
 
-def test_product_options_wait_for_late_category_popover():
-    async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.set_content(r'''
-                  <label>หมวดหมู่ *</label>
-                  <label>รูปแบบการจำกัดการซื้อ</label>
-                  <select><option value="NONE">ไม่จำกัด</option></select>
-                  <script>
-                  setTimeout(() => {
-                    const trigger = document.createElement('button');
-                    trigger.dataset.slot = 'popover-trigger';
-                    trigger.textContent = 'เลือก Category';
-                    trigger.onclick = () => {
-                      const dialog = document.createElement('div');
-                      dialog.setAttribute('role', 'dialog');
-                      const option = document.createElement('button');
-                      option.setAttribute('role', 'option');
-                      option.setAttribute(
-                        'data-value',
-                        'Main Shop - Highlight\u0000category-8');
-                      option.textContent = 'Main Shop - Highlight';
-                      dialog.appendChild(option);
-                      document.body.appendChild(dialog);
-                    };
-                    document.body.appendChild(trigger);
-                  }, 100);
-                  </script>
-                ''')
-                return await product_runner._harvest_product_options(
-                    page, {'categories'})
-            finally:
-                await browser.close()
-
-    assert asyncio.run(scenario()) == {
-        'categories': [{
-            'id': 'category-8', 'slug': '',
-            'label': 'Main Shop - Highlight',
-        }],
-    }
-
-
 def test_product_builder_selects_custom_category_and_currency_ids():
     async def scenario():
         async with async_playwright() as playwright:
@@ -302,66 +267,6 @@ def test_product_bundle_picker_accepts_current_popover_search_placeholder():
     selected, summary = asyncio.run(scenario())
     assert selected is True
     assert '223553' in summary
-
-
-def test_product_builder_selects_multiple_bundles_and_primary(monkeypatch):
-    selected = []
-
-    async def fake_pick(page, _scope, value, *_args, **_kwargs):
-        selected.append(value)
-        await page.evaluate("""value => {
-          const list = document.querySelector('#selectedBundles');
-          const row = document.createElement('div');
-          row.className = 'selected-bundle-card';
-          row.innerHTML = `<span>#${value}</span><label>
-            <button type="button" role="checkbox"
-              aria-checked="false"></button> Primary</label>`;
-          const primary = row.querySelector('[role="checkbox"]');
-          primary.onclick = () => {
-            list.querySelectorAll('[role="checkbox"]').forEach(button =>
-              button.setAttribute('aria-checked', 'false'));
-            primary.setAttribute('aria-checked', 'true');
-          };
-          if (!list.children.length)
-            primary.setAttribute('aria-checked', 'true');
-          list.appendChild(row);
-          document.querySelector('#bundleCount').textContent =
-            `${list.children.length}/20 Bundles`;
-        }""", value)
-        return True
-
-    async def scenario():
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.set_content('''
-                  <section><header><h2>Bundle</h2></header>
-                    <button type="button">เลือก bundle</button>
-                    <div id="selectedBundles"></div>
-                    <p id="bundleCount">0/20 Bundles</p>
-                  </section>''')
-                missing = []
-                await product_runner.ProductBuilder(
-                    lambda *_: None)._fill_bundles(page, {
-                        'bundle_ids': ['223930', '223931'],
-                        'primary_bundle_id': '223931',
-                        'bundle_id': '223931',
-                    }, missing)
-                checked = await page.locator(
-                    '.selected-bundle-card [role="checkbox"]'
-                    '[aria-checked="true"]').evaluate_all(
-                        '(nodes) => nodes.map(node => '
-                        'node.closest("div").querySelector("span").textContent)')
-                return missing, checked
-            finally:
-                await browser.close()
-
-    monkeypatch.setattr(aztek_form, 'pick_bundle', fake_pick)
-    missing, checked = asyncio.run(scenario())
-    assert selected == ['223930', '223931']
-    assert missing == []
-    assert checked == ['#223931']
 
 
 def test_product_options_requires_authentication(anonymous_client):
@@ -701,177 +606,6 @@ def test_select_after_label_uses_the_hidden_select_value():
     )]
 
 
-def test_product_general_uses_names_and_fetched_category_id(monkeypatch):
-    page = _Page()
-    fills = []
-    selects = []
-
-    async def fake_fill(_page, selector, value, *_args, **_kwargs):
-        fills.append((selector, value))
-        return True
-
-    async def fake_select(_page, label, value, *_args, **_kwargs):
-        selects.append((label, value))
-        return True
-
-    monkeypatch.setattr(aztek_form, 'fill', fake_fill)
-    monkeypatch.setattr(aztek_form, 'select_after_label', fake_select)
-    missing = []
-    asyncio.run(_builder()._fill_general(page, {
-        'name_th': 'สินค้า', 'name_en': 'Product', 'category_id': '12',
-    }, missing))
-
-    assert fills == [
-        ('input[name="th_name"]', 'สินค้า'),
-        ('input[name="en_name"]', 'Product'),
-    ]
-    assert selects == [('หมวดหมู่', '12')]
-    assert missing == []
-
-
-def test_product_price_row_is_scoped_and_keeps_both_prices(monkeypatch):
-    page = _Page()
-    fills = []
-
-    async def fake_fill(_page, selector, value, *_args, **_kwargs):
-        fills.append((selector, value))
-        return True
-
-    monkeypatch.setattr(aztek_form, 'fill', fake_fill)
-    missing = []
-    asyncio.run(_builder()._fill_prices(page, {
-        'prices': [{
-            'currency_id': '91',
-            'original_price': 100,
-            'price': 66,
-        }],
-    }, missing))
-
-    assert page.selects == [(
-        'input[name="prices.0.original_price"]'
-        ' >> xpath=ancestor::*[.//select][1] >> select',
-        {'value': '91'},
-    )]
-    assert fills == [
-        ('input[name="prices.0.original_price"]', 100),
-        ('input[name="prices.0.price"]', 66),
-    ]
-    assert missing == []
-
-
-def test_product_images_are_uploaded_only_from_memory_payloads():
-    page = _Page()
-    images = {
-        slot: {
-            'name': '%s.png' % slot,
-            'content_type': 'image/png',
-            'bytes': b'pixels',
-        }
-        for slot in ('thumbnail_th', 'banner_th',
-                     'thumbnail_en', 'banner_en')
-    }
-    missing = []
-    asyncio.run(_builder()._fill_images(
-        page, {'images': images}, missing))
-
-    assert [selector for selector, _payload in page.files] == [
-        'input[type="file"] >> nth=0',
-        'input[type="file"] >> nth=1',
-        'input[type="file"] >> nth=2',
-        'input[type="file"] >> nth=3',
-    ]
-    assert all(payload['buffer'] == b'pixels'
-               for _selector, payload in page.files)
-
-
-def test_product_details_fill_only_nonempty_languages():
-    builder = _builder()
-    calls = []
-
-    async def record(_page, language, value):
-        calls.append((language, value))
-        return True
-
-    builder._fill_rich_text = record
-    asyncio.run(builder._fill_details(_Page(), {
-        'details_th': '',
-        'details_en': 'English details',
-    }))
-    assert calls == [('en', 'English details')]
-
-
-def test_product_display_and_limit_use_current_aztek_fields(
-        monkeypatch):
-    page = _Page()
-    switches = []
-    dates = []
-    selects = []
-    fills = []
-
-    async def fake_switch(_page, label, value, *_args, **_kwargs):
-        switches.append((label, value))
-        return True
-
-    async def fake_datetime(_page, _trigger, value, *_args, **kwargs):
-        dates.append((kwargs.get('label', ''), value))
-        return True
-
-    async def fake_select(_page, label, value, *_args, **_kwargs):
-        selects.append((label, value))
-        return True
-
-    async def fake_fill(_page, selector, value, *_args, **_kwargs):
-        fills.append((selector, value))
-        return True
-
-    monkeypatch.setattr(aztek_form, 'set_switch', fake_switch)
-    monkeypatch.setattr(aztek_form, 'set_datetime', fake_datetime)
-    monkeypatch.setattr(aztek_form, 'select_after_label', fake_select)
-    monkeypatch.setattr(aztek_form, 'fill', fake_fill)
-    builder = _builder()
-    missing = []
-    spec = {
-        'is_enabled': True, 'is_test_mode': False, 'is_hidden': True,
-        'position': '3',
-        'start_at': '2026-07-30 00:00:00',
-        'end_at': '2026-08-30 07:59:00',
-        'limit_type': 'PLAYER', 'limit_quantity': '10',
-        'limit_reset_interval_days': '7',
-        'limit_reset_at': '2026-07-31 09:15:00',
-        'bundle_id': '223553',
-    }
-    asyncio.run(builder._fill_display(page, spec, missing))
-    asyncio.run(builder._fill_limit(page, spec, missing))
-
-    assert switches[:3] == [
-        ('เปิดใช้งาน', True), ('โหมดทดสอบ', False),
-        ('ซ่อนสินค้า', True)]
-    assert ('เวลาเริ่มขาย (GMT+7)', spec['start_at']) in dates
-    assert ('เวลาหยุดขาย (GMT+7)', spec['end_at']) in dates
-    assert ('รูปแบบการจำกัดการซื้อ', 'PLAYER') in selects
-    assert ('input[name="limit_per"]', '10') in fills
-    assert ('วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)',
-            spec['limit_reset_at']) in dates
-    assert ('input[name="position"]', '3') in fills
-    assert missing == []
-
-
-def test_product_unlimited_limit_maps_to_aztek_none(monkeypatch):
-    selects = []
-
-    async def fake_select(_page, label, value, *_args, **_kwargs):
-        selects.append((label, value))
-        return True
-
-    monkeypatch.setattr(aztek_form, 'select_after_label', fake_select)
-    missing = []
-    asyncio.run(_builder()._fill_limit(
-        _Page(), {'limit_type': 'UNLIMITED'}, missing))
-
-    assert selects == [('รูปแบบการจำกัดการซื้อ', 'NONE')]
-    assert missing == []
-
-
 def test_legacy_product_tags_do_not_block_current_aztek_form():
     logs = []
     builder = product_runner.ProductBuilder(
@@ -886,44 +620,3 @@ def test_legacy_product_tags_do_not_block_current_aztek_form():
     assert missing == []
     assert page.clicks == []
     assert logs == []
-
-
-@pytest.mark.parametrize('field, label', [
-    ('name_th', 'ชื่อ Product (ไทย)'),
-    ('name_en', 'ชื่อ Product (อังกฤษ)'),
-    ('category_id', 'หมวดหมู่'),
-    ('prices', 'สกุลเงิน'),
-    ('bundle_id', 'Bundle'),
-    ('start_at', 'วันเริ่มขาย'),
-    ('end_at', 'วันสิ้นสุด'),
-])
-def test_missing_product_requirements_are_reported(
-        field, label, monkeypatch):
-    async def okay(*_args, **_kwargs):
-        return True
-
-    monkeypatch.setattr(aztek_form, 'fill', okay)
-    monkeypatch.setattr(aztek_form, 'select_after_label', okay)
-    monkeypatch.setattr(aztek_form, 'set_switch', okay)
-    monkeypatch.setattr(aztek_form, 'set_datetime', okay)
-    monkeypatch.setattr(aztek_form, 'pick_bundle', okay)
-    builder = _builder()
-
-    async def validate_bundle(_page, bundle_spec, missing):
-        values = bundle_spec.get('bundle_ids') or [
-            bundle_spec.get('bundle_id')]
-        if not any(str(value or '').strip() for value in values):
-            missing.append('Bundle')
-
-    builder._fill_bundles = validate_bundle
-    spec = {
-        'name_th': 'สินค้า', 'name_en': 'Product', 'category_id': '12',
-        'prices': [{'currency_id': '91', 'original_price': 100, 'price': 66}],
-        'bundle_id': '223553',
-        'start_at': '2026-07-30 00:00:00',
-        'end_at': '2026-08-30 07:59:00',
-        'limit_type': 'UNLIMITED', 'tags': [],
-    }
-    spec[field] = [] if field == 'prices' else ''
-    missing = asyncio.run(builder.fill_form(_Page(), spec))
-    assert label in missing

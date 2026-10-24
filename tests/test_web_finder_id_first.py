@@ -30,7 +30,7 @@ LIST_HTML = '''<main>
 </main>'''
 
 
-def routed_browser(monkeypatch, html, *, detail=None):
+def routed_browser(monkeypatch, html, *, detail=None, context_options=None):
     """Launch a real browser; unexpected requests abort rather than reach Aztek."""
     requests = []
     unexpected = []
@@ -58,7 +58,7 @@ def routed_browser(monkeypatch, html, *, detail=None):
                 browser = await self.driver.chromium.launch(**kwargs)
 
                 async def new_context(**context_kwargs):
-                    context = await browser.new_context(**context_kwargs)
+                    context = await browser.new_context(**{**context_kwargs, **(context_options or {})})
                     await context.route('**/*', serve)
                     return context
 

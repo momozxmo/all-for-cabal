@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Read and fill the Aztek v2 Product form.
-
-This first slice is deliberately read-only: it harvests the Product page's
-current Currency and Category options and never clicks the create button.
-"""
+"""Read, fill and submit Aztek v2 Product forms through verified controls."""
 from __future__ import annotations
 
 import json
 import re
+from email.parser import BytesParser
+from email.policy import default
+from urllib.parse import urlsplit
+from uuid import UUID
 
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, async_playwright, expect
 
 import aztek_core as core
 from web import aztek_form, browser_launch
 from web.activity_runner import ActivityBuilder
+from web.aztek_locator import AztekLocatorError, require_control
 from web.search_runner import to_web_url
 
 
@@ -22,6 +23,43 @@ OPTION_LABELS = {
     'categories': 'Category',
     'currencies': 'Currency',
 }
+
+# Independently captured on each owning Product form with all HTTP aborted,
+# Oct20. This proves the request route, not a successful response schema.
+_VERIFIED_WRITE_PATHS = {
+    'CabalM TH': '/cabalm/shop/products',
+    'CabalM SEA': '/cabalmsea/shop/products',
+    'CabalPC TH': '/cabalpc/shop/products',
+    'CabalPC SEA': '/cabalpcsea/shop/products',
+}
+
+
+async def _submitted_product_name(request):
+    """Read one scalar th[name] from the observed multipart write, not the DOM."""
+    try:
+        content_type = await request.header_value('content-type') or ''
+        raw = request.post_data_buffer
+        if not isinstance(raw, bytes):
+            return None
+        message = BytesParser(policy=default).parsebytes(
+            b'Content-Type: ' + content_type.encode('ascii') + b'\r\n\r\n' + raw)
+        if message.get_content_type() != 'multipart/form-data' or not message.is_multipart():
+            return None
+        if any(part.defects for part in message.walk()):
+            return None
+        names = []
+        for part in message.iter_parts():
+            if part.get_param('name', header='content-disposition') != 'th[name]':
+                continue
+            if part.get_content_disposition() != 'form-data' or part.get_filename() is not None:
+                return None
+            value = part.get_payload(decode=True)
+            if not isinstance(value, bytes):
+                return None
+            names.append(value.decode('utf-8'))
+        return names[0] if len(names) == 1 and names[0].strip() else None
+    except (PlaywrightError, ValueError, UnicodeError):
+        return None
 
 
 def product_create_url(game):
@@ -62,130 +100,254 @@ def _require_product_options(options, wanted):
     return options
 
 
-async def _read_options(select):
-    rows = await select.locator('option').evaluate_all(
-        """nodes => nodes.map(node => ({
-          value: node.value || '',
-          text: (node.textContent || '').trim()
-        }))""")
-    return _clean_option_rows(rows)
-
-
-def _category_trigger(page):
-    return page.locator(
-        'button[data-slot="popover-trigger"]').filter(
-            has_text='เลือก Category').first
-
-
 async def _ready_category_trigger(page):
-    """Wait for the async Category catalog before falling back."""
-    trigger = _category_trigger(page)
-    try:
-        await trigger.wait_for(state='visible', timeout=8000)
-    except Exception:
-        pass
-    return trigger
+    section = await _product_section(page, 'ข้อมูลทั่วไป')
+    return await require_control(
+        section, 'Category', selector='button[role="combobox"][data-slot="popover-trigger"]',
+        tags=('button',), roles=('combobox',), input_types=('button',))
 
 
-def _currency_trigger(original_price):
-    return original_price.locator(
-        'xpath=ancestor::*[.//button[@data-slot="popover-trigger"]][1]'
-    ).locator('button[data-slot="popover-trigger"]').first
+async def _currency_trigger(row, index):
+    return await require_control(
+        row, 'Currency แถวที่ %d' % (index + 1),
+        selector='button[role="combobox"][data-slot="popover-trigger"]',
+        tags=('button',), roles=('combobox',), input_types=('button',))
 
 
-async def _read_popover_options(page, trigger):
-    """Read Radix/cmdk options and keep their server IDs."""
-    await trigger.click(timeout=8000)
-    options = page.locator('[role="dialog"] [role="option"]')
-    await options.first.wait_for(state='attached', timeout=8000)
+async def _open_product_options(page, trigger):
+    await aztek_form.activate_verified_button(trigger, 'ตัวเลือก Product', 'combobox')
+    return await require_control(
+        page, 'ตัวเลือก Product',
+        selector='[role="dialog"][data-slot="popover-content"]:visible', roles=('dialog',))
+
+
+async def _product_option_rows(dialog):
+    options = dialog.locator('[role="option"]')
+    await options.first.wait_for(state='visible', timeout=8000)
     rows = await options.evaluate_all(
         """nodes => nodes.map(node => {
-          const raw = node.getAttribute('data-value') || '';
-          const parts = raw.split('\\u0000');
+          const parts = (node.getAttribute('data-value') || '').split('\\u0000');
           return {
-            value: parts.length > 1 ? parts[parts.length - 1] : '',
+            value: parts.length === 2 ? parts[1].trim() : '',
             text: (node.textContent || '').trim()
           };
         })""")
-    await page.keyboard.press('Escape')
-    return _clean_option_rows(rows)
+    if (any(not row['value'] or not row['text'] for row in rows)
+            or len({row['value'] for row in rows}) != len(rows)):
+        raise AztekLocatorError('Aztek: ค่าตัวเลือก Product ไม่มี ID หรือซ้ำ/รูปแบบเปลี่ยน')
+    return rows
+
+
+async def _read_popover_options(page, trigger):
+    """Read the unique audited no-ID popup without selecting anything."""
+    dialog = await _open_product_options(page, trigger)
+    try:
+        return _clean_option_rows(await _product_option_rows(dialog))
+    finally:
+        if await dialog.is_visible():
+            await dialog.press('Escape')
+            await dialog.wait_for(state='hidden', timeout=5000)
 
 
 async def _select_popover_option(page, trigger, option_id):
-    """Select one live Radix/cmdk option by its fetched server ID."""
+    """Map the exact fetched business ID, never a suffix or display label."""
+    dialog = await _open_product_options(page, trigger)
     try:
-        await trigger.click(timeout=8000)
-        selector = (
-            '[role="dialog"] [role="option"][data-value$=%s]'
-            % json.dumps(str(option_id)))
-        option = page.locator(selector).first
-        await option.wait_for(state='attached', timeout=8000)
-        await option.click(timeout=8000)
+        rows = await _product_option_rows(dialog)
+        wanted = str(option_id)
+        index = next((n for n, row in enumerate(rows) if row['value'] == wanted), None)
+        if index is None:
+            raise AztekLocatorError('Aztek: ตัวเลือก Product ไม่พบ ID %s ที่ขอ' % wanted)
+        # Position is derived from the current, unique business-ID mapping;
+        # validate it again atomically after actionability, not a cached index.
+        option = dialog.locator('[role="option"]').nth(index)
+        await option.click(trial=True, timeout=5000)
+        activated = await option.evaluate('''(node,wanted)=>{
+          const identity=e=>{const p=(e.getAttribute('data-value')||'').split('\\u0000');
+            return p.length===2?p[1].trim():null;};
+          const owner=node.closest('[role="dialog"][data-slot="popover-content"]');
+          if(!owner || !node.isConnected || node.getAttribute('role')!=='option' ||
+             !node.getClientRects().length ||
+             ['hidden','collapse'].includes(getComputedStyle(node).visibility) ||
+             node.getAttribute('aria-disabled')==='true' || node.disabled || identity(node)!==wanted ||
+             [...owner.querySelectorAll('[role="option"]')].filter(e=>identity(e)===wanted).length!==1) return false;
+          node.click();return true;
+        }''', wanted)
+        if not activated:
+            raise AztekLocatorError('Aztek: ค่าตัวเลือก Product เปลี่ยนระหว่างรอ')
+        await dialog.wait_for(state='hidden', timeout=5000)
+        await expect(trigger).to_have_text(rows[index]['text'], timeout=5000)
         return True
-    except Exception:
-        try:
-            await page.keyboard.press('Escape')
-        except Exception:
-            pass
-        return False
-
-
-async def _category_select(page):
-    selectors = (
-        'xpath=//label[contains(normalize-space(.),"หมวดหมู่")]'
-        '/following::select[1]',
-        'xpath=//label[contains(normalize-space(.),"Category")]'
-        '/following::select[1]',
-    )
-    for selector in selectors:
-        select = page.locator(selector).first
-        if await select.count():
-            return select
-    return None
-
-
-async def _currency_select(page):
-    price = page.locator(
-        'input[name="prices.0.original_price"]').first
-    if not await price.count():
-        add = page.locator(
-            'button:has-text("เพิ่มสกุลเงิน"),'
-            'button:has-text("เพิ่มราคา"),'
-            'button:has-text("Add Currency")').first
-        if await add.count():
-            await add.click()
-            await price.wait_for(state='attached', timeout=8000)
-    if not await price.count():
-        return None
-    wrapper = price.locator(
-        'xpath=ancestor::*[.//select][1]').first
-    select = wrapper.locator('select').first
-    return select if await select.count() else None
+    except AztekLocatorError:
+        raise
+    except (PlaywrightError, AssertionError) as exc:
+        raise AztekLocatorError('Aztek: ตัวเลือก Product ไม่พร้อมหรืออ่านกลับไม่ตรงกับ ID %s' % option_id) from exc
+    finally:
+        if await dialog.is_visible():
+            await dialog.press('Escape')
+            await dialog.wait_for(state='hidden', timeout=5000)
 
 
 async def _harvest_product_options(page, wanted):
     options = {}
     if 'categories' in wanted:
         trigger = await _ready_category_trigger(page)
-        if await trigger.count():
-            options['categories'] = await _read_popover_options(
-                page, trigger)
-        else:
-            select = await _category_select(page)
-            options['categories'] = (
-                await _read_options(select) if select is not None else [])
+        options['categories'] = await _read_popover_options(page, trigger)
     if 'currencies' in wanted:
-        select = await _currency_select(page)
-        original = page.locator(
-            'input[name="prices.0.original_price"]').first
-        trigger = _currency_trigger(original)
-        if await original.count() and await trigger.count():
-            options['currencies'] = await _read_popover_options(
-                page, trigger)
-        else:
-            options['currencies'] = (
-                await _read_options(select) if select is not None else [])
+        row = await _product_price_row(page, 0)
+        trigger = await _currency_trigger(row, 0)
+        options['currencies'] = await _read_popover_options(page, trigger)
     return options
+
+
+async def _product_section(page, title):
+    form = await require_control(page, 'ฟอร์ม Product', selector='main form', tags=('form',))
+    # No stable section IDs in the independently audited four forms.
+    return await require_control(
+        form, 'ส่วน %s' % title,
+        selector='section:has(h2:text-is(%s))' % json.dumps(title, ensure_ascii=False),
+        tags=('section',))
+
+
+async def _product_language_panel(page, title, language):
+    """Follow the audited section's current tab relationship, not runtime IDs."""
+    section = await _product_section(page, title)
+    caption = 'ไทย' if language == 'th' else 'English'
+    label = '%s (%s)' % (title, caption)
+    tab = await require_control(
+        section, label, selector='[role="tab"]:text-is(%s)' % json.dumps(caption, ensure_ascii=False),
+        tags=('button',), roles=('tab',), input_types=('button',))
+    await aztek_form.activate_verified_button(tab, label, 'tab')
+    try:
+        await expect(tab).to_have_attribute('aria-selected', 'true', timeout=5000)
+        relation = await tab.get_attribute('aria-controls')
+        tab_id = await tab.get_attribute('id')
+        if not relation or not re.fullmatch(r'\S+', relation) or not tab_id:
+            raise AztekLocatorError('Aztek: %s ความสัมพันธ์แท็บไม่ชัดเจน' % label)
+        panel = await require_control(
+            section, label, selector='[id=%s]' % json.dumps(relation),
+            tags=('div',), roles=('tabpanel',))
+        await expect(panel).to_have_attribute('data-state', 'active', timeout=5000)
+        await expect(panel).to_have_attribute('aria-labelledby', tab_id, timeout=5000)
+        if await section.locator('[role="tabpanel"][data-state="active"]').count() != 1:
+            raise AztekLocatorError('Aztek: %s พบหลายพื้นที่ภาษาที่เปิดอยู่' % label)
+        return panel
+    except (PlaywrightError, AssertionError) as exc:
+        raise AztekLocatorError('Aztek: %s แท็บภาษาไม่พร้อมหรืออ่านกลับไม่ตรง' % label) from exc
+
+
+async def _product_price_row(page, index):
+    section = await _product_section(page, 'สกุลเงิน')
+    original_name = 'prices.%d.original_price' % index
+    price_name = 'prices.%d.price' % index
+    original_selector = 'input[name=%s]' % json.dumps(original_name)
+    if await section.locator(original_selector).count() == 0:
+        add = await require_control(
+            section, 'เพิ่มสกุลเงิน', selector='button:text-is("เพิ่มสกุลเงิน")',
+            tags=('button',), input_types=('button',))
+        await aztek_form.activate_verified_button(add, 'เพิ่มสกุลเงิน')
+    original = await require_control(
+        section, 'ราคาปกติ แถวที่ %d' % (index + 1), selector=original_selector,
+        tags=('input',), input_types=('number',))
+    # The no-ID row must contain both indexed price inputs and its Currency
+    # trigger, without climbing to the whole section or a neighbouring row.
+    row = original.locator(
+        'xpath=ancestor::*[.//input[@name="%s"] and .//button[@role="combobox"]][1]' % price_name)
+    if (await row.count() != 1
+            or await row.locator('input[name$=".original_price"]').count() != 1
+            or await row.locator('input[name$=".price"]').count() != 1
+            or await row.locator('h2').count()):
+        raise AztekLocatorError('Aztek: แถวสกุลเงินที่ %d ไม่ชัดเจน' % (index + 1))
+    await require_control(
+        row, 'ราคาขาย แถวที่ %d' % (index + 1), selector='input[name=%s]' % json.dumps(price_name),
+        tags=('input',), input_types=('number',))
+    return row
+
+
+async def _pick_product_bundle(page, section, bundle_id):
+    """Product's audited no-ID picker follows its own current popup relation."""
+    label = 'Bundle %s' % bundle_id
+    trigger = await require_control(
+        section, label, selector='button[aria-haspopup="dialog"]',
+        tags=('button',), input_types=('button',))
+    popup = None
+    try:
+        await aztek_form.activate_verified_button(trigger, label)
+        await expect(trigger).to_have_attribute('aria-expanded', 'true', timeout=5000)
+        await expect(trigger).to_have_attribute('aria-controls', re.compile(r'\S+'), timeout=5000)
+        relation = await trigger.get_attribute('aria-controls')
+        if len(relation.split()) != 1:
+            raise AztekLocatorError('Aztek: %s popup ไม่ชัดเจน' % label)
+        popup = await require_control(
+            page, label, selector='[id=%s]' % json.dumps(relation), tags=('div',), roles=('dialog',))
+        await expect(popup).to_have_attribute('data-state', 'open', timeout=5000)
+        box = await require_control(
+            popup, 'ค้นหา %s' % label, selector='input[placeholder="ค้นหาด้วยชื่อหรือ id"]',
+            tags=('input',), input_types=('text',))
+        await box.fill(bundle_id)
+        if await box.input_value() != bundle_id:
+            raise AztekLocatorError('Aztek: ค้นหา %s อ่านกลับไม่ตรง' % label)
+        row = await require_control(
+            popup, label, selector='button:has(span:text-is(%s))' % json.dumps('ID: ' + bundle_id),
+            tags=('button',), input_types=('button',))
+        await row.click(trial=True, timeout=5000)
+        activated = await row.evaluate(r'''(b,args)=>{
+          const owner=b.closest('[role="dialog"]');
+          const match=e=>[...e.querySelectorAll('span')].filter(s=>s.textContent.trim()==='ID: '+args.id).length===1;
+          if(!owner || owner.id!==args.popup || owner.getAttribute('data-state')!=='open' ||
+             !args.trigger.isConnected || args.trigger.closest('section')!==args.section ||
+             args.trigger.getAttribute('aria-controls')!==owner.id || args.trigger.type!=='button' ||
+             !b.isConnected || b.disabled || !b.getClientRects().length ||
+             ['hidden','collapse'].includes(getComputedStyle(b).visibility) ||
+             b.tagName!=='BUTTON' || b.type!=='button' || !match(b) ||
+             [...owner.querySelectorAll('button')].filter(match).length!==1) return false;
+          b.click();return true;
+        }''', {'id':bundle_id, 'popup':relation, 'trigger':await trigger.element_handle(),
+               'section':await section.element_handle()})
+        if not activated:
+            raise AztekLocatorError('Aztek: %s ตัวเลือกเปลี่ยนระหว่างรอ' % label)
+        await popup.wait_for(state='hidden', timeout=5000)
+        await require_control(
+            section, label, selector='span:text-is(%s)' % json.dumps('#' + bundle_id), tags=('span',))
+        return True
+    except (PlaywrightError, AssertionError) as exc:
+        raise AztekLocatorError('Aztek: %s เลือกหรืออ่านกลับไม่ได้' % label) from exc
+    finally:
+        if popup is not None and await popup.is_visible():
+            await popup.press('Escape', timeout=5000)
+
+
+async def _product_bundle_cards(section):
+    """Map current business markers to their verified indexed Primary IDs."""
+    markers = section.locator('span:text-matches("^#[0-9]+$")')
+    ids = [text.strip()[1:] for text in await markers.all_text_contents()]
+    if len(set(ids)) != len(ids):
+        raise AztekLocatorError('Aztek: รายการ Bundle ซ้ำหรือขอบเขตการ์ดไม่ชัดเจน')
+    cards = []
+    owner = await section.element_handle()
+    for index, bundle_id in enumerate(ids):
+        label = 'Primary Bundle %s' % bundle_id
+        marker = await require_control(
+            section, label, selector='span:text-is(%s)' % json.dumps('#' + bundle_id), tags=('span',))
+        card = marker.locator('xpath=ancestor::div[.//button[@role="checkbox"]][1]')
+        if (await card.count() != 1
+                or await card.locator('button[role="checkbox"]').count() != 1
+                or await card.locator('span:text-matches("^#[0-9]+$")').count() != 1
+                or not await card.evaluate('(e,s)=>e.closest("section")===s', owner)):
+            raise AztekLocatorError('Aztek: %s ขอบเขตการ์ดไม่ตรง' % label)
+        element_id = 'bundle-primary-%d' % index
+        primary = await require_control(
+            section, label, element_id=element_id, tags=('button',),
+            roles=('checkbox',), input_types=('button',))
+        if await card.locator('[id=%s]' % json.dumps(element_id)).count() != 1:
+            raise AztekLocatorError('Aztek: %s ID ไม่ตรงกับการ์ด' % label)
+        state = await primary.get_attribute('aria-checked')
+        if state not in ('true', 'false'):
+            raise AztekLocatorError('Aztek: %s อ่านสถานะไม่ได้' % label)
+        cards.append((bundle_id, primary, state))
+    if await section.locator('[id^="bundle-primary-"]').count() != len(cards):
+        raise AztekLocatorError('Aztek: Primary Bundle มี ID เกินหรือขาดจากรายการ')
+    return cards
 
 
 async def fetch_options(game, storage_state, kinds):
@@ -202,24 +364,18 @@ async def fetch_options(game, storage_state, kinds):
         try:
             await page.goto(
                 url, wait_until='domcontentloaded', timeout=30000)
-            await page.locator('input[name="th_name"]').wait_for(
-                state='visible', timeout=20000)
-            await page.wait_for_timeout(2500)
             if any(part in page.url.lower()
                    for part in ('/login', '/signin')):
                 raise RuntimeError('Aztek session expired')
+            form = await require_control(page, 'ฟอร์ม Product', selector='main form', tags=('form',))
+            await require_control(
+                form, 'ชื่อ Product (ไทย)', element_id='th_name', tags=('input',),
+                input_types=('text',), timeout=20000)
             return _require_product_options(
                 await _harvest_product_options(page, wanted), wanted)
         finally:
             await context.close()
             await browser.close()
-
-
-def _date_trigger(page, label):
-    """The Product date-time button immediately following a visible label."""
-    return page.locator(
-        'xpath=//label[contains(normalize-space(.),"%s")]'
-        '/following::button[1]' % label).first
 
 
 class ProductBuilder(ActivityBuilder):
@@ -229,19 +385,90 @@ class ProductBuilder(ActivityBuilder):
     SAVE_LABEL = 'สร้าง Product'
     KIND = 'Product'
     WRITE_MARK = 'product'
-    READY_SELECTOR = 'input[name="th_name"]'
+    READY_SELECTOR = 'main form input[id="th_name"]'
 
     def create_url(self, game):
         return product_create_url(game)
 
+    async def _create_button(self, page):
+        return await aztek_form.require_create_button(page, self.KIND, name_id='th_name')
+
+    async def _activate_create(self, button):
+        await aztek_form.activate_create_button(button, self.KIND, name_id='th_name')
+
+    def _verified_write_path(self, create_url):
+        return next((path for game, path in _VERIFIED_WRITE_PATHS.items()
+                     if create_url == self.create_url(game)), None)
+
+    def _write_matcher(self, page, create_url):
+        write_path = self._verified_write_path(create_url)
+        if write_path is None:
+            return super()._write_matcher(page, create_url)
+
+        def matches(response):
+            parsed = urlsplit(response.url)
+            try:
+                return (response.request.method == 'POST'
+                        and (parsed.scheme, parsed.netloc, parsed.path) == (
+                            'https', 'admin-api-v2.combo-interactive.com', write_path)
+                        and response.request.frame == page.main_frame)
+            except PlaywrightError:
+                return False
+
+        return matches
+
+    def _confirmation_resolver(self, page, create_url):
+        if self._verified_write_path(create_url) is None:
+            return None
+        return lambda: aztek_form.require_confirmation_button(page, create_url, self.KIND)
+
+    def _confirmation_activator(self, page, create_url):
+        if self._verified_write_path(create_url) is None:
+            return None
+        return lambda button, write_pending: aztek_form.activate_confirmation_button(
+            button, create_url, self.KIND, write_pending)
+
+    async def _read_created_id(self, page, response, create_url):
+        if self._verified_write_path(create_url) is not None:
+            if response is not None:
+                try:
+                    payload = await response.json()
+                except (PlaywrightError, ValueError):
+                    payload = None
+                if isinstance(payload, dict) and payload.get('success') is False:
+                    raise RuntimeError('Aztek ตอบ success=false — ยังยืนยันผลสร้าง Product ไม่ได้ '
+                                       'โปรดตรวจบนเว็บก่อนลองใหม่')
+                if isinstance(payload, dict) and payload.get('success') is True:
+                    # Separately approved creates independently observed this
+                    # envelope/UUID in all four games, Oct21; not inferred.
+                    envelope = payload.get('data')
+                    record = envelope.get('data') if isinstance(envelope, dict) else None
+                    value = record.get('id') if isinstance(record, dict) else None
+                    if isinstance(value, str):
+                        try:
+                            parsed = UUID(value)
+                            if (parsed.int and str(parsed) == value.lower()
+                                    and (name := await _submitted_product_name(response.request))
+                                    and record.get('name') == name):
+                                return value
+                        except ValueError:
+                            pass
+            # Unknown body shapes and all saved-result URLs stay unverified.
+            # Never borrow nested Bundle/Category/Currency IDs or guess a URL.
+            return None
+        return await super()._read_created_id(page, response, create_url)
+
     async def _fill_general(self, page, spec, missing):
-        for field, selector, label in (
-            ('name_th', 'input[name="th_name"]', 'ชื่อ Product (ไทย)'),
-            ('name_en', 'input[name="en_name"]', 'ชื่อ Product (อังกฤษ)'),
+        # Audited in all four Product forms: one no-ID form within main;
+        # names have developer-maintained IDs, unlike option popup internals.
+        form = await require_control(
+            page, 'ฟอร์ม Product', selector='main form', tags=('form',))
+        for field, element_id, label in (
+            ('name_th', 'th_name', 'ชื่อ Product (ไทย)'),
+            ('name_en', 'en_name', 'ชื่อ Product (อังกฤษ)'),
         ):
             value = str(spec.get(field) or '').strip()
-            ok = await aztek_form.fill(
-                page, selector, value, self.log, label)
+            ok = await aztek_form.fill_by_id(form, element_id, value, label)
             if not value or not ok:
                 missing.append(label)
         category_id = str(spec.get('category_id') or '').strip()
@@ -249,12 +476,7 @@ class ProductBuilder(ActivityBuilder):
             missing.append('หมวดหมู่')
         else:
             trigger = await _ready_category_trigger(page)
-            if await trigger.count():
-                selected = await _select_popover_option(
-                    page, trigger, category_id)
-            else:
-                selected = await aztek_form.select_after_label(
-                    page, 'หมวดหมู่', category_id, self.log)
+            selected = await _select_popover_option(page, trigger, category_id)
             if not selected:
                 missing.append('หมวดหมู่')
 
@@ -262,21 +484,19 @@ class ProductBuilder(ActivityBuilder):
         """Fill the visible TinyMCE after selecting its language tab."""
         if not str(value or ''):
             return True
-        label = 'ไทย' if language == 'th' else 'English'
+        label = 'รายละเอียด (%s)' % ('ไทย' if language == 'th' else 'English')
+        panel = await _product_language_panel(page, 'รายละเอียด', language)
+        frame = await require_control(panel, label, selector='iframe', tags=('iframe',))
+        if await frame.get_attribute('title') != 'Rich Text Area':
+            raise AztekLocatorError('Aztek: %s editor ไม่ตรงกับที่ตรวจไว้' % label)
         try:
-            tab = page.get_by_role('tab', name=label, exact=True).first
-            if await tab.count():
-                await tab.click(timeout=6000)
-                await page.wait_for_timeout(500)
-            frame = page.locator(
-                'iframe.tox-edit-area__iframe:visible').first
-            await frame.wait_for(state='visible', timeout=6000)
-            await frame.content_frame.locator('body').fill(str(value))
+            body = await require_control(frame.content_frame, label, selector='body', tags=('body',))
+            await body.fill(str(value), timeout=5000)
+            await body.press('Tab', timeout=5000)
+            await expect(body).to_have_text(str(value), use_inner_text=True, timeout=5000)
             return True
-        except Exception as exc:
-            self.log('กรอกรายละเอียด %s ไม่สำเร็จ: %s'
-                     % (label, exc), 'WARNING')
-            return False
+        except (PlaywrightError, AssertionError) as exc:
+            raise AztekLocatorError('Aztek: %s กรอกหรืออ่านกลับไม่ตรงที่ขอ' % label) from exc
 
     async def _fill_details(self, page, spec):
         for language, field in (
@@ -288,41 +508,35 @@ class ProductBuilder(ActivityBuilder):
 
     async def _fill_images(self, page, spec, missing):
         images = spec.get('images') or {}
-        for index, slot in enumerate((
-            'thumbnail_th', 'banner_th', 'thumbnail_en', 'banner_en',
-        )):
+        for slot, language, caption in (
+            ('thumbnail_th', 'th', 'Thumbnail'), ('banner_th', 'th', 'Banner'),
+            ('thumbnail_en', 'en', 'Thumbnail'), ('banner_en', 'en', 'Banner'),
+        ):
             image = images.get(slot)
             if not image:
                 continue
+            label = 'รูป %s' % slot
+            panel = await _product_language_panel(page, 'รูปภาพสินค้า', language)
+            field_label = await require_control(
+                panel, label, selector='label:text-is(%s)' % json.dumps(caption), tags=('label',))
+            # Audited no-ID field wrapper: one label and its own hidden input.
+            field = field_label.locator('xpath=..')
+            if await field.locator('label').count() != 1:
+                raise AztekLocatorError('Aztek: %s ขอบเขตช่องรูปไม่ชัดเจน' % label)
+            target = field.locator('input')
             try:
-                await page.locator('input[type="file"]').nth(
-                    index).set_input_files({
-                        'name': image['name'],
-                        'mimeType': image['content_type'],
-                        'buffer': image['bytes'],
-                    })
-            except Exception as exc:
-                missing.append('รูป %s' % slot)
-                self.log('ใส่รูป %s ไม่สำเร็จ: %s' % (slot, exc), 'WARNING')
-
-    async def _add_price_row(self, page, index):
-        original = page.locator(
-            'input[name="prices.%d.original_price"]' % index).first
-        if await original.count():
-            return original
-        add = page.locator(
-            'button:has-text("เพิ่มสกุลเงิน"),'
-            'button:has-text("เพิ่มราคา"),'
-            'button:has-text("Add Currency")').first
-        try:
-            await add.click(timeout=8000)
-            await original.wait_for(state='attached', timeout=8000)
-            await page.wait_for_timeout(500)
-            return original
-        except Exception as exc:
-            self.log('เพิ่มแถวสกุลเงินที่ %d ไม่สำเร็จ: %s'
-                     % (index + 1, exc), 'WARNING')
-            return None
+                await target.wait_for(state='attached', timeout=5000)
+                if await target.count() != 1 or await target.get_attribute('type') != 'file':
+                    raise AztekLocatorError('Aztek: %s ช่องไฟล์ไม่ตรงกับที่ตรวจไว้' % label)
+                await expect(target).to_be_enabled(timeout=5000)
+                await target.set_input_files({
+                    'name': image['name'], 'mimeType': image['content_type'], 'buffer': image['bytes'],
+                }, timeout=5000)
+                actual = await target.evaluate('e=>[...e.files].map(f=>({name:f.name,type:f.type,size:f.size}))')
+                if actual != [{'name':image['name'], 'type':image['content_type'], 'size':len(image['bytes'])}]:
+                    raise AztekLocatorError('Aztek: %s อ่านไฟล์กลับไม่ตรงที่ขอ' % label)
+            except (PlaywrightError, AssertionError) as exc:
+                raise AztekLocatorError('Aztek: %s ช่องไฟล์ไม่พร้อมหรือขอบเขตเปลี่ยน' % label) from exc
 
     async def _fill_prices(self, page, spec, missing):
         prices = spec.get('prices') or []
@@ -332,28 +546,12 @@ class ProductBuilder(ActivityBuilder):
         for index, price in enumerate(prices):
             currency_id = str(price.get('currency_id') or '').strip()
             where = 'สกุลเงินที่ %d' % (index + 1)
-            original = await self._add_price_row(page, index)
-            if original is None:
-                missing.append(where)
-                continue
+            row = await _product_price_row(page, index)
             if not currency_id:
                 missing.append(where)
             else:
-                trigger = _currency_trigger(original)
-                if await trigger.count():
-                    selected = await _select_popover_option(
-                        page, trigger, currency_id)
-                else:
-                    select = original.locator(
-                        'xpath=ancestor::*[.//select][1]').first.locator(
-                            'select').first
-                    try:
-                        await select.select_option(value=currency_id)
-                        selected = True
-                    except Exception as exc:
-                        selected = False
-                        self.log('เลือก %s ไม่สำเร็จ: %s'
-                                 % (where, exc), 'WARNING')
+                trigger = await _currency_trigger(row, index)
+                selected = await _select_popover_option(page, trigger, currency_id)
                 if not selected:
                     missing.append(where)
             for field, label in (
@@ -361,34 +559,42 @@ class ProductBuilder(ActivityBuilder):
                 ('price', 'ราคาขาย'),
             ):
                 value = price.get(field)
-                ok = await aztek_form.fill(
-                    page, 'input[name="prices.%d.%s"]' % (index, field),
-                    value, self.log, '%s %s' % (where, label))
-                if value in (None, '') or not ok:
+                if value in (None, ''):
+                    missing.append('%s: %s' % (where, label))
+                    continue
+                target = await require_control(
+                    row, '%s: %s' % (where, label),
+                    selector='input[name="prices.%d.%s"]' % (index, field),
+                    tags=('input',), input_types=('number',))
+                await target.fill(str(value))
+                if await target.input_value() != str(value):
                     missing.append('%s: %s' % (where, label))
 
     async def _fill_display(self, page, spec, missing):
+        form = await require_control(
+            page, 'ฟอร์ม Product', selector='main form', tags=('form',))
         for label, field, default in (
             ('เปิดใช้งาน', 'is_enabled', False),
             ('โหมดทดสอบ', 'is_test_mode', True),
             ('ซ่อนสินค้า', 'is_hidden', False),
         ):
-            await aztek_form.set_switch(
-                page, label, bool(spec.get(field, default)), self.log)
-        await aztek_form.fill(
-            page, 'input[name="position"]',
-            spec.get('position', '0'), self.log, 'ตำแหน่ง')
-        for label, field, missing_label in (
-            ('เวลาเริ่มขาย (GMT+7)', 'start_at', 'วันเริ่มขาย'),
-            ('เวลาหยุดขาย (GMT+7)', 'end_at', 'วันสิ้นสุด'),
+            await aztek_form.set_switch_by_id(
+                form, field, bool(spec.get(field, default)), label)
+        if not await aztek_form.fill_by_id(
+                form, 'position', spec.get('position', '0'), 'ตำแหน่ง',
+                input_types=('number',)):
+            missing.append('ตำแหน่ง')
+        for element_id, field, missing_label in (
+            ('show_at', 'start_at', 'วันเริ่มขาย'),
+            ('hide_at', 'end_at', 'วันสิ้นสุด'),
         ):
             value = str(spec.get(field) or '').strip()
             if not value:
                 missing.append(missing_label)
                 continue
-            if not await aztek_form.set_datetime(
-                    page, _date_trigger(page, label), value,
-                    self.log, label=label):
+            if not await aztek_form.set_datetime_by_id(
+                    page, form, element_id, value,
+                    self.log, label=missing_label):
                 missing.append(missing_label)
 
     async def _fill_limit(self, page, spec, missing):
@@ -398,30 +604,28 @@ class ProductBuilder(ActivityBuilder):
             return
         aztek_limit_type = (
             'NONE' if limit_type == 'UNLIMITED' else limit_type)
-        if not await aztek_form.select_after_label(
-                page, 'รูปแบบการจำกัดการซื้อ', aztek_limit_type, self.log):
+        form = await require_control(
+            page, 'ฟอร์ม Product', selector='main form', tags=('form',))
+        if not await aztek_form.select_by_id(
+                form, 'purchase_limit_type', aztek_limit_type, 'ประเภทการจำกัด'):
             missing.append('ประเภทการจำกัด')
         if limit_type == 'UNLIMITED':
             return
         quantity = str(spec.get('limit_quantity') or '').strip()
-        ok = await aztek_form.fill(
-            page, 'input[name="limit_per"]', quantity,
-            self.log, 'จำนวนที่ซื้อได้')
+        ok = await aztek_form.fill_by_id(
+            form, 'limit_per', quantity, 'จำนวนที่ซื้อได้', input_types=('number',))
         if not quantity or not ok:
             missing.append('จำนวนที่ซื้อได้')
         interval = str(
             spec.get('limit_reset_interval_days') or '').strip()
         if interval:
-            await aztek_form.fill(
-                page, 'input[name="limit_reset_interval_days"]',
-                interval, self.log, 'รีเซ็ตทุกกี่วัน')
+            if not await aztek_form.fill_by_id(
+                    form, 'limit_reset_interval_days', interval, 'รีเซ็ตทุกกี่วัน',
+                    input_types=('number',)):
+                missing.append('รีเซ็ตทุกกี่วัน')
         reset_at = str(spec.get('limit_reset_at') or '').strip()
-        if reset_at and not await aztek_form.set_datetime(
-                page, _date_trigger(
-                    page,
-                    'วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)'),
-                reset_at, self.log,
-                label='วันล่าสุดที่ทำการรีเซ็ทรอบการขาย (GMT+7)'):
+        if reset_at and not await aztek_form.set_datetime_by_id(
+                page, form, 'limit_reset_at', reset_at, self.log, label='รีเซ็ตล่าสุด'):
             missing.append('รีเซ็ตล่าสุด')
 
     async def _fill_tags(self, page, spec, missing):
@@ -436,11 +640,12 @@ class ProductBuilder(ActivityBuilder):
         if not bundle_ids:
             missing.append('Bundle')
             return
-        heading = page.get_by_role('heading', name='Bundle', exact=True)
-        section = page.locator('section').filter(has=heading).first
-        for bundle_id in bundle_ids:
-            if not await aztek_form.pick_bundle(
-                    page, section, bundle_id, self.log):
+        section = await _product_section(page, 'Bundle')
+        existing = [card[0] for card in await _product_bundle_cards(section)]
+        if existing != bundle_ids[:len(existing)]:
+            raise AztekLocatorError('Aztek: รายการ Bundle เดิมไม่ตรงกับร่างที่ขอ — ไม่เปลี่ยนหรือลบแทน')
+        for bundle_id in bundle_ids[len(existing):]:
+            if not await _pick_product_bundle(page, section, bundle_id):
                 missing.append('Bundle %s' % bundle_id)
                 return
             text = await section.inner_text()
@@ -453,31 +658,40 @@ class ProductBuilder(ActivityBuilder):
         if primary_id not in bundle_ids:
             missing.append('Primary Bundle %s' % primary_id)
             return
-        primary_text = section.get_by_text(
-            '#%s' % primary_id, exact=True).first
-        primary_card = primary_text.locator(
-            'xpath=ancestor::*[.//button[@role="checkbox"]][1]').first
-        primary = primary_card.locator('button[role="checkbox"]').first
+        cards = await _product_bundle_cards(section)
+        if [card[0] for card in cards] != bundle_ids:
+            raise AztekLocatorError('Aztek: Bundle list/count ไม่ตรงกับรายการที่ขอ')
+        primary = cards[bundle_ids.index(primary_id)][1]
         try:
-            if await primary.count() == 0:
-                raise RuntimeError('Primary control not found')
             if await primary.get_attribute('aria-checked') != 'true':
-                await primary.click(timeout=6000)
-            if await primary.get_attribute('aria-checked') != 'true':
-                raise RuntimeError('Primary control did not stay checked')
-        except Exception as exc:
-            self.log('เลือก Primary Bundle %s ไม่สำเร็จ: %s' % (
-                primary_id, exc), 'WARNING')
-            missing.append('Primary Bundle %s' % primary_id)
-            return
+                await primary.click(trial=True, timeout=5000)
+                activated = await primary.evaluate('''(b,wanted)=>{
+                  const section=b.closest('section');let card=b.parentElement;
+                  const marks=e=>[...e.querySelectorAll('span')].filter(s=>/^#[0-9]+$/.test(s.textContent.trim()));
+                  while(card && card!==section && !marks(card).some(s=>s.textContent.trim()==='#'+wanted))card=card.parentElement;
+                  if(!section || !card || card===section || !b.isConnected || b.disabled ||
+                     b.tagName!=='BUTTON' || b.type!=='button' || b.getAttribute('role')!=='checkbox' ||
+                     !['true','false'].includes(b.getAttribute('aria-checked')) ||
+                     marks(card).length!==1 || marks(card)[0].textContent.trim()!=='#'+wanted ||
+                     card.querySelectorAll('button[role="checkbox"]').length!==1) return false;
+                  b.click();return true;
+                }''', primary_id)
+                if not activated:
+                    raise AztekLocatorError('Aztek: Primary Bundle %s การ์ดเปลี่ยนระหว่างรอ' % primary_id)
+            await expect(primary).to_have_attribute('aria-checked', 'true', timeout=5000)
+        except (PlaywrightError, AssertionError) as exc:
+            raise AztekLocatorError('Aztek: Primary Bundle %s เลือกหรืออ่านกลับไม่ได้' % primary_id) from exc
+        cards = await _product_bundle_cards(section)
+        if ([card[0] for card in cards] != bundle_ids
+                or [card[0] for card in cards if card[2] == 'true'] != [primary_id]):
+            raise AztekLocatorError('Aztek: Primary Bundle/list อ่านกลับไม่ตรงที่ขอ')
 
         text = await section.inner_text()
-        selected_ids = re.findall(r'#(\d+)\b', text)
         expected_count = len(bundle_ids)
         count_ok = re.search(
             r'\b%s\s*/\s*20\s*Bundles\b' % expected_count,
             text, re.I)
-        if selected_ids != bundle_ids or not count_ok:
+        if not count_ok:
             missing.append('Bundle list/count')
 
     async def _fill_bundle(self, page, spec, missing):

@@ -89,6 +89,37 @@ def exercise_form(html=HEADER_HTML, spec=None):
     return asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('fault', ('transient-disabled', 'disabled-after-option', 'wrong-type-after-option',
+                                  'disabled-during-native-readiness'))
+def test_itemcode_type_rechecks_trigger_readiness_after_lazy_option_mount(fault):
+    html = (HEADER_HTML.replace('<select onchange=', '<select disabled onchange=')
+            if fault == 'disabled-during-native-readiness'
+            else HEADER_HTML.replace('<option value="ALL">ALL</option>', ''))
+    if fault == 'transient-disabled':
+        html = html.replace('id="redeem_type"', 'id="redeem_type" disabled')
+    action = {'transient-disabled': 'trigger.disabled=false',
+              'disabled-after-option': 'trigger.disabled=true',
+              'wrong-type-after-option': "trigger.type='submit'",
+              'disabled-during-native-readiness': 'native.disabled=false;trigger.disabled=true'}[fault]
+    html += '''<script>setTimeout(()=>{
+      const trigger=document.getElementById('redeem_type');const native=trigger.nextElementSibling;
+      ACTION;INSERT_OPTION
+    },700)</script>'''.replace('ACTION', action).replace('INSERT_OPTION',
+        '' if fault == 'disabled-during-native-readiness' else
+        '''native.insertAdjacentHTML('beforeend','<option value="ALL">ALL</option>');''')
+    missing, error, values = exercise_form(html)
+    if fault == 'transient-disabled':
+        assert error is None
+        assert values['redeemValue'] == 'ALL' and values['redeemText'] == 'ALL'
+        assert 'ชุดรางวัล' in missing
+    else:
+        assert isinstance(error, AztekLocatorError)
+        assert 'ประเภท Item Code' in str(error)
+        assert missing is None
+        assert values['redeemValue'] == 'WINNER'
+    assert values['submits'] == ['0']
+
+
 def reward_html(base=HEADER_HTML):
     """Aztek mounts only the active set and retains each tab's form values."""
     html = base.replace('<button type="submit">สร้าง Item Code</button>', '''
@@ -657,6 +688,33 @@ def test_code_window_follows_date_ids_and_only_owning_calendar_controls():
     assert values['submits'] == ['0']
 
 
+@pytest.mark.parametrize('clock', ['00:00:00', '23:59:59'])
+def test_code_window_handles_live_nested_hour_labels_without_submitting(clock):
+    html = calendar_html().replace(
+        "option.textContent=String(number).padStart(2,'0');",
+        "option.innerHTML='<span aria-hidden=\"true\"><svg></svg></span><span id=\"hour-label-'+number+'\">'+String(number).padStart(2,'0')+'</span>';"
+        "option.setAttribute('aria-labelledby','hour-label-'+number);")
+    missing, error, values = exercise_form(html, {**SPEC, 'start_time': '2026-10-08 ' + clock})
+    assert error is None
+    assert values['dates'][0] == '08 Oct 2026 ' + clock
+    assert missing == ['เวลาสิ้นสุด', 'ชุดรางวัล']
+    assert values['submits'] == ['0'] and values['calendarDecoys'] == ['17', '16']
+
+
+@pytest.mark.parametrize('mutation', ['wrong-complete-label', 'hidden-duplicate'])
+def test_code_window_nested_hour_candidates_still_require_exact_unique_value(mutation):
+    html = calendar_html()
+    if mutation == 'wrong-complete-label':
+        html = html.replace("option.textContent=String(number).padStart(2,'0');",
+                            "option.innerHTML='<span>'+(number===0?'1000':String(number).padStart(2,'0'))+'</span>';")
+    else:
+        html = html.replace('list.append(option);',
+                            'list.append(option);if(number===0){const duplicate=option.cloneNode(true);duplicate.hidden=true;list.append(duplicate);}')
+    _missing, error, values = exercise_form(html, {**SPEC, 'start_time': '2026-10-08 00:00:00'})
+    assert isinstance(error, AztekLocatorError) and 'ชั่วโมง 00' in str(error)
+    assert values['submits'] == ['0'] and values['calendarDecoys'] == ['17', '16']
+
+
 @pytest.mark.parametrize('change', ['missing-id', 'duplicate-id', 'submit-type',
                                   'no-relation', 'wrong-popup-role', 'duplicate-popup-id',
                                   'duplicate-minute', 'duplicate-year'])
@@ -984,8 +1042,19 @@ def test_redeem_type_waits_for_requested_option_to_mount():
     assert values['submits'] == ['0']
 
 
-def routed_runner_browser(monkeypatch, html):
+def routed_runner_browser(monkeypatch, html, *, allow_synthetic_create=False, preview_urls=(),
+                          synthetic_write_url=None, synthetic_write_json=None, context_options=None,
+                          write_audit=None):
     """Replace only external browser traffic; retain the real runner lifecycle."""
+    # Four independently observed create endpoints; all remain intercepted.
+    write_paths = {
+        '/combo/cabalm/itemcodes/create': '/cabalm/itemcode/events',
+        '/combo/cabalmsea/itemcodes/create': '/cabalmsea/itemcode/events',
+        '/combo/cabalpc/itemcodes/create': '/cabalpc/itemcode/events',
+        '/combo/cabalpcsea/itemcodes/create': '/cabalpcsea/itemcode/events',
+    }
+    synthetic_write_urls = ((synthetic_write_url,) if isinstance(synthetic_write_url, str)
+                            else tuple(synthetic_write_url or ()))
     traffic, snapshots = [], []
 
     class Starter:
@@ -997,17 +1066,44 @@ def routed_runner_browser(monkeypatch, html):
                 original_new_context = browser.new_context
 
                 async def new_context(**kwargs):
-                    context = await original_new_context(**kwargs)
+                    context = await original_new_context(**{**kwargs, **(context_options or {})})
 
                     async def serve(route):
                         request = route.request
                         traffic.append((request.method, request.url))
-                        if (request.method == 'GET' and urlsplit(request.url).path in (
-                                '/combo/cabalm/itemcodes/create',
-                                '/combo/cabalmsea/itemcodes/create',
-                                '/combo/cabalpc/itemcodes/create',
-                                '/combo/cabalpcsea/itemcodes/create')):
-                            await route.fulfill(body=html, content_type='text/html; charset=utf-8')
+                        if request.method == 'GET' and (
+                                urlsplit(request.url).path in write_paths or request.url in preview_urls):
+                            content = html
+                            if allow_synthetic_create:
+                                content = content.replace('/synthetic-itemcode-write',
+                                    'https://admin-api-v2.combo-interactive.com' + write_paths[urlsplit(request.url).path])
+                            await route.fulfill(body=content, content_type='text/html; charset=utf-8')
+                        elif (request.url.split('?')[0] in synthetic_write_urls
+                              and request.method in ('OPTIONS', 'POST', 'PUT', 'PATCH')):
+                            # Explicit test-only destination, not an inferred
+                            # Event production API contract. Never forwarded.
+                            headers = {'Access-Control-Allow-Origin': '*',
+                                       'Access-Control-Allow-Methods': 'POST,PUT,PATCH'}
+                            if request.method == 'OPTIONS':
+                                await route.fulfill(status=204, headers=headers)
+                            else:
+                                if write_audit is not None:
+                                    write_audit.append({'method': request.method, 'url': request.url,
+                                                        'body': request.post_data,
+                                                        'content_type': request.headers.get('content-type', '')})
+                                payload = (synthetic_write_json if synthetic_write_json is not None
+                                           else {'id': 501 if 'owner=form' in request.url else 901})
+                                await route.fulfill(json=payload,
+                                                    headers=headers)
+                        elif (allow_synthetic_create and request.method == 'OPTIONS'
+                              and any(urlsplit(request.url).path.startswith(p) for p in write_paths.values())):
+                            await route.fulfill(status=204, headers={
+                                'Access-Control-Allow-Origin': '*',
+                                'Access-Control-Allow-Methods': 'POST,PUT,PATCH'})
+                        elif (allow_synthetic_create and request.method in ('POST', 'PUT', 'PATCH')
+                              and any(urlsplit(request.url).path.startswith(p) for p in write_paths.values())):
+                            await route.fulfill(json={'id': 501 if 'owner=form' in request.url else 901},
+                                                headers={'Access-Control-Allow-Origin': '*'})
                         else:
                             await route.abort()
 
@@ -1020,6 +1116,14 @@ def routed_runner_browser(monkeypatch, html):
                                 snapshots.append(await page.evaluate('''() => ({
                                     names: ['name_th','name_en','slug'].map(id=>document.querySelector('[id="'+id+'"]')?.value),
                                     submits: [...document.querySelectorAll('form')].map(e=>e.dataset.submits || '0'),
+                                    ...(document.body.hasAttribute('data-create-audit') ? {
+                                      outsideCreates: document.body.dataset.outsideCreates || '0',
+                                      alternativeCreates: document.body.dataset.alternativeCreates || '0'
+                                    } : {}),
+                                    ...(document.body.hasAttribute('data-confirm-audit') ? {
+                                      confirms: document.body.dataset.confirms || '0',
+                                      outsideConfirms: document.body.dataset.outsideConfirms || '0'
+                                    } : {}),
                                     ...(document.querySelector('#reward-values') ? {
                                       rewards: JSON.parse(document.querySelector('#reward-values').textContent)
                                     } : {})
@@ -1036,6 +1140,410 @@ def routed_runner_browser(monkeypatch, html):
 
     monkeypatch.setattr(activity_runner, 'async_playwright', Starter)
     return traffic, snapshots
+
+
+def create_action_html():
+    html = bundle_reward_html(calendar_html())
+    html = html.replace('event.preventDefault(); this.dataset.submits=\'1\'',
+        "event.preventDefault(); this.dataset.submits=String(Number(this.dataset.submits||0)+1); "
+        "fetch('/synthetic-itemcode-write?owner=form',{method:'POST'})")
+    return html + '''<script>document.body.dataset.createAudit='1';</script>'''
+
+
+def create_action_spec():
+    return {**SPEC, 'start_time': '2026-08-27 00:00:00', 'end_time': '2027-09-28 23:59:59',
+            'rewards': [{'name_th': 'หนึ่ง', 'name_en': 'One', 'code_list': 'FIX001', 'bundle_id': '1001'},
+                        {'name_th': 'สอง', 'name_en': 'Two', 'code_type': 'SERVER',
+                         'num_codes': '200', 'bundle_id': '2002'}]}
+
+
+def itemcode_confirmation_html():
+    # Same contract observed independently in all four games, Oct 8–9.
+    # Runtime IDs are only current ARIA links, never stable-ID claims.
+    html = create_action_html().replace(
+        "fetch('/synthetic-itemcode-write?owner=form',{method:'POST'})",
+        "document.getElementById('runtime-code-dialog').hidden=false")
+    return html + '''<div id="runtime-code-dialog" role="alertdialog" data-state="open" hidden
+      aria-labelledby="runtime-code-title" aria-describedby="runtime-code-description">
+      <h2 id="runtime-code-title">ยืนยันการสร้าง</h2>
+      <p id="runtime-code-description">ต้องการสร้าง Item Code ใช่หรือไม่?</p>
+      <button type="button">ยกเลิก</button>
+      <button type="button" onclick="document.body.dataset.confirms=String(Number(document.body.dataset.confirms||0)+1);
+        fetch('/synthetic-itemcode-write?owner=form',{method:'POST'})">ยืนยัน</button>
+    </div><script>document.body.dataset.confirmAudit='1';</script>'''
+
+
+def test_itemcode_confirmation_ignores_action_outside_its_own_dialog(monkeypatch):
+    html = itemcode_confirmation_html().replace('<main>', '''<button type="button"
+      onclick="document.body.dataset.outsideConfirms='1';fetch('/synthetic-itemcode-write?owner=outside',{method:'POST'})">
+      ยืนยัน</button><main>''', 1)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['outsideConfirms'] == '0' and snapshots[0]['confirms'] == '1'
+    assert snapshots[0]['submits'] == ['1']
+    assert [r['bundle_id'] for r in snapshots[0]['rewards']] == ['1001', '2002']
+    assert [url for method, url in traffic if method == 'POST'] == [
+        'https://admin-api-v2.combo-interactive.com/cabalm/itemcode/events?owner=form']
+
+
+def test_itemcode_confirmation_rechecks_shape_after_click_actionability_wait(monkeypatch):
+    html = itemcode_confirmation_html().replace(
+        '<button type="button" onclick="document.body.dataset.confirms=',
+        '<button type="button" style="position:fixed;top:0;right:0" onclick="document.body.dataset.confirms=')
+    html = html.replace("document.getElementById('runtime-code-dialog').hidden=false",
+        "document.getElementById('runtime-code-dialog').hidden=false;"
+        "document.getElementById('confirm-obstruction').hidden=false;setTimeout(()=>{"
+        "const b=document.querySelector('#runtime-code-dialog button:last-child');"
+        "b.type='submit';b.setAttribute('form','other-confirm-form');"
+        "document.getElementById('confirm-obstruction').remove();},700)")
+    html += '''<form id="other-confirm-form" onsubmit="event.preventDefault();this.dataset.submits='1'"></form>
+      <div id="confirm-obstruction" hidden style="position:fixed;top:0;right:0;width:400px;height:70px;z-index:10000"></div>'''
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert results[0]['saved'] is False and results[0]['made_id'] is None
+    assert 'ยืนยัน Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['confirms'] == '0' and snapshots[0]['submits'] == ['1', '0']
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+@pytest.mark.parametrize('mutation', [
+    'wrong-title', 'wrong-description', 'wrong-role', 'wrong-tag', 'missing-relation',
+    'duplicate-linked-id', 'outside-linked-title', 'duplicate-dialog', 'hidden-duplicate-action',
+    'submit-action', 'implicit-type', 'wrong-action-role', 'disabled', 'form-association',
+    'nested-dialog', 'game-changed',
+])
+def test_itemcode_confirmation_broken_contract_keeps_queue_without_write(monkeypatch, mutation):
+    html = itemcode_confirmation_html()
+    if mutation == 'wrong-title':
+        html = html.replace('>ยืนยันการสร้าง</h2>', '>ยืนยันคำสั่งอื่น</h2>')
+    elif mutation == 'wrong-description':
+        html = html.replace('ต้องการสร้าง Item Code ใช่หรือไม่?', 'ต้องการสร้าง Bundle ใช่หรือไม่?')
+    elif mutation == 'wrong-role':
+        html = html.replace('role="alertdialog"', 'role="region"')
+    elif mutation == 'wrong-tag':
+        html = html.replace('<div id="runtime-code-dialog"', '<section id="runtime-code-dialog"')
+        html = html.replace('</div><script>document.body.dataset.confirmAudit', '</section><script>document.body.dataset.confirmAudit')
+    elif mutation == 'missing-relation':
+        html = html.replace('aria-describedby="runtime-code-description"', '')
+    elif mutation == 'duplicate-linked-id':
+        html += '<p id="runtime-code-description">ต้องการสร้าง Item Code ใช่หรือไม่?</p>'
+    elif mutation == 'outside-linked-title':
+        html = html.replace('id="runtime-code-title"', 'id="unlinked-title"')
+        html += '<h2 id="runtime-code-title">ยืนยันการสร้าง</h2>'
+    elif mutation == 'duplicate-dialog':
+        html += html[html.index('<div id="runtime-code-dialog"'):].replace(' hidden', '')
+    elif mutation == 'hidden-duplicate-action':
+        html = html.replace('<button type="button">ยกเลิก</button>',
+            '<button type="button" hidden>ยืนยัน</button><button type="button">ยกเลิก</button>')
+    elif mutation in ('submit-action', 'implicit-type', 'wrong-action-role', 'disabled', 'form-association'):
+        replacement = {'submit-action': 'type="submit"', 'implicit-type': '',
+                       'wrong-action-role': 'type="button" role="link"',
+                       'disabled': 'type="button" disabled',
+                       'form-association': 'type="button" form="nonexistent-form"'}[mutation]
+        html = html.replace('<button type="button" onclick="document.body.dataset.confirms=',
+                            '<button %s onclick="document.body.dataset.confirms=' % replacement)
+    elif mutation == 'nested-dialog':
+        html = html.replace('<button type="button">ยกเลิก</button>',
+                            '<div role="dialog"></div><button type="button">ยกเลิก</button>')
+    else:
+        html = html.replace("document.getElementById('runtime-code-dialog').hidden=false",
+            "document.getElementById('runtime-code-dialog').hidden=false;history.pushState({},'', '/combo/cabalpc/itemcodes/create')")
+    assert html != itemcode_confirmation_html()
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [{**create_action_spec(), 'group': 'source-group'}], {'cookies': [], 'origins': []}))
+    assert [(r['slug'], r['group'], r['saved'], r['made_id']) for r in results] == [
+        ('requested-code', 'source-group', False, None)]
+    assert 'Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['confirms'] == '0' and snapshots[0]['submits'] == ['1']
+    assert [r['bundle_id'] for r in snapshots[0]['rewards']] == ['1001', '2002']
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+def test_itemcode_confirmation_uses_current_aria_links_and_ignores_unrelated_dialog(monkeypatch):
+    html = itemcode_confirmation_html().replace('runtime-code-', 'radix-new-session-')
+    html = html.replace('<main>', '''<div role="alertdialog" data-state="open">
+      <h2>ยืนยันการสร้าง</h2><p>ต้องการสร้าง Bundle ใช่หรือไม่?</p>
+      <button type="button" onclick="document.body.dataset.outsideConfirms='1'">ยืนยัน</button>
+    </div><main>''', 1)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['confirms'] == '1' and snapshots[0]['outsideConfirms'] == '0'
+    assert [method for method, _ in traffic] == ['GET', 'POST']
+
+
+def test_itemcode_confirmation_waits_for_late_popup_without_a_second_create(monkeypatch):
+    html = itemcode_confirmation_html().replace(
+        "document.getElementById('runtime-code-dialog').hidden=false",
+        "setTimeout(()=>document.getElementById('runtime-code-dialog').hidden=false,4000)")
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['confirms'] == '1' and snapshots[0]['submits'] == ['1']
+    assert [method for method, _ in traffic] == ['GET', 'POST']
+
+
+def test_itemcode_confirmation_preview_never_opens_or_confirms_popup(monkeypatch):
+    traffic, snapshots = routed_runner_browser(monkeypatch, itemcode_confirmation_html(), allow_synthetic_create=True)
+    result = asyncio.run(ItemCodeBuilder(lambda *_: None).run(
+        'CabalM TH', create_action_spec(), {'cookies': [], 'origins': []}))
+    assert result['missing'] == []
+    assert snapshots[0]['submits'] == ['0'] and snapshots[0]['confirms'] == '0'
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+def test_itemcode_confirmation_does_not_write_again_after_response_arrives_while_waiting(monkeypatch):
+    html = itemcode_confirmation_html().replace(
+        '<button type="button" onclick="document.body.dataset.confirms=',
+        '<button type="button" style="position:fixed;top:0;right:0" onclick="document.body.dataset.confirms=')
+    html = html.replace("document.getElementById('runtime-code-dialog').hidden=false",
+        "document.getElementById('runtime-code-dialog').hidden=false;"
+        "document.getElementById('confirm-obstruction').hidden=false;"
+        "setTimeout(()=>fetch('/synthetic-itemcode-write?owner=form',{method:'POST'}),300);"
+        "setTimeout(()=>document.getElementById('confirm-obstruction').remove(),1000)")
+    html += '<div id="confirm-obstruction" hidden style="position:fixed;top:0;right:0;width:400px;height:70px;z-index:10000"></div>'
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['confirms'] == '0' and snapshots[0]['submits'] == ['1']
+    assert [method for method, _ in traffic] == ['GET', 'POST']
+
+
+@pytest.mark.parametrize('path,expected', [
+    ('/combo/cabalm/itemcodes/501?view=result', (True, '501')),
+    ('/combo/cabalpc/itemcodes/501', (False, None)),
+])
+def test_itemcode_confirmation_retains_only_original_game_result_url_when_response_is_lost(monkeypatch, path, expected):
+    html = itemcode_confirmation_html().replace(
+        "document.getElementById('runtime-code-dialog').hidden=false",
+        "history.pushState({},'', '%s')" % path)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [{**create_action_spec(), 'group': 'source-group'}], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id']) for r in results] == [expected]
+    assert results[0]['slug'] == 'requested-code' and results[0]['group'] == 'source-group'
+    if expected[0]:
+        assert results[0]['error'] is None
+    else:
+        assert 'Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['submits'] == ['1'] and snapshots[0]['confirms'] == '0'
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+def test_itemcode_confirmation_hidden_during_final_readiness_check_never_activates(monkeypatch):
+    # Deterministic page-side mutation during layout measurement, after the
+    # initial contract read. The real public runner and DOM actions stay intact.
+    html = itemcode_confirmation_html() + '''<script>
+      const auditDialog=document.getElementById('runtime-code-dialog');
+      const layoutRects=auditDialog.getClientRects.bind(auditDialog);let measurements=0;
+      auditDialog.getClientRects=()=>{
+        measurements+=1;
+        if(measurements===2) auditDialog.querySelector('button:last-child').hidden=true;
+        return layoutRects();
+      };
+    </script>'''
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert results[0]['saved'] is False and results[0]['made_id'] is None
+    assert 'ยืนยัน Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['confirms'] == '0' and snapshots[0]['submits'] == ['1']
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+def test_itemcode_confirmation_does_not_recover_url_before_create_was_activated(monkeypatch):
+    html = itemcode_confirmation_html().replace('<button type="submit">สร้าง Item Code</button>',
+        '<button type="submit" style="position:fixed;top:0;right:0">สร้าง Item Code</button>')
+    html += '''<div id="create-obstruction" style="position:fixed;top:0;right:0;width:400px;height:70px;z-index:10000"></div>
+    <script>
+      const readyToCreate=new MutationObserver(()=>{
+        const rewards=JSON.parse(document.getElementById('reward-values').textContent);
+        if(rewards.length===2&&rewards.every(r=>r.bundle_id)) {
+          readyToCreate.disconnect();setTimeout(()=>{
+            document.querySelector('main form button[type="submit"]').type='button';
+            history.pushState({},'', '/combo/cabalm/itemcodes/501');
+            document.getElementById('create-obstruction').remove();
+          },700);
+        }
+      });readyToCreate.observe(document.getElementById('reward-values'),{childList:true});
+    </script>'''
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert results[0]['saved'] is False and results[0]['made_id'] is None
+    assert 'สร้าง Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['submits'] == ['0'] and snapshots[0]['confirms'] == '0'
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+@pytest.mark.parametrize('game', ['CabalM SEA', 'CabalPC TH', 'CabalPC SEA'])
+def test_itemcode_confirmation_other_verified_games_ignore_outside_action(monkeypatch, game):
+    html = itemcode_confirmation_html().replace('<main>', '''<button type="button"
+      onclick="document.body.dataset.outsideConfirms='1';fetch('/synthetic-itemcode-write?owner=outside',{method:'POST'})">
+      ยืนยัน</button><main>''', 1)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        game, [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['confirms'] == '1' and snapshots[0]['submits'] == ['1']
+    assert snapshots[0]['outsideConfirms'] == '0'
+    assert [method for method, _ in traffic] == ['GET', 'POST']
+
+
+@pytest.mark.parametrize('game,endpoint', [
+    ('CabalM TH', 'https://admin-api-v2.combo-interactive.com/cabalm/itemcode/events'),
+    ('CabalM SEA', 'https://admin-api-v2.combo-interactive.com/cabalmsea/itemcode/events'),
+    ('CabalPC TH', 'https://admin-api-v2.combo-interactive.com/cabalpc/itemcode/events'),
+    ('CabalPC SEA', 'https://admin-api-v2.combo-interactive.com/cabalpcsea/itemcode/events'),
+])
+@pytest.mark.parametrize('wrong', ['operation', 'method', 'host', 'iframe', 'game'])
+def test_itemcode_create_response_ignores_other_operation_or_frame(monkeypatch, wrong, game, endpoint):
+    wrong_url, method = endpoint + '?owner=outside', 'POST'
+    if wrong == 'operation':
+        wrong_url = endpoint + '/logs?owner=outside'
+    elif wrong == 'method':
+        method = 'PATCH'
+    elif wrong == 'host':
+        wrong_url = endpoint.replace('admin-api-v2.combo-interactive.com', 'wrong-api.example.invalid') + '?owner=outside'
+    elif wrong == 'game':
+        wrong_url = ('https://admin-api-v2.combo-interactive.com/cabalpc/itemcode/events' if game == 'CabalM TH'
+                     else 'https://admin-api-v2.combo-interactive.com/cabalm/itemcode/events') + '?owner=outside'
+    wrong_write = "fetch('%s',{method:'%s'})" % (wrong_url, method)
+    if wrong == 'iframe':
+        srcdoc = ('<script>' + wrong_write + '</script>').replace("'", '\\x27')
+        wrong_write = "const frame=document.createElement('iframe');frame.srcdoc='%s';document.body.append(frame)" % srcdoc
+    html = create_action_html().replace(
+        "fetch('/synthetic-itemcode-write?owner=form',{method:'POST'})",
+        wrong_write + ";setTimeout(()=>fetch('/synthetic-itemcode-write?owner=form',{method:'POST'}),400)")
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        game, [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['submits'] == ['1']
+    assert len([url for method, url in traffic if method in ('POST', 'PATCH')]) == 2
+
+
+def test_create_action_ignores_same_named_button_outside_own_form(monkeypatch):
+    html = create_action_html().replace('<main>', '''<button type="button"
+      onclick="document.body.dataset.outsideCreates='1';fetch('/synthetic-itemcode-write?owner=outside',{method:'POST'})">
+      สร้าง Item Code</button><main>''', 1)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['outsideCreates'] == '0'
+    assert snapshots[0]['submits'] == ['1']
+    assert [url for method, url in traffic if method == 'POST'] == [
+        'https://admin-api-v2.combo-interactive.com/cabalm/itemcode/events?owner=form']
+
+
+@pytest.mark.parametrize('replacement', [
+    '',
+    '<button type="submit">สร้าง Item Code เพิ่มเติม</button>',
+    '<button type="submit">สร้าง Item Code</button>' * 2,
+    '<button type="submit" hidden>สร้าง Item Code</button><button type="submit">สร้าง Item Code</button>',
+    '<button type="button">สร้าง Item Code</button>',
+    '<button>สร้าง Item Code</button>',
+    '<button type="submit" role="link">สร้าง Item Code</button>',
+    '<button type="submit" disabled>สร้าง Item Code</button>',
+    '<button type="submit" form="other-form">สร้าง Item Code</button>',
+], ids=['missing', 'partial-label', 'duplicate', 'hidden-duplicate', 'wrong-type',
+        'implicit-type', 'wrong-role', 'disabled', 'wrong-form-owner'])
+def test_create_action_broken_contract_stops_queue_entry_without_write(monkeypatch, replacement):
+    html = create_action_html().replace('<button type="submit">สร้าง Item Code</button>',
+        '''<button type="button" onclick="document.body.dataset.alternativeCreates='1'">
+        บันทึกและสร้างต่อ</button>''' + replacement)
+    html += '<form id="other-form" onsubmit="event.preventDefault();this.dataset.submits=\'1\'"></form>'
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    spec = {**create_action_spec(), 'group': 'source-group'}
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [spec], {'cookies': [], 'origins': []}))
+    assert [(r['slug'], r['group'], r['saved'], r['made_id']) for r in results] == [
+        ('requested-code', 'source-group', False, None)]
+    assert 'สร้าง Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['alternativeCreates'] == '0'
+    assert snapshots[0]['submits'] == ['0', '0']
+    assert [r['bundle_id'] for r in snapshots[0]['rewards']] == ['1001', '2002']
+    assert all(method == 'GET' for method, _ in traffic)
+
+
+@pytest.mark.parametrize('game', ['CabalM TH', 'CabalM SEA', 'CabalPC TH', 'CabalPC SEA'])
+def test_create_action_keeps_one_submit_and_two_reward_sets(monkeypatch, game):
+    traffic, snapshots = routed_runner_browser(monkeypatch, create_action_html(), allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        game, [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+    assert snapshots[0]['submits'] == ['1']
+    assert [r['bundle_id'] for r in snapshots[0]['rewards']] == ['1001', '2002']
+    assert [method for method, _ in traffic] == ['GET', 'POST']
+
+
+def test_create_action_is_never_pressed_by_preview(monkeypatch):
+    traffic, snapshots = routed_runner_browser(monkeypatch, create_action_html(), allow_synthetic_create=True)
+    result = asyncio.run(ItemCodeBuilder(lambda *_: None).run(
+        'CabalM TH', create_action_spec(), {'cookies': [], 'origins': []}))
+    assert result['missing'] == []
+    assert snapshots[0]['submits'] == ['0']
+    assert [method for method, _ in traffic] == ['GET']
+
+
+@pytest.mark.parametrize('mutation', ['b.hidden=false', "b.type='button';b.disabled=false"])
+def test_create_action_rechecks_lazy_or_mutated_button_after_reward_mount(monkeypatch, mutation):
+    html = create_action_html() + '''<script>
+    const b=document.querySelector('main form button[type="submit"]');
+    b.hidden=MUTATION.startsWith('b.hidden');b.disabled=!b.hidden;
+    const mounted=new MutationObserver(()=>{
+      const rewards=JSON.parse(document.getElementById('reward-values').textContent);
+      if(rewards.length===2&&rewards.every(r=>r.bundle_id)){
+        mounted.disconnect();setTimeout(()=>{BODY},250);
+      }
+    });mounted.observe(document.getElementById('reward-values'),{childList:true});
+    </script>'''.replace('MUTATION', repr(mutation)).replace('BODY', mutation)
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    if mutation == 'b.hidden=false':
+        assert [(r['saved'], r['made_id'], r['error']) for r in results] == [(True, '501', None)]
+        assert snapshots[0]['submits'] == ['1']
+        assert [method for method, _ in traffic] == ['GET', 'POST']
+    else:
+        assert results[0]['saved'] is False and results[0]['made_id'] is None
+        assert 'สร้าง Item Code' in (results[0]['error'] or '')
+        assert snapshots[0]['submits'] == ['0']
+        assert [method for method, _ in traffic] == ['GET']
+
+
+def test_create_action_owner_change_during_final_click_never_submits_other_form(monkeypatch):
+    html = create_action_html().replace('<button type="submit">สร้าง Item Code</button>',
+        '<button type="submit" style="position:fixed;top:0;right:0">สร้าง Item Code</button>')
+    html += '''<form id="other-form" onsubmit="event.preventDefault();this.dataset.submits='1';
+      fetch('/synthetic-itemcode-write?owner=outside',{method:'POST'})"></form>
+    <div id="create-obstruction" style="position:fixed;top:0;right:0;width:400px;height:70px;z-index:10000"></div>
+    <script>
+    const mounted=new MutationObserver(()=>{
+      const rewards=JSON.parse(document.getElementById('reward-values').textContent);
+      if(rewards.length===2&&rewards.every(r=>r.bundle_id)){
+        mounted.disconnect();setTimeout(()=>{
+          document.querySelector('main form button[type="submit"]').setAttribute('form','other-form');
+          document.getElementById('create-obstruction').remove();
+        },700);
+      }
+    });mounted.observe(document.getElementById('reward-values'),{childList:true});
+    </script>'''
+    traffic, snapshots = routed_runner_browser(monkeypatch, html, allow_synthetic_create=True)
+    results = asyncio.run(ItemCodeBuilder(lambda *_: None).run_many(
+        'CabalM TH', [create_action_spec()], {'cookies': [], 'origins': []}))
+    assert results[0]['saved'] is False and results[0]['made_id'] is None
+    assert 'สร้าง Item Code' in (results[0]['error'] or '')
+    assert snapshots[0]['submits'] == ['0', '0']
+    assert [method for method, _ in traffic] == ['GET']
 
 
 @pytest.mark.parametrize('game,url', [
