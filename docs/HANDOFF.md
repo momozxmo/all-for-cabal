@@ -10,7 +10,8 @@ Snapshot: 2026-10-08 — อ่านแล้วตรวจสถานะ Git
   wrapper/raw/signedexit0/JUnitaggregate+actual2749/0/0/0/evidence_errorsว่าง/freeze161ตรงครบ
   แก้ Important Createvisibilityraceด้วยvalidRED2→GREEN44→fullผ่าน โดยไม่แตะoriginaldirtyworktreeหรือliveAztek
   Setup0.1.41 buildexit0/packageprivacy/embeddedsource/helper/static/version/checksum/isolatedsmokeผ่านแล้ว
-  Source2b071e4;รอpush/publication+publicdownloadhash ไม่อ้างactualuserinstallสำเร็จ
+  Source2b071e4/Localdocs+tag9cd45af;stable/latestv0.1.41เผยแพร่แล้ว publicSetup279151780bytes+sidecarดาวน์โหลดhashตรงbuild
+  SHA256D2CD801DB6D522FE7712711F09F5334F5D209D6F1290F7BEA5F7B12AE98AB5B8 ไม่อ้างactualuserinstallสำเร็จ
   ดู [scope/evidenceชุดรวม](id-first-combined-release-20261024.md) และ [release0.1.41](local-release-v0.1.41.md)
 
 - 2026-10-22: ส่งมอบ Setup v0.1.40 สำหรับปุ่มตรวจเองครบแล้ว—สร้างทุกบันเดิลต่อเนื่องตามสิทธิ์ผู้ใช้

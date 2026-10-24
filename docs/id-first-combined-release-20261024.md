@@ -1,6 +1,6 @@
 # ID-first + checked-all combined release candidate — 2026-10-24
 
-Status: exact combined-source full and packaged0.1.41 verification passed. Source commit2b071e4; push/publication pending. No user installation.
+Status: exact combined-source full and packaged0.1.41 verification passed; stable/latest published and public downloads hash/size verified. Source commit2b071e4,Localdocs/tag9cd45af. No user installation.
 
 ## Latest review-fix gate
 
@@ -8,7 +8,7 @@ Scoped1 completed92passed692.47s (wrapper/raw/signed0,finished/passed,actualJUni
 Fresh review:Critical0/Important1/Minor1. The Important post-trial Create visibility race was reproduced by2failing public Product-runner tests24.55s (actualsavedTrueafterhiddenDOM),then minimally fixed with atomic current-rectangle/visibility guards. Added16four-game visibility race cases. Original dirty source was not changed.
 Current source freeze2:build-cache/release-v041-freeze2-20261024.json,161entries. Actual combined collection2749. GREEN44-case targeted regression completed44passed371.43s;wrapper/raw/signed0,statusfinishedpassed,actualJUnit44/0/0/0,evidence_errors[],freeze161andoriginaluserhashmatched. Aggregate:build-cache/release-v041-create-guard-green1-verification-20261024.json;JUnitSHA88F1EC6AF45A96221A4F9C1FAC96D06F1A5A8FF2D109FDF8D7018BF1D8E167A4.
 Necessary combined full completed2749passed1warning7200.96s,wrapperexit0/statusfinishedpassed/raw+signed0/JUnitaggregate+actual2749/0/0/0/evidence_errors[]/freeze161independentmatch/originaluserhashpreserved. Ended2026-10-24T17:47:20.796658Z. Aggregate:build-cache/release-v041-full1-verification-20261024.json;JUnitSHAA3590F97CF22020BBA346844AD715D44F15FF32AEF4433A978C540FF631BC51C.
-Remote pre-build recheck unchanged:origin/maince7eded,local-release/mainc76a99d,lateststablev040,v041tagabsent. Buildsession44416 usesVersion0.1.41-SkipTests on exact source;transcriptbuild-cache/build-v041-20261025.log. Only candidate-owned Chromium cache was reset and is being redownloaded,not user data. No build completion claimed until wrapperexit and artifact verification. Source stays frozen through packaging.
+Remote pre-build recheck unchanged:origin/maince7eded,local-release/mainc76a99d,lateststablev040,v041tagabsent. Buildsession44416 completedexit0 Version0.1.41-SkipTests on exact source;transcriptbuild-cache/build-v041-20261025.log. Only candidate-owned Chromium cache was reset/redownloaded,not user data. Package/source/static/helper/privacy/smoke and public-download verification passed;sourcefreeze161 remains intact.
 The history below describes the initial port,not a claim that source stayed identical after the review fix.
 
 ## Authorization and boundaries
@@ -50,4 +50,4 @@ No live Aztek login/probe/create/edit/upload/delete is part of combined verifica
 
 Exact-source full2749 passed; buildsession44416exit0; runtime/helper/embedded source/all19static/privacy/version/checksum and isolated packaged smoke passed. See [release record](local-release-v0.1.41.md).
 Source snapshot2b071e4e821fe429c7e30ed4b322b9768fcd1f81 contains only25approved code/test paths. Shared refs remained unchanged at precommit. Setup279151780bytes/SHA256D2CD801DB6D522FE7712711F09F5334F5D209D6F1290F7BEA5F7B12AE98AB5B8.
-Normal fast-forward source/Local-release push and public asset download/hash verification remain pending. No actual user install/reopen/data-preservation claim.
+Normal fast-forward source/Local-release push completed;stable/latestv0.1.41 published2026-10-24T18:11:47Z. Public Setup279151780bytes and102-byte sidecar downloaded and matched local build digests. No actual user install/reopen/data-preservation claim.

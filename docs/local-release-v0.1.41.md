@@ -1,6 +1,6 @@
 # Local release v0.1.41 — combined candidate
 
-Build date: 2026-10-25 (Asia/Bangkok). Status: package verified; publication pending.
+Build date: 2026-10-25 (Asia/Bangkok). Status: stable/latest published and public downloads verified.
 Source snapshot: `2b071e4e821fe429c7e30ed4b322b9768fcd1f81`.
 
 ## Scope
@@ -34,7 +34,10 @@ Isolated packaged smoke passed health, Local session/bootstrap, all tool pages, 
 Setup: `All for Cabal Web Setup-0.1.41.exe`,279151780bytes.
 SHA256: `D2CD801DB6D522FE7712711F09F5334F5D209D6F1290F7BEA5F7B12AE98AB5B8`; generated sidecar matches.
 Source freeze161 and original user hashes independently matched again after build. No full rerun for documentation.
-Local release docs/tag/stable publication and public asset download/hash comparison remain pending. Not yet published.
+Source code commit2b071e4 and verification docs5613f75 were fast-forward pushed to origin/main. Local docs commit/tag target9cd45afda66ca8ed4e7235dfe53947d92ce7af51 was atomically fast-forward pushed to local-release/main withv0.1.41.
+Stable/latest [v0.1.41](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.41) published2026-10-24T18:11:47Z;notdraft/notprerelease.
+Public Setup and sidecar downloaded into build-cache/release-v041-published-download-20261025. Actual279151780bytes/SetupSHA256 above match local build;sidecar102bytes/SHA256E503D9E23E3F210AEE77958C66C50A05669F7CA67245F989330831516170814C matches local sidecar byte-for-byte and contains the correct Setup digest/name. GitHub normalized asset spaces to dots;sidecar text retains original spaced filename.
+The first atomic Local-docs push accidentally targeted source origin and was wholly rejected (non-fast-forward);neither main nor tag changed there. Both refs verified before correcting remote to local-release;no force used. Source and Local repositories contain only their intended changes.
 
 ## Boundaries
 

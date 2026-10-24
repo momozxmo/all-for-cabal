@@ -39,26 +39,26 @@ eight Product ID-first test files and `tests/test_web_itemcode_result_identity.p
 Merge only `tests/test_bundle_recheck_flow.py` with the committed checked-all cases using the commonbb12059base.
 Keep `web/app.py`, `web/bundle_runner.py`, `web/static/bundles.html`, `tests/test_web_bundle_import_ui.py` and `tests/test_bundle_manual_checked_validation.py` from the shipped candidate unless a concrete combined test proves a required scoped change.
 
-- [ ] Confirm elevated read-only candidate clean/HEAD/remotes and exact147-entry prior freeze. Completed evidence may establish baseline; do not rerun an unchanged full as a setup ritual.
-- [ ] Compare normalized source against the161-entry verified original manifest; reject unexplained drift, exclude user files.
-- [ ] Port the exact allowlist with apply_patch; resolve the test-only overlap without dropping either behavior. Record hashes/provenance and inspect the actual candidate diff.
-- [ ] Syntax/collection and focused checked-all/consumer/Item Code identity tests. Existing tests already establish RED→GREEN independently; add RED first only for a newly exposed product defect, not a fabricated failure for a mechanical port.
+- [x] Confirm elevated read-only candidate clean/HEAD/remotes and exact147-entry prior freeze. Completed evidence may establish baseline; do not rerun an unchanged full as a setup ritual.
+- [x] Compare normalized source against the161-entry verified original manifest; reject unexplained drift, exclude user files.
+- [x] Port the exact allowlist with apply_patch; resolve the test-only overlap without dropping either behavior. Record hashes/provenance and inspect the actual candidate diff.
+- [x] Syntax/collection and focused checked-all/consumer/Item Code identity tests. Existing tests already establish RED→GREEN independently; add RED first only for a newly exposed product defect, not a fabricated failure for a mechanical port.
 
 ### Task 2: Verify exact combined source
 
-- [ ] Read-only fresh-context whole-delta review with explicit scope and baseline; no reviewer writes or duplicate reviewers.
-- [ ] Freeze every candidate code/test/static/build dependency plus the absolute durable logged runner; use new manifest/run-dir, never overwrite retained freezes.
-- [ ] Run scoped regression with writable per-command TEMP/TMP. Require wrapper/raw/signedexit0, finished/passed, JUnit aggregate=actual collection, failures/errors/skips0, evidence_errors[], freeze match.
-- [ ] After scoped gates and no matching runner/pytest, run one necessary final full on the combined source. Verify actual count rather than adding2715and checked-all counts. No overlapping full or source edits while frozen. Native interruption without actual testcase failure requires user direction before restart.
+- [x] Read-only fresh-context whole-delta review with explicit scope and baseline; no reviewer writes or duplicate reviewers.
+- [x] Freeze every candidate code/test/static/build dependency plus the absolute durable logged runner; use new manifest/run-dir, never overwrite retained freezes.
+- [x] Run scoped regression with writable per-command TEMP/TMP. Require wrapper/raw/signedexit0, finished/passed, JUnit aggregate=actual collection, failures/errors/skips0, evidence_errors[], freeze match.
+- [x] After scoped gates and no matching runner/pytest, run one necessary final full on the combined source. Verify actual count rather than adding2715and checked-all counts. No overlapping full or source edits while frozen. Native interruption without actual testcase failure requires user direction before restart.
 
 ### Task 3: Build, verify and deliver
 
-- [ ] Recheck remote refs/latest version/tag; do not force if changed. Select next free version (currently0.1.41).
-- [ ] Read current build/release verifier/install docs; validate absolute candidate cache target/reparse points and no test using it before build. `scripts/build_local_installer.ps1 -Version <verified-free-version> -SkipTests` only for exact source with completed full.
-- [ ] Verify tree/artifact/privacy/checksum/runtime version, source/static/helper digests; retain all evidence.
-- [ ] Packaged executable smoke with fresh isolated userdata, free port8000, Hidden background launch and exact owned PID/path/starttime cleanup. No real Aztek. Do not silently install the same Inno AppId over the user's active installation. User-applied install/reopen/draft preservation remains explicit until actually verified.
-- [ ] Selective code/test/verification-doc commit, normal fast-forward source push; established Local release docs/tag/stable GitHub Release workflow, no PR/issue closure.
-- [ ] Download published Setup and sidecar, compare digest/size against actual local build; only then claim publication complete. Record any unverified installed-state boundary clearly.
+- [x] Recheck remote refs/latest version/tag; do not force if changed. Select next free version (currently0.1.41).
+- [x] Read current build/release verifier/install docs; validate absolute candidate cache target/reparse points and no test using it before build. `scripts/build_local_installer.ps1 -Version <verified-free-version> -SkipTests` only for exact source with completed full.
+- [x] Verify tree/artifact/privacy/checksum/runtime version, source/static/helper digests; retain all evidence.
+- [x] Packaged executable smoke with fresh isolated userdata, free port8000, Hidden background launch and exact owned PID/path/starttime cleanup. No real Aztek. Do not silently install the same Inno AppId over the user's active installation. User-applied install/reopen/draft preservation remains explicit until actually verified.
+- [x] Selective code/test/verification-doc commit, normal fast-forward source push; established Local release docs/tag/stable GitHub Release workflow, no PR/issue closure.
+- [x] Download published Setup and sidecar, compare digest/size against actual local build; only then claim publication complete. Record any unverified installed-state boundary clearly.
 
 ## Execution record
 
