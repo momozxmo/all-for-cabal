@@ -10,7 +10,7 @@
 - Full ของ source ชุดรวม: **2,749 passed, 1 warning**; ตรวจแพ็กเกจและดาวน์โหลดไฟล์เผยแพร่กลับมาเทียบขนาด/SHA-256 แล้ว
 - ตรวจ [acceptance20ข้อของ#13และ9ข้อของ#19](acceptance-v041.md) พร้อม [control/game/state coverageและDEVgaps](coverage-v041.md) แล้ว ไม่ต้องรอDEVเพิ่มIDครบทุกnodeหรือสร้างข้อมูลบริษัทใหม่
 - ไม่ได้หมายความว่าทุก control มี HTML ID ถาวร หรือทุก live game/state ได้รับการยืนยันแล้ว
-- ยังไม่ยืนยันการอัปเดต/เปิดกลับ/ร่างและคิวบนโปรแกรมของผู้ใช้;remoteclosure#13/#19เป็นขั้นตอนที่ผู้ใช้อนุญาตแยกเมื่อครบเกณฑ์ ตรวจสถานะจริงก่อนอ้างปิดแล้ว
+- ปิด[#13](https://github.com/momozxmo/all-for-cabal/issues/13)/[#19](https://github.com/momozxmo/all-for-cabal/issues/19)แล้ว25October2026ตามสิทธิ์ผู้ใช้;อ่านกลับCLOSED/COMPLETEDพร้อมclosedAtจริง ส่วนการอัปเดต/เปิดกลับ/ร่างและคิวบนโปรแกรมของผู้ใช้ยังไม่ยืนยัน
 - ไม่มี live Aztek action เพิ่มเติม และ New Item #12 ยังพักไว้
 - หลักฐานส่งมอบ: [combined source](../../id-first-combined-release-20261024.md) / [release verification](../../local-release-v0.1.41.md)
 

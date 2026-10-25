@@ -798,5 +798,27 @@
         "bytes": 7439
       }
     ]
+  },
+  "closure": {
+    "authorized_by": "Direct user approval 2026-10-25 to close issues13/19 when original criteria are met",
+    "report_commit": "49de1f0e4073d641992975821bd33cd475250325",
+    "issues": [
+      {
+        "number": 19,
+        "state": "CLOSED",
+        "stateReason": "COMPLETED",
+        "closedAt": "2026-10-25T06:19:56Z"
+      },
+      {
+        "number": 13,
+        "state": "CLOSED",
+        "stateReason": "COMPLETED",
+        "closedAt": "2026-10-25T06:20:00Z"
+      }
+    ],
+    "other_issues_changed": [],
+    "runtime_source_or_tests_changed": false,
+    "new_live_aztek_actions": false,
+    "new_full_or_build": false
   }
 }

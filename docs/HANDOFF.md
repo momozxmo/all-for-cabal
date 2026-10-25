@@ -12,7 +12,8 @@
 
 - 2026-10-25: ตรวจเกณฑ์#13ครบ20ข้อ/#19ครบ9ข้อบนsourceที่ผ่านfull2749แล้ว พร้อม [acceptanceรายข้อ](tickets/aztek-id-first/acceptance-v041.md) และ [coverageรุ่นนี้](tickets/aztek-id-first/coverage-v041.md)
   อ้างอิง46behavioralfunctions/130distinctpassingcase referencesในretainedJUnit ไม่ใช่testใหม่หรือผลบวกเพิ่มจาก2749;sourcefreeze161/originaluserhashesตรงครบ
-  Unknownที่specอนุญาตให้รายงานยังคงunsupported/safe-stop ไม่อ้างครบทุกlivevariant. ผู้ใช้อนุญาตปิด#13/#19เมื่อครบเกณฑ์;ต้องอ่านremoteผลจริงก่อนบันทึกclosed
+  Unknownที่specอนุญาตให้รายงานยังคงunsupported/safe-stop ไม่อ้างครบทุกlivevariant. ผู้ใช้อนุญาตปิด#13/#19เมื่อครบเกณฑ์;ปิดแล้วอ่านกลับCLOSED/COMPLETED:#19เวลา13:19:56/#13เวลา13:20:00Asia/Bangkok25October2026
+  Closurecommentsอ้างอิงรายงานcommit49de1f0;ไม่แก้issue#12/#14–18. ไม่มีruntime/test/SetupหรือliveAztekเปลี่ยนจากacceptanceauditนี้
 
 - 2026-10-25: ชุดรวม ID-firstล่าสุด+ปุ่มบันเดิลต่อเนื่องผ่าน exact-source full2,749passed1warning7200.96sแล้ว
   wrapper/raw/signedexit0/JUnitaggregate+actual2749/0/0/0/evidence_errorsว่าง/freeze161ตรงครบ

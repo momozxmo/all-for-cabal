@@ -2,7 +2,9 @@
 
 วันที่ตรวจ: 25 ตุลาคม 2026 (Asia/Bangkok)
 
-**ผลทางเทคนิค:** ตรวจครบ20ข้อของ#13 และ9ข้อของ#19 ตามขอบเขตเดิมแล้ว พร้อมหลักฐานของแต่ละข้อด้านล่าง. ไม่มี production defect ใหม่ที่พิสูจน์ได้ในการตรวจนี้ จึงไม่แก้โค้ดหรือรัน full/build เดิมซ้ำ. GitHub closure ยังเป็นขั้นตอนหลัง commit/push รายงานและ final verification ไม่ใช่สิ่งที่อนุมานจากเอกสารนี้
+**ผลทางเทคนิค:** ตรวจครบ20ข้อของ#13 และ9ข้อของ#19 ตามขอบเขตเดิมแล้ว พร้อมหลักฐานของแต่ละข้อด้านล่าง. ไม่มี production defect ใหม่ที่พิสูจน์ได้ในการตรวจนี้ จึงไม่แก้โค้ดหรือรัน full/build เดิมซ้ำ. เผยแพร่รายงานcommit49de1f0และผ่านfinalclosuregateแล้ว จึงปิดGitHubทั้งสองissueและอ่านกลับCLOSED/COMPLETEDจริง
+
+Remoteclosure25October2026:#19closedAt06:19:56Z(13:19:56Asia/Bangkok),#13closedAt06:20:00Z(13:20:00Asia/Bangkok). Commentsอ้างอิงpermalinkของรายงาน/coverageในcommit49de1f0 ไม่เปลี่ยนbodyข้อกำหนดเดิมหรือremoteissuesอื่น
 
 ผู้ใช้สั่งทำให้#13/#19เสร็จ และอนุญาตตรง25Octoberให้ปิดสองissueเมื่อครบเกณฑ์. ไม่รวมสิทธิ์เข้าliveAztek/สร้าง/แก้/ลบ/replay/resetหรือปิด#12/childissuesอื่นโดยอัตโนมัติ
 
@@ -70,4 +72,4 @@
 - Finalunknownreportคง Productfilledmultipleprices/dragreorder/upload/selectedremoval และ Eventheaderhiddenfile/inactivepanel variantsที่ยังไม่พิสูจน์, allpossible result/navigation variants;ไม่มีguessfallbackหรือsilentresubmit
 - #14–#18มีtechnicaldeliverablesรวมในreleaseแต่remoteadministrationไม่อยู่ในสิทธิ์ปิดสองissueนี้ จึงไม่เปลี่ยนสถานะของพวกนั้นหรือ#12
 - Setup0.1.41และpublicchecksumเดิมไม่เปลี่ยน. Actualuserupdate/reopen/draftsยังไม่ยืนยันและไม่ถูกนำมาอ้างเป็นpass
-- Finalclosureต้องตรวจissuebodyhashและOPENstateก่อนเขียนcomment/close แล้วอ่านCLOSEDstate/closedAtกลับมาจริง
+- FinalclosureตรวจissuebodyhashและOPENstateก่อนเขียนcomment/close แล้วอ่านCLOSED/COMPLETEDstate/closedAtกลับมาจริงครบทั้งสองissue;13retainedDOMartifact hashesตรง,cleanpublishedreportcommitตรงorigin/mainและGitHubcontentsAPIก่อนปิด

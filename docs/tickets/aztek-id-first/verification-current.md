@@ -2,9 +2,13 @@
 
 อัปเดต: 25 ตุลาคม 2026 (Asia/Bangkok)
 
-หน้านี้เป็นจุดสรุปสถานะปัจจุบันของชุดที่ส่งมอบ ไม่ใช้สถานะ launch/working diff จาก snapshot เก่าแทนผลสุดท้าย และไม่ใช่การปิด GitHub issues
+หน้านี้เป็นจุดสรุปสถานะปัจจุบันของชุดที่ส่งมอบ ไม่ใช้สถานะ launch/working diff จาก snapshot เก่าแทนผลสุดท้าย ผลremoteด้านล่างอ่านกลับจากGitHubจริง ไม่อนุมานจากrelease
 
-ตรวจ acceptance ของ#13ครบ20ข้อและ#19ครบ9ข้อตามขอบเขตเดิมแล้ว: [รายข้อพร้อมหลักฐาน](acceptance-v041.md) / [control-game-state inventory](coverage-v041.md). ผู้ใช้อนุญาตปิดสองissueเมื่อครบเกณฑ์;ขั้นตอนremoteclosureจะบันทึกผลจริงภายหลัง ไม่อนุมานว่าCLOSEDจากเอกสารนี้
+ตรวจ acceptance ของ#13ครบ20ข้อและ#19ครบ9ข้อตามขอบเขตเดิมแล้ว: [รายข้อพร้อมหลักฐาน](acceptance-v041.md) / [control-game-state inventory](coverage-v041.md). ผู้ใช้อนุญาตปิดสองissueเมื่อครบเกณฑ์และดำเนินการแล้ว:
+
+- [#19](https://github.com/momozxmo/all-for-cabal/issues/19): CLOSED / COMPLETED,25October2026 13:19:56 Asia/Bangkok (06:19:56Z)
+- [#13](https://github.com/momozxmo/all-for-cabal/issues/13): CLOSED / COMPLETED,25October2026 13:20:00 Asia/Bangkok (06:20:00Z)
+- อ่านstate/stateReason/closedAtกลับหลังปิดจริง พร้อมclosurecommentsอ้างอิงacceptancecommit49de1f0;ไม่เปลี่ยนissue#12/#14–18
 
 ## ส่งมอบแล้วใน 0.1.41
 
@@ -15,7 +19,7 @@
 | Item Code (#16) | Header/limits/วันเวลา/Reward Sets/picker/create/confirmation/result identity และ shared widgets | ไม่ยืม nested Bundle/Reward IDs; unknown result ยังคงเตือน ไม่สร้างซ้ำหรือเดา URL |
 | Event (#17) | Field/widget/Reward/picker/create/confirmation และ strict own-result reader ในเส้นทางที่มีหลักฐาน | ไม่เพิ่ม workflow รูป/header rich-editor ใหม่ภายใต้งาน selector; ไม่อ้างทุก live variant |
 | Product (#18) | Header/Category/Currency/ราคา/display/วันเวลา/limits/media/Bundle/Primary/create/confirmation/result และ visibility guards | Synthetic media/row tests ไม่ใช่หลักฐานว่า upload/reorder/ทุก live state ผ่านแล้ว |
-| Cross-flow (#19) | Import/Finder/Shop → Bundle/Recheck → consumer ผ่าน local API/runner และ synthetic Aztek; รักษา quantities/document/workspace/group/history และป้องกัน replay | acceptance20+9ตรวจครบในscopeเดิม;ไม่ใช่การสร้างlive recordsเพิ่มหรือรับรองallvariants ดูreportก่อนปิดissue |
+| Cross-flow (#19) | Import/Finder/Shop → Bundle/Recheck → consumer ผ่าน local API/runner และ synthetic Aztek; รักษา quantities/document/workspace/group/history และป้องกัน replay | acceptance20+9ตรวจครบในscopeเดิมและปิด#13/#19แล้ว;ไม่ใช่การสร้างlive recordsเพิ่มหรือรับรองallvariants |
 
 ## หลักฐานชุดที่ส่งมอบ
 
