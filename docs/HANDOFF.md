@@ -6,7 +6,7 @@
 
 ## สถานะล่าสุด
 
-- 2026-10-25: ผู้ใช้อนุมัติส่งมอบ Bundle/Recheck-only โดยไม่รวมWR. ใช้worktree bundle-recheck-v042/branchcodex/bundle-recheck-v042; WRเดิมอยู่ครบในbundle-manual-release ไม่ย้อน/ลบ/อ่านworkbook. Exactfull2777passed1warning/buildexit0/privacy/embedded12modules/static19/isolatedsmoke2exit0ผ่านแล้ว; sourcecommitd6a123c. กำลังเตรียมpublish/public-downloadhash ไม่อ้างเผยแพร่ก่อนครบ ดู [release0.1.42](local-release-v0.1.42.md) และplan/ledger2026-10-25-bundle-recheck-release. Full2783รวมWRไม่ใช่หลักฐานส่งมอบนี้; smoke1browserproofไม่ผ่านเก็บผลเดิม ไม่รันfull/buildซ้ำ
+- 2026-10-25: ส่งมอบ Bundle/Recheck-only0.1.42แล้ว ไม่รวมการแก้WRที่พักไว้. Exactfull2777passed1warning/buildexit0/privacy/embedded12modules/static19/isolatedsmoke2exit0ผ่าน; source d6a123c/docs71e60a2 normalpushแล้ว. Localdocs/tag06d1f88/stablelatestv0.1.42เผยแพร่และดาวน์โหลดSetup279167040bytes+sidecar102bytes hashตรงbuild; SHA DFA19F814791C221A0BBCBC1C523A663B6EB7C5B47F3E446BE961A7D741D0343. Discoveryจากรุ่นจำลอง0.1.41เห็นรุ่นใหม่และnotesตรง ยังไม่ติดตั้ง/เปิดกลับ/ตรวจร่างคิวบนเครื่องผู้ใช้. WRเดิมอยู่ครบในbundle-manual-release ไม่ย้อน/ลบ/อ่านworkbook. ดู [release0.1.42](local-release-v0.1.42.md). Full2783รวมWRไม่ใช่หลักฐานนี้; smoke1browserproofไม่ผ่านคงผลเดิม ไม่รันfull/buildซ้ำ
 
 ใช้ [ตารางสถานะ ID-first ปัจจุบัน](tickets/aztek-id-first/verification-current.md) เป็นจุดสรุปเดียว
 แยกงานที่ส่งมอบใน0.1.41 ออกจาก live variants/การอัปเดตบนเครื่องผู้ใช้ที่ยังไม่ยืนยัน

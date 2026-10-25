@@ -29,9 +29,9 @@ Base87d80e25eda871c12519fd5693568dda4650c6f2. Branch codex/bundle-recheck-v042 i
 - [x] Fresh isolated LOCALAPPDATA smoke after port8000/userapp checks; hidden process, finally stop only owned PID/path/starttime, confirm portfree. No Inno install.
 
 ## Task 4: Publish
-- [ ] Selective source code/tests/docs commit(s), normal origin/main fast-forward after unchanged-remote recheck. No runtime/artifacts/heldWR staged.
-- [ ] Local-docs worktree AGENTS/HANDOFF/status then notes/tag/stable GitHub Release using established local-release remote.
-- [ ] Download actual published Setup/sidecar, enumerate spaces→dots filenames, hash+size equal actual build. Only then claim published; actual user update/reopen/drafts still unverified.
+- [x] Selective source code/tests/docs commit(s), normal origin/main fast-forward after unchanged-remote recheck. No runtime/artifacts/heldWR staged.
+- [x] Local-docs worktree AGENTS/HANDOFF/status then notes/tag/stable GitHub Release using established local-release remote.
+- [x] Download actual published Setup/sidecar, enumerate spaces→dots filenames, hash+size equal actual build. Only then claim published; actual user update/reopen/drafts still unverified.
 
 ## Review focus
 No heldWR leaks into code/build/commit. Recheck semantics must match reviewed source. Full proof belongs to release-only bytes. All data/privacy and owned-process boundaries hold. No force or duplicate finished runs.

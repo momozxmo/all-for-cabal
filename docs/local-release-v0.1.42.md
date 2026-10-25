@@ -1,6 +1,6 @@
 # Local release v0.1.42 — Bundle/Recheck only
 
-Status: package verified — exact release-only full/build/package/isolated smoke passed; publication and public-download proof pending.
+Status: delivered — stable/latest v0.1.42 published; public Setup/sidecar downloaded and size/SHA256 equal actual build. User installation/reopen remains unverified.
 
 ## What this release is for
 - Recheck matches equal-property items using known Rarity/rate, independent of row order.
@@ -13,7 +13,7 @@ Status: package verified — exact release-only full/build/package/isolated smok
 Held WR changes remain in original worktree+backup, not ported; source/tests in this candidate equal HEAD. No private workbook read, NewItem12, live Aztek, user app install/stop or issue closure.
 
 ## Verification/delivery
-Exact candidate full passed: **2,777 passed,1 warning in7386.46s**. wrapper/raw/signedexit0, finishedpassed, aggregate+actualuniqueJUnit2777/0failures/0errors/0skips, evidence_errors[], independentfreeze165/original161/userhashes matched. Build/privacy/embedded source/static/helper/version/isolated smoke passed; public download hash pending. Historical full2783 includes heldWR and is NOT proof for this release.
+Exact candidate full passed: **2,777 passed,1 warning in7386.46s**. wrapper/raw/signedexit0, finishedpassed, aggregate+actualuniqueJUnit2777/0failures/0errors/0skips, evidence_errors[], independentfreeze165/original161/userhashes matched. Build/privacy/embedded source/static/helper/version/isolated smoke and public download hash passed. Historical full2783 includes heldWR and is NOT proof for this release.
 Actual user-applied update/reopen/draft preservation and signing/clean-VM install remain unverified.
 
 ## Exact release-only full — completed, do not rerun
@@ -48,3 +48,11 @@ Actual user-applied update/reopen/draft preservation and signing/clean-VM instal
 - Smoke2 wrapperexit0: actual own browser PIDs observed, health0.1.42/Local session/bootstrap/all tool pages/checked-all/Recheck UI/zero-rate import/empty history passed. No Aztek operation. Exact owned PID/path/starttime cleanup; independent check confirms no candidate processes and port8000free.
 - Smoke logs: build-cache/release-v042-smoke1-20261025.log and release-v042-smoke2-20261025.log. New supplemental smoke scripts are outside freeze165; original frozen source/helper hashes remain exact.
 - User update/install/reopen/draft preservation, signing, clean-VM and unobserved live variants remain unverified.
+
+## Publication and download proof
+- Source code d6a123c plus verification docs71e60a2 pushed normal fast-forward to origin/main; public notes/tag06d1f88aef22aaabb7134dea93f994d3d158c8e0 pushed atomically to local-release/main and v0.1.42. No force/PR/additional issue closure.
+- Stable/latest [v0.1.42](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.42), release423458291, published2026-10-25T14:37:23Z. Draftfalse/prereleasefalse; two assets uploaded.
+- Fresh download build-cache/release-v042-public-download1-20261025 wrapperexit0. Setup279167040bytes/DFA19F814791C221A0BBCBC1C523A663B6EB7C5B47F3E446BE961A7D741D0343 and sidecar102bytes/5E78780D4452D3B038234568E24762B84CEFF38C3D6F69EC7D55866ADDEB8F50 match build.
+- Enumerated actual GitHub names with dots. Sidecar content uses lowercase digest and binary-marker star before original spaced filename, accepted by unchanged updater parser. An initial ad-hoc assertion incorrectly assumed two spaces/no star; corrected validator follows actual documented format, no artifact changed.
+- build-cache/release-v042-public-verification-20261025.json verifies downloaded bytes, API asset digests/size, stable/latest and exact public notes. Read-only prior0.1.41 simulation discovers available0.1.42 and identical notes; not proof of installed user's update.
+- Original WR files/backups/workbook and original161/userhashes remain preserved. No full/build rerun for docs or publication.
