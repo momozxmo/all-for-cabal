@@ -12,6 +12,8 @@
 
 ## ส่งมอบแล้วใน 0.1.41
 
+ส่วนเพิ่ม0.1.42: Bundle/Recheck-only ผ่านexactfull2777รายการ(1warning), build/privacy/embeddedsource/static/isolatedsmoke2แล้ว; source d6a123c กำลังรอเผยแพร่และดาวน์โหลดhashกลับ ไม่รวมWRที่พักไว้ ไม่เปลี่ยนเกณฑ์หรือสถานะissue. ดู [หลักฐานรุ่น0.1.42](../../local-release-v0.1.42.md). การเผยแพร่ไม่เท่ากับตรวจการอัปเดตบนเครื่องผู้ใช้จริง
+
 | ส่วน | สิ่งที่รวมในรุ่นนี้ | ขอบเขตที่ต้องแยกไว้ |
 | --- | --- | --- |
 | Item Finder (#14) | คง ID-first search/detail/readiness และการส่งข้อมูลอ้างอิงไป Bundle | ยังมี no-ID exceptions และไม่ได้ยืนยันทุก record/state |

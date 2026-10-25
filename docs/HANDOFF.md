@@ -6,6 +6,8 @@
 
 ## สถานะล่าสุด
 
+- 2026-10-25: ผู้ใช้อนุมัติส่งมอบ Bundle/Recheck-only โดยไม่รวมWR. ใช้worktree bundle-recheck-v042/branchcodex/bundle-recheck-v042; WRเดิมอยู่ครบในbundle-manual-release ไม่ย้อน/ลบ/อ่านworkbook. Exactfull2777passed1warning/buildexit0/privacy/embedded12modules/static19/isolatedsmoke2exit0ผ่านแล้ว; sourcecommitd6a123c. กำลังเตรียมpublish/public-downloadhash ไม่อ้างเผยแพร่ก่อนครบ ดู [release0.1.42](local-release-v0.1.42.md) และplan/ledger2026-10-25-bundle-recheck-release. Full2783รวมWRไม่ใช่หลักฐานส่งมอบนี้; smoke1browserproofไม่ผ่านเก็บผลเดิม ไม่รันfull/buildซ้ำ
+
 ใช้ [ตารางสถานะ ID-first ปัจจุบัน](tickets/aztek-id-first/verification-current.md) เป็นจุดสรุปเดียว
 แยกงานที่ส่งมอบใน0.1.41 ออกจาก live variants/การอัปเดตบนเครื่องผู้ใช้ที่ยังไม่ยืนยัน
 เอกสาร tickets/coverage เก่ามีวันที่และเป็นประวัติ ไม่ใช้ข้อความ “ยังไม่ทำ/ยังไม่แพ็ก” ของ snapshot เก่ามานับงานซ้ำ
