@@ -2,6 +2,8 @@
 
 Status: exact combined-source full and packaged0.1.41 verification passed; stable/latest published and public downloads hash/size verified. Source commit2b071e4,Localdocs/tag9cd45af. No user installation.
 
+Current status entry point: [ID-first verification-current](tickets/aztek-id-first/verification-current.md). This record retains the integration chronology; launch-time pending states below are not current pending work.
+
 ## Latest review-fix gate
 
 Scoped1 completed92passed692.47s (wrapper/raw/signed0,finished/passed,actualJUnit92/0/0/0,evidence_errors[],freeze161andoriginaluserhashmatched). This is the pre-review-fix snapshot,not final-source proof.
@@ -15,13 +17,13 @@ The history below describes the initial port,not a claim that source stayed iden
 
 The user explicitly authorized combining the latest ID-first work with the continuous checked-all Bundle button, testing, packaging Setup, and commit/push/publish only after every gate passes. Live Aztek remains prohibited. Do not close issues, start New Item12, overwrite the user's installation, or claim user-applied update/reopen/draft preservation.
 
-Candidate: codex/bundle-manual-release at ce7eded7ac0d35cfb1784b56992affb259de913f before this uncommitted increment.
+Candidate: codex/bundle-manual-release at ce7eded7ac0d35cfb1784b56992affb259de913f before integration; delivered code snapshot is2b071e4.
 Original dirty source: codex/local-windows-installer at bb12059; kept read-only.
 The candidate reuses v0.1.40 checked-all API/Bundle runner/UI/validation and prior workspace/group/Finder Document Reference fixes.
 
 ## Integration provenance
 
-The exact allowlist contains six changed web runner/helper files, four existing tests, fourteen new tests/helper; normalized content matches the original verified snapshot for all24.
+The initial allowlist contains six changed web runner/helper files, four existing tests, fourteen new tests/helper. At port time all24 matched the original verified snapshot after LF+TrimEnd normalization:23 match with LF alone; test_web_event_result_id_first.py differs only by one final blank line. This is provenance of the initial port, not a claim that later review fixes match the original. The subsequent candidate-only fix changed web/aztek_form.py and tests/test_web_product_create_id_first.py before freeze2/full2749.
 Only tests/test_bundle_recheck_flow.py required a merge: preserve21 actual cases, including all7 checked-all cases and the independent import/Finder/Shop-to-consumer pipelines. Preserve source quantities and document references, actual Recheck history, default stop/replay409 and the explicit handoff gate.
 117 differences were newline-only and excluded. The original CONTEXT.md and item_finder.py were not copied or staged.
 No dependencies or database schema changed.
@@ -30,12 +32,12 @@ The latest original-only full completed2715passed1warning7007.99s on24October. T
 
 ## Historical initial combined verification (superseded by latest gate above)
 
-- Actual collection:2733tests, exit0; AST parsing104web/test modules and git diff --check passed.
+- Initial pre-fix collection:2733tests, exit0; AST parsing104web/test modules and git diff --check passed. The16 added visibility-race cases raised final collection to2749.
 - Combined source/test/static/build freeze:161entries, build-cache/release-v041-freeze1-20261024.json; includes the absolute durable logged runner from the original source checkout.
 - Scoped1:session64271; runner28004/pytest5824; started2026-10-24T11:30:10.290316Z; collection92.
-  Run-dir build-cache/release-v041-scoped1-20261024. No final result yet.
-- One fresh-context read-only combined review requested; no final verdict yet.
-- Necessary combined full, build/privacy/package smoke and published-asset download/hash gates remain pending.
+  Run-dir build-cache/release-v041-scoped1-20261024; completed92passed692.47s. This pre-fix pass is retained but does not prove the final source.
+- One fresh-context read-only combined review completed Critical0/Important1/Minor1. Important fixed with RED→GREEN→full; the two documentation observations were reconciled25October without source/test changes.
+- The full/build/privacy/package-smoke/public-download gates were pending at initial launch; they subsequently completed as recorded in Delivery verification below.
 
 ## Coverage limits retained
 
@@ -44,7 +46,7 @@ The Product visibility guard and latest Item Code result-ID fix are included.
 Known saved records and selected Product option UUID evidence exist; not all live states or response/navigation variants are verified.
 Item Code flat numeric response/numeric URL compatibility is not a newly verified live schema; slug/UUID fallback is not invented.
 Unsupported or ambiguous contracts still stop safely; lack of DEV input is not a prerequisite for agent-owned local investigation.
-No live Aztek login/probe/create/edit/upload/delete is part of combined verification. Issues13/19 are not closed or claimed universally complete.
+No live Aztek login/probe/create/edit/upload/delete is part of combined verification. Issues13/19 were not closed at delivery and are never claimed universally complete;the subsequent [25October acceptance audit](tickets/aztek-id-first/acceptance-v041.md) evaluates their original bounded criteria,not allpossiblelivevariants.
 
 ## Delivery verification
 

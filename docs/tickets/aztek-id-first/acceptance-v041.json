@@ -1,0 +1,802 @@
+{
+  "schema": 1,
+  "date": "2026-10-25",
+  "source_commit": "2b071e4e821fe429c7e30ed4b322b9768fcd1f81",
+  "full_run": "build-cache/release-v041-full1-20261024",
+  "junit_sha256": "A3590F97CF22020BBA346844AD715D44F15FF32AEF4433A978C540FF631BC51C",
+  "expected_unique_testcases": 2749,
+  "freeze_entries": 161,
+  "coverage": "docs/tickets/aztek-id-first/coverage-v041.md",
+  "policy": "docs/agents/aztek-locators.md",
+  "scope": "Original bounded ID-first migration+synthetic regression+honest exceptions/unknown report; not universal live coverage",
+  "requirements": [
+    {
+      "issue": 13,
+      "criterion": 1,
+      "requirement": "ฟังก์ชัน Aztek ใหม่ทุกตัวมี verified stable ID เป็น primary เมื่อ control มี ID และมีหลักฐาน/exception ชัดเจนเมื่อไม่มี",
+      "finding": "ID priority ใช้ real helpers; ดู policy และ inventory ของทุก flow ร่วมกับ tests ไม่ถือ 2ตัวอย่างนี้แทนทั้งระบบ",
+      "evidence": [
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_deep_search_reads_stable_ids_before_misleading_labels"
+        },
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_names_use_verified_ids_in_own_form_not_name_decoys"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 2,
+      "requirement": "Text/label/placeholder/class/ตำแหน่งเปลี่ยนแต่ stable ID เดิมใน scope ถูกต้องแล้วกรอก/อ่านได้ตรงช่อง; scope ที่เสียต้องหยุด ไม่บังคับให้ผ่านด้วยความกำกวม",
+      "finding": "แก้ names/order/nesting และสลับคอลัมน์โดยค่าจริงยังลง/อ่านตาม identity",
+      "evidence": [
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_header_uses_owning_form_ids_despite_changed_names_and_order"
+        },
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_column_reorder_still_reads_the_correct_item_parameters"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 3,
+      "requirement": "ID กับ fallback node สลับ DOM order แล้ว target ยังคงเป็น ID ที่ระบุ",
+      "finding": "named decoys อยู่ก่อน stable controls แต่ไม่ถูกเขียน; IDs ภายใน owning form ชนะ",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_names_use_verified_ids_in_own_form_not_name_decoys"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_itemcode_names_follow_verified_ids_despite_renamed_fields_and_decoys"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 4,
+      "requirement": "ID ที่มีจุดเลือกได้ถูกต้อง ไม่ไปเขียน node ที่ตรงชื่อ CSS class",
+      "finding": "literal dotted IDs ไม่จับ CSS-class lookalike; Reward indexes ไม่ถูกเขียนทับ",
+      "evidence": [
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_literal_punctuation_id_does_not_match_css_class_lookalike"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_three_reward_sets_wait_for_own_tab_and_keep_distinct_names_and_limits"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 5,
+      "requirement": "Known stable ID หาย/ซ้ำ/ผิดชนิดหลัง readiness ต้องแจ้ง control และไม่ submit สร้าง; exception ที่มีหลายเป้าหมายก็ต้องหยุด",
+      "finding": "missing/duplicate/wrong-type/hidden ID คืน named error และ submit0",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_broken_name_id_stops_without_fallback"
+        },
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_header_broken_id_stops_without_filling_a_decoy"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 6,
+      "requirement": "Lazy-mounted control ที่มี ID หลังพร้อมใช้งานทำงานได้ตาม timeout ไม่เกิด false failure ก่อน mount และไม่วนรอไม่สิ้นสุด",
+      "finding": "late fields/popups/tablists รอ bounded readiness ไม่ยืม controls เก่าหรือรอไม่สิ้นสุด",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_waits_for_late_mounted_name_id"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_calendar_waits_for_late_popup_relation_and_mount"
+        },
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_reward_waits_when_second_set_fields_mount_before_its_tabs"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 7,
+      "requirement": "Known no-ID control ใช้ fallback ที่ระบุและ scoped ได้ ไม่ใช้ framework-generated ID เป็น permanent contract",
+      "finding": "no-ID exceptions ใช้ owning section/current ARIA relation และ exact business values; runtime IDs ไม่ hardcode",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_options_id_first.py",
+          "function": "test_product_fetch_uses_own_sections_and_preserves_opaque_catalog_ids"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_reward_bundle_picker_selects_exact_ids_in_own_sets_not_other_portal"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 8,
+      "requirement": "ฟอร์มสองชุด/hidden duplicate/portal สองตัวไม่ทำให้กรอกชุดผิด; ambiguity ใน intended scope ไม่ถูกแก้ด้วย first-match",
+      "finding": "multiple forms/popovers/hidden duplicates กำกวมหยุด ไม่เลือก first",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_multiple_forms_stop_before_filling_either"
+        },
+        {
+          "file": "tests/test_web_product_options_id_first.py",
+          "function": "test_product_fetch_rejects_ambiguous_open_popovers"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_two_main_forms_stop_instead_of_selecting_the_first"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 9,
+      "requirement": "Item Finder ค้น/filter/read pagination ถูกต้องหลังย้าย ไม่ทำ occurrence หรือรายการที่ผู้ใช้เลือกหาย",
+      "finding": "อ่านหลายหน้าแล้วกรองและรักษา occurrence/selected scope/source/Amt",
+      "evidence": [
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_pagination_ignores_outside_next_and_filters_after_all_pages"
+        },
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_real_runner_keeps_shared_occurrences_and_selected_bundle_scope"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 10,
+      "requirement": "Bundle หลาย Item/Currency/EXP จับคู่ Quantity/Tier ถูก card และ RANDOM rate 0 ลง draw chance ไม่ลง display chance",
+      "finding": "Item/Currency/EXP และ zero draw rate ผูก card จริง; reader แยก secret_chance จาก display chance",
+      "evidence": [
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_all_reward_kinds_keep_their_fields_when_cards_are_reordered"
+        },
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_currency_card_with_numeric_zero_rate_and_no_explicit_tier_gets_its_fields"
+        },
+        {
+          "file": "tests/test_bundle_recheck_id_first.py",
+          "function": "test_random_readback_uses_current_row_id_not_name_or_display_chance"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 11,
+      "requirement": "เพิ่ม/ลบ/เรียง repeated rows แล้วค่าลงแถวจริงตาม identity ไม่ตาม index เก่าที่ cached",
+      "finding": "remove/reindex/reorder และ mutationระหว่างfill ยังยึด occurrence/current row; ไม่ใช้cachedindex",
+      "evidence": [
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_repeated_items_preserve_distinct_values_after_reorder_and_renumber"
+        },
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_repeated_card_moving_during_quantity_input_keeps_its_own_tier"
+        },
+        {
+          "file": "tests/test_web_product_options_id_first.py",
+          "function": "test_product_prices_keep_currency_and_zero_after_rows_removed_and_reindexed"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 12,
+      "requirement": "Item Code/Event หลาย Reward Set เปิดแท็บที่ถูกและไม่เขียนค่าซ้ำลงชุดแรกทั้งหมด",
+      "finding": "Reward Sets mountเฉพาะactiveชุดและเก็บ distinct names/limits/Bundle IDs",
+      "evidence": [
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_three_reward_sets_wait_for_own_tab_and_keep_distinct_names_and_limits"
+        },
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_reward_sets_fill_their_own_ids_without_changing_language_tabs_or_decoys"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 13,
+      "requirement": "Date/time picker ตั้งวันและเวลาได้ตรง รวมเวลาสิ้นสุดวินาที 59 ตามข้อมูลที่ขอ; อ่านกลับแล้วไม่ตรงต้องรายงานไม่ครบ/หยุดตาม flow เดิม",
+      "finding": "สี่ช่วงเวลาของEvent/ItemCode/Productอ่านกลับตรงถึงวินาที59; mismatchรายงานincomplete",
+      "evidence": [
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_activity_and_claim_windows_target_their_own_ids_with_exact_seconds"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_code_window_follows_date_ids_and_only_owning_calendar_controls"
+        },
+        {
+          "file": "tests/test_web_itemcode_id_first.py",
+          "function": "test_calendar_readback_that_never_matches_remains_incomplete_without_submit"
+        },
+        {
+          "file": "tests/test_web_product_display_id_first.py",
+          "function": "test_product_sale_window_uses_own_date_ids_and_preserves_last_second"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 14,
+      "requirement": "Product Category/Currency ใช้ fetched business values, ราคาหลายแถว รูป ภาษา Bundle และ Primary คงพฤติกรรมเดิม",
+      "finding": "opaque Category/Currency values, prices, actual in-memory media bytes, TH/EN editor และ Bundle/Primary ถูกowning context",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_options_id_first.py",
+          "function": "test_product_fills_exact_catalog_id_and_price_only_in_own_row"
+        },
+        {
+          "file": "tests/test_web_product_media_id_first.py",
+          "function": "test_product_uploads_each_memory_image_to_its_language_and_label_not_global_index"
+        },
+        {
+          "file": "tests/test_web_product_media_id_first.py",
+          "function": "test_product_details_fill_their_own_language_not_the_image_tabs_or_first_iframe"
+        },
+        {
+          "file": "tests/test_web_product_bundle_id_first.py",
+          "function": "test_product_bundle_picker_uses_own_popup_exact_ids_and_keeps_requested_primary"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 15,
+      "requirement": "Preview/fill ที่ไม่บันทึกมีจำนวน submit 0; confirmation จำลองชี้ dialog/action ถูก ไม่คลิก action ของฟอร์มอื่น",
+      "finding": "previewsubmit0 และ confirmationอยู่ในowningdialog;ไม่ยืมปุ่มoutside",
+      "evidence": [
+        {
+          "file": "tests/test_web_product_create_id_first.py",
+          "function": "test_product_preview_never_activates_create"
+        },
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_create_action_is_never_pressed_in_preview"
+        },
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_confirmation_ignores_a_matching_action_outside_the_bundle_dialog"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 16,
+      "requirement": "Locator failure ก่อน submit ป้องกันบันทึก; failure หลัง submit รักษา checkpoint/ID/ผลตรวจและไม่เพิ่ม submit จากการกู้",
+      "finding": "ก่อนsubmitหยุด;หลังส่งแล้วเก็บpending/checkpoint/ID และreplay409/no second POST",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "dropped-0-pending"
+        },
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_cabalm_missing_create_response_keeps_the_checkpoint_and_blocks_replay"
+        },
+        {
+          "file": "tests/test_web_product_create_id_first.py",
+          "function": "test_product_no_write_response_does_not_report_saved_or_retry"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 17,
+      "requirement": "Recheck actual ที่หา control ไม่ได้ไม่กลายเป็น passed และไม่ส่งต่อผลนั้นตามเงื่อนไขเดิม",
+      "finding": "partial/failed/mismatchและhistoryไม่กลายเป็นpassed;explicit opt-inไม่ให้handoffสิทธิ์ใหม่อัตโนมัติ",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "detail_missing-1-failed"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "manual_ui_wrong-2-mismatch"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 18,
+      "requirement": "Coverage ของ PC/M TH/SEA มีหลักฐานต่อ variant/state ที่ย้าย หรือระบุยังไม่พิสูจน์ ไม่อ้าง PC SEA แทนทุกเกม",
+      "finding": "inventoryระบุ4gamesพร้อมsampledstate/unknownอย่างเจาะจง;ไม่บังคับallpossiblelivevariants",
+      "evidence": [
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_activity_and_claim_windows_target_their_own_ids_with_exact_seconds"
+        },
+        {
+          "file": "tests/test_web_product_id_first.py",
+          "function": "test_product_names_use_verified_ids_in_own_form_not_name_decoys"
+        },
+        {
+          "file": "tests/test_web_event_preservation.py",
+          "function": "test_event_fill_preserves_existing_header_images_editors_and_language"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 19,
+      "requirement": "Regression ของ API/runner/shared widgets เดิมผ่าน โดยคิว เกม สิทธิ์และ selection-only handoff ไม่เปลี่ยน",
+      "finding": "retained exactsource full2749/0/0/0และfreeze161ตรง รวมAPI/UI/sharedwidgets;ไม่บวกtargetcounts",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "shop_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_web_product_create_id_first.py",
+          "function": "test_product_create_stops_if_visibility_changes_after_actionability"
+        }
+      ]
+    },
+    {
+      "issue": 13,
+      "criterion": 20,
+      "requirement": "คำสั่งโปรเจกต์มี policy สำหรับฟังก์ชันใหม่ และรายงาน gap/exception/unknown ครบจุดที่ไม่มี stable ID ในขอบเขตที่ย้าย",
+      "finding": "AGENTS+locatorpolicyบังคับfuturefunctions;รายงานstable/no-ID/unknown/DEVgapในcoverage-v041",
+      "evidence": [
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_broken_detail_contract_stops_instead_of_becoming_not_found"
+        },
+        {
+          "file": "tests/test_web_product_bundle_id_first.py",
+          "function": "test_product_broken_primary_contract_never_submits_or_uses_another_checkbox"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 1,
+      "requirement": "รัน cross-flow ด้วย API/runner จริงและ synthetic Aztek ตลอดทางรวม DOM mutation โดยไม่มี traffic/record จริง",
+      "finding": "real XLSX import/WS/API/runner+Finder/BundleUI→Recheck→consumercreates;DOMmutationguardsอยู่ในชุดเดียวกัน ไม่อ้างว่ารันliveทั้งสาย",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "shop_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_id_first.py",
+          "function": "test_card_mutation_during_detail_read_stops_instead_of_returning_stale_rows"
+        },
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_header_uses_owning_form_ids_despite_changed_names_and_order"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 2,
+      "requirement": "Selection-only handoff และไอเทมซ้ำหลาย Bundle รักษา occurrence/Amt/source; ไม่ดึงรายการที่ไม่ได้เลือก",
+      "finding": "selectedsheets/selectedindexes,Item91สองoccurrencesQty2/3,unselected99,sourcefilename/sheet/rowรักษาครบ",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "shop_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_real_runner_keeps_shared_occurrences_and_selected_bundle_scope"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 3,
+      "requirement": "Locator failure ก่อน submit ไม่บันทึก หลัง submit รักษา checkpoint/ID/ผลสร้าง/ผลตรวจ; retry/readback ไม่เพิ่มจำนวน submit",
+      "finding": "one write/checkpoint;uncertain+replay409;read-onlyretryเพิ่มhistoryไม่เพิ่มcreate",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "dropped-0-pending"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "imported_edited_qty-1-mismatch"
+        },
+        {
+          "file": "tests/test_web_bundle_id_first.py",
+          "function": "test_cabalm_missing_create_response_keeps_the_checkpoint_and_blocks_replay"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 4,
+      "requirement": "Recheck ที่อ่านไม่ครบไม่ผ่าน และเกณฑ์ส่งต่อเดิมไม่ถูก bypass จาก migration; การรับทราบไม่เปลี่ยนผลเป็นผ่าน",
+      "finding": "before/after consumercreatesเท่ากันทั้งresult/latest/history/provenance;manualcontinuationไม่เปลี่ยนoutcomeหรืออนุมัติhandoff",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "manual_ui_wrong-2-mismatch"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 5,
+      "requirement": "Regression ทุก flow/shared widget ผ่าน และข้อความผิดพลาด/ผลลัพธ์แสดงตามพฤติกรรมเดิมในโปรแกรม local",
+      "finding": "full2749ผ่านบนsourceปัจจุบัน;preview/queue/errors/visibilityและsharedwidgetcompatibilityรวมในfull",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "shop_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_web_product_create_id_first.py",
+          "function": "test_product_create_stops_if_visibility_changes_after_actionability"
+        },
+        {
+          "file": "tests/test_web_event_preservation.py",
+          "function": "test_event_fill_preserves_existing_header_images_editors_and_language"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 6,
+      "requirement": "รายงาน coverage แยกตาม flow/control/game/state: ย้ายเป็น ID, exception, unknown พร้อม DEV gap; PC/M TH/SEA ต้องมีหลักฐานหรือระบุยังไม่พิสูจน์ ไม่อ้างเกมเดียวแทนทั้งหมด",
+      "finding": "coverage-v041แยกflow/control/game/state,stableID,scopedexception,unknownและDEVrequest",
+      "evidence": [
+        {
+          "file": "tests/test_web_event_id_first.py",
+          "function": "test_event_header_uses_owning_form_ids_despite_changed_names_and_order"
+        },
+        {
+          "file": "tests/test_web_product_media_id_first.py",
+          "function": "test_product_details_fill_their_own_language_not_the_image_tabs_or_first_iframe"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 7,
+      "requirement": "Unknown ที่กั้นการย้ายอย่างปลอดภัยต้องรายงานว่าไม่เสร็จในส่วนนั้น ไม่ลด contract เพื่ออ้าง migration ครบ",
+      "finding": "unknownยังระบุunsupported/incompleteในส่วนนั้น;ไม่เดาnestedIDs/URLs/anonymouscheckboxและไม่อ้างครบทุกvariant",
+      "evidence": [
+        {
+          "file": "tests/test_web_itemcode_result_identity.py",
+          "function": "test_itemcode_result_never_borrows_bundle_or_reward_id"
+        },
+        {
+          "file": "tests/test_web_product_bundle_id_first.py",
+          "function": "test_product_broken_primary_contract_never_submits_or_uses_another_checkbox"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 8,
+      "requirement": "คำสั่งโปรเจกต์และ locator policy ครอบคลุมฟังก์ชันใหม่ ไม่สร้าง framework เพิ่ม และ New Item #12 ยังไม่เริ่ม/ไม่เปลี่ยน remote issue",
+      "finding": "policyfuturefunctionsคงอยู่;ไม่มีnewframework/NewItem12/runtimeSchemaเพิ่มในauditeddelta",
+      "evidence": [
+        {
+          "file": "tests/test_web_finder_id_first.py",
+          "function": "test_literal_punctuation_id_does_not_match_css_class_lookalike"
+        }
+      ]
+    },
+    {
+      "issue": 19,
+      "criterion": 9,
+      "requirement": "ไม่มี Setup/commit/push หรือข้อมูล Aztek จริงจาก ticket นี้โดยไม่มีคำสั่งแยก",
+      "finding": "releaseมีสิทธิ์แยก24Oct;รอบนี้ไม่มีlive/newSetupหรือแก้privatefiles;การปิด13/19ได้รับอนุญาตตรง25Octเมื่อครบเกณฑ์",
+      "evidence": [
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "finder_pipeline-2-partial"
+        },
+        {
+          "file": "tests/test_bundle_recheck_flow.py",
+          "function": "test_create_checkpoint_recheck_and_queue_gate",
+          "parameter_contains": "shop_pipeline-2-partial"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "method": "Retained completed full: actual unique JUnit testcase membership + frozen source identity + manual assertion/implementation audit; NOT a new pytest execution",
+    "case_reference_proof": {
+      "requirements": 29,
+      "representative_functions": 46,
+      "distinct_passing_case_references": 130,
+      "rows": [
+        {
+          "issue": 13,
+          "criterion": 1,
+          "passing_case_references": 5
+        },
+        {
+          "issue": 13,
+          "criterion": 2,
+          "passing_case_references": 5
+        },
+        {
+          "issue": 13,
+          "criterion": 3,
+          "passing_case_references": 5
+        },
+        {
+          "issue": 13,
+          "criterion": 4,
+          "passing_case_references": 2
+        },
+        {
+          "issue": 13,
+          "criterion": 5,
+          "passing_case_references": 15
+        },
+        {
+          "issue": 13,
+          "criterion": 6,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 7,
+          "passing_case_references": 2
+        },
+        {
+          "issue": 13,
+          "criterion": 8,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 9,
+          "passing_case_references": 2
+        },
+        {
+          "issue": 13,
+          "criterion": 10,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 11,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 12,
+          "passing_case_references": 5
+        },
+        {
+          "issue": 13,
+          "criterion": 13,
+          "passing_case_references": 10
+        },
+        {
+          "issue": 13,
+          "criterion": 14,
+          "passing_case_references": 13
+        },
+        {
+          "issue": 13,
+          "criterion": 15,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 16,
+          "passing_case_references": 4
+        },
+        {
+          "issue": 13,
+          "criterion": 17,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 13,
+          "criterion": 18,
+          "passing_case_references": 16
+        },
+        {
+          "issue": 13,
+          "criterion": 19,
+          "passing_case_references": 18
+        },
+        {
+          "issue": 13,
+          "criterion": 20,
+          "passing_case_references": 10
+        },
+        {
+          "issue": 19,
+          "criterion": 1,
+          "passing_case_references": 7
+        },
+        {
+          "issue": 19,
+          "criterion": 2,
+          "passing_case_references": 3
+        },
+        {
+          "issue": 19,
+          "criterion": 3,
+          "passing_case_references": 4
+        },
+        {
+          "issue": 19,
+          "criterion": 4,
+          "passing_case_references": 2
+        },
+        {
+          "issue": 19,
+          "criterion": 5,
+          "passing_case_references": 26
+        },
+        {
+          "issue": 19,
+          "criterion": 6,
+          "passing_case_references": 8
+        },
+        {
+          "issue": 19,
+          "criterion": 7,
+          "passing_case_references": 17
+        },
+        {
+          "issue": 19,
+          "criterion": 8,
+          "passing_case_references": 1
+        },
+        {
+          "issue": 19,
+          "criterion": 9,
+          "passing_case_references": 2
+        }
+      ]
+    },
+    "issue_requirements": [
+      {
+        "issue": 13,
+        "state_before": "OPEN",
+        "body_sha256": "9F632C76386F2B60C7626481FD7158914E59011AEAE112E4CB0029854440CF48"
+      },
+      {
+        "issue": 19,
+        "state_before": "OPEN",
+        "body_sha256": "4AD0BFA3C20AED4B3937E621888C2798F3357D6B8F563377180373ED002AC115"
+      }
+    ],
+    "retained_dom_artifacts": [
+      {
+        "name": "product-id-dom-audit-20261017.json",
+        "sha256": "38C819D3BB9F3B7D7D535E475093742F2BE4341F52B87CF7420F68235FA1DC2A",
+        "bytes": 4990
+      },
+      {
+        "name": "product-media-dom-audit-20261017.json",
+        "sha256": "C8A4061D0F3242E77507C2887D9295CAFB6637DDC0EAA898B255DF5D77E2DEBB",
+        "bytes": 2623
+      },
+      {
+        "name": "product-popup-dom-audit-20261017.json",
+        "sha256": "7F2C9D93E54C5E4BF25623B7F9F3E63D2724E908CAFB09DC940B8D34E59FA473",
+        "bytes": 4140
+      },
+      {
+        "name": "product-populated-draft-dom-audit-20261017.json",
+        "sha256": "B27AD5102B6125D9A3B55EEBB9569925DB8461BB69FA536D616D557587423273",
+        "bytes": 5484
+      },
+      {
+        "name": "product-display-date-dom-audit-20261017.json",
+        "sha256": "C336C6F8175ABEF56DF3BBCBC76F26ECE8D54C00A62E32A2944B0345F5AA985C",
+        "bytes": 5435
+      },
+      {
+        "name": "product-bundle-dom-audit-20261020.json",
+        "sha256": "B1144200E8733825922550D36D6DB830960F6ECDDD5EC8BA897342EE6485BD85",
+        "bytes": 3278
+      },
+      {
+        "name": "product-confirmation-api-blocked-audit-20261020.json",
+        "sha256": "429168B781C484DF07130D5154E3376585DF5BBC92B3836127C91F59C035A5DB",
+        "bytes": 16060
+      },
+      {
+        "name": "event-reward-live-20261009.json",
+        "sha256": "F141D5409E428172B432361174E9F29148732E3E1BEF67EB75073E292297CE6F",
+        "bytes": 3837
+      },
+      {
+        "name": "event-reward-scope-live-20261009.json",
+        "sha256": "459CA29172FC7EF7CE704244D71738FE8F3A2EA78594D23FF0756A9400579507",
+        "bytes": 2022
+      },
+      {
+        "name": "event-reward-hidden-live-20261009.json",
+        "sha256": "C95A273E9F616B739C12AD2107B133B2D41CCCE9297F3C90B2D38B6A657F00E4",
+        "bytes": 1416
+      },
+      {
+        "name": "event-bundle-selected-live-20261015.json",
+        "sha256": "503B0704BA843C1A6485BBB2E2B46E8344235385322656C7A831FFB152523B9B",
+        "bytes": 5747
+      },
+      {
+        "name": "event-language-image-readonly-20261016.json",
+        "sha256": "E4C858F2D5D0B6527291AA78C53A59EB49DD8DE7ADCB913DC060CEDBFEFE7BF4",
+        "bytes": 2573
+      },
+      {
+        "name": "saved-record-readback-7-20261022.json",
+        "sha256": "513BA29B741A50DD1A6A4719CE1BD423C17E6331238889B78F5E01C8D8204DCB",
+        "bytes": 7439
+      }
+    ]
+  }
+}

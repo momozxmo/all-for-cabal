@@ -1,5 +1,8 @@
 # 04: Event — ID-first ครบวันใช้งาน/รับรางวัลและ reward
 
+> สำเนาขอบเขตและ acceptance ต้นฉบับของ ticket ไม่ใช่สถานะปัจจุบันหรือการปิด issue
+> ดู [สิ่งที่ส่งมอบแล้วและส่วนที่ยังไม่ยืนยัน](verification-current.md); ไม่ติ๊ก checkboxes เหมารวมจากผล release
+
 ## Parent
 
 https://github.com/momozxmo/all-for-cabal/issues/13

@@ -1,10 +1,18 @@
 # ส่งต่องาน All for Cabal
 
-Snapshot: 2026-10-08 — อ่านแล้วตรวจสถานะ Git จริงก่อนแก้ไฟล์เสมอ
+สถานะปัจจุบัน: 2026-10-25 — อ่านแล้วตรวจสถานะ Git จริงก่อนแก้ไฟล์เสมอ
 ใช้ `git status --short --branch`, `git remote -v` และ `git log -5 --oneline`
 เพื่อยืนยัน checkout/branch และแยกไฟล์ผู้ใช้ที่แก้ค้างออกจากงานใหม่
 
 ## สถานะล่าสุด
+
+ใช้ [ตารางสถานะ ID-first ปัจจุบัน](tickets/aztek-id-first/verification-current.md) เป็นจุดสรุปเดียว
+แยกงานที่ส่งมอบใน0.1.41 ออกจาก live variants/การอัปเดตบนเครื่องผู้ใช้ที่ยังไม่ยืนยัน
+เอกสาร tickets/coverage เก่ามีวันที่และเป็นประวัติ ไม่ใช้ข้อความ “ยังไม่ทำ/ยังไม่แพ็ก” ของ snapshot เก่ามานับงานซ้ำ
+
+- 2026-10-25: ตรวจเกณฑ์#13ครบ20ข้อ/#19ครบ9ข้อบนsourceที่ผ่านfull2749แล้ว พร้อม [acceptanceรายข้อ](tickets/aztek-id-first/acceptance-v041.md) และ [coverageรุ่นนี้](tickets/aztek-id-first/coverage-v041.md)
+  อ้างอิง46behavioralfunctions/130distinctpassingcase referencesในretainedJUnit ไม่ใช่testใหม่หรือผลบวกเพิ่มจาก2749;sourcefreeze161/originaluserhashesตรงครบ
+  Unknownที่specอนุญาตให้รายงานยังคงunsupported/safe-stop ไม่อ้างครบทุกlivevariant. ผู้ใช้อนุญาตปิด#13/#19เมื่อครบเกณฑ์;ต้องอ่านremoteผลจริงก่อนบันทึกclosed
 
 - 2026-10-25: ชุดรวม ID-firstล่าสุด+ปุ่มบันเดิลต่อเนื่องผ่าน exact-source full2,749passed1warning7200.96sแล้ว
   wrapper/raw/signedexit0/JUnitaggregate+actual2749/0/0/0/evidence_errorsว่าง/freeze161ตรงครบ
@@ -13,6 +21,11 @@ Snapshot: 2026-10-08 — อ่านแล้วตรวจสถานะ Git
   Source2b071e4/Localdocs+tag9cd45af;stable/latestv0.1.41เผยแพร่แล้ว publicSetup279151780bytes+sidecarดาวน์โหลดhashตรงbuild
   SHA256D2CD801DB6D522FE7712711F09F5334F5D209D6F1290F7BEA5F7B12AE98AB5B8 ไม่อ้างactualuserinstallสำเร็จ
   ดู [scope/evidenceชุดรวม](id-first-combined-release-20261024.md) และ [release0.1.41](local-release-v0.1.41.md)
+
+## ประวัติ snapshot ก่อนหน้า — ไม่ใช่สถานะปัจจุบัน
+
+ข้อจำกัด/สิทธิ์/ข้อความงานค้างด้านล่างเป็นของวันที่บันทึก ไม่ยกเลิกสิทธิ์ส่งมอบชุดรวม24ตุลาคมและผล0.1.41ด้านบน
+ผล failed/unknown ในประวัติยังเป็นผลเดิม ไม่ถูกเปลี่ยนเป็นผ่านด้วยการอัปเดตเอกสารนี้
 
 - 2026-10-22: ส่งมอบ Setup v0.1.40 สำหรับปุ่มตรวจเองครบแล้ว—สร้างทุกบันเดิลต่อเนื่องตามสิทธิ์ผู้ใช้
   ใช้ clean release candidate แยกจาก dirty migrations; source `2ff8078`, Local docs/tag `c76a99d`
@@ -157,7 +170,7 @@ Snapshot: 2026-10-08 — อ่านแล้วตรวจสถานะ Git
   Shared helper default สำหรับ Item Code/Event/Product ยังไม่ย้าย; popup อีกสามเกมยังไม่มี live evidence
   พักขั้น tickets/implementation ของ New Item ตามคำสั่งผู้ใช้
 - New Item Creation / New Item Recheck: ยืนยัน Q1–Q24 และ test seams แล้ว
-  spec รองรับ CABAL PC/M ทั้ง TH/SEA อยู่ใน [new-item-spec.md](new-item-spec.md)
+  spec เดิมรองรับ CABAL PC/M ทั้ง TH/SEA: เอกสารร่างชื่อ `new-item-spec.md` ใน working tree ต้นฉบับ ไม่รวมใน checkout รุ่นนี้; ไม่ดึงงาน New Item #12 เข้ามา
   เผยแพร่ [GitHub Issue #12](https://github.com/momozxmo/all-for-cabal/issues/12)
   พร้อม ready-for-agent แล้ว ตรวจเนื้อหาตรงกับ spec ในเครื่อง
   ยังไม่อนุมัติ implementation และไม่สร้างข้อมูลจริง/Setup/commit/push โปรแกรม

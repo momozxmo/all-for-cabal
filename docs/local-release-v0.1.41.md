@@ -21,7 +21,7 @@ Source snapshot: `2b071e4e821fe429c7e30ed4b322b9768fcd1f81`.
 - Full started2026-10-24T15:47:15.750980Z,ended2026-10-24T17:47:20.796658Z. No arithmetic on historical2715/2113 snapshot counts.
 - Warning remains process-local development secrets in a local-runtime test; not warning-free or a production secret leak.
 - Integration scoped92passed692.47s before review fix. Review Critical0/Important1/Minor1; Important reproduced2failed24.55s → minimalfix →44passed371.43s → exact combined full above.
-- Deferred documentation minor: historical coverage entry point/status and normalization wording; current combined record is [combined scope/evidence](id-first-combined-release-20261024.md). No source change for trailing blank-line differences.
+- Review documentation observations were reconciled25October: current [status entry point](tickets/aztek-id-first/verification-current.md), preserved dated history and precise LF+TrimEnd provenance wording in [combined scope/evidence](id-first-combined-release-20261024.md). No source/test change or rerun for trailing blank-line differences.
 - Original dirty worktree and user CONTEXT/item_finder hashes preserved. No runtime data/secrets staged.
 
 ## Packaging and delivery gates
@@ -42,6 +42,6 @@ The first atomic Local-docs push accidentally targeted source origin and was who
 ## Boundaries
 
 - No live Aztek login/probe/create/edit/upload/delete or issue closure.
-- Synthetic verification does not establish every live DOM/schema/navigation variant; issues13/19 remain partial,not closed.
+- Synthetic verification does not establish every live DOM/schema/navigation variant. At release time issues13/19 were still open;the subsequent25October [acceptance audit](tickets/aztek-id-first/acceptance-v041.md) evaluates their original bounded criteria independently of this historical release boundary.
 - No automatic overwrite/install or closure of the user's app. Actual user-applied update/reopen/draft/queue preservation remains unverified.
 - Signing and clean-VM installation are not verified.

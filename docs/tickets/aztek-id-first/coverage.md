@@ -1,5 +1,9 @@
 # ID-first coverage
 
+> ประวัติ DOM/การทดสอบ snapshot8ตุลาคม2026 ไม่ใช่สถานะของรุ่นล่าสุด
+> อ่าน [สถานะปัจจุบัน](verification-current.md) และ [หลักฐานชุดรวม0.1.41](../../id-first-combined-release-20261024.md) ก่อน
+> ข้อความ “ยังไม่ implement/ยังไม่แพ็ก/ยังไม่อนุญาตrelease” ด้านล่างเป็นของช่วงเวลานั้น เก็บไว้ตามหลักฐานเดิม ไม่ใช่งานที่ต้องเริ่มใหม่ และไม่ใช้ผลเก่าแทน full2749
+
 Snapshot: 2026-10-08. Review base: `19eb84e` + working diff.
 Implementation: #14 Item Finder verified ใน working diff. #15 กำลังทำ:
 ย้าย header/Item search-add, Item card Qty/Tier/current draw ID และ Reward tab/picker/fetch/add แล้ว;
