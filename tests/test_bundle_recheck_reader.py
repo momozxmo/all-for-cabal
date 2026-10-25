@@ -1,5 +1,6 @@
 """Saved-page reader contract, using synthetic Aztek pages only."""
 import asyncio
+from copy import deepcopy
 
 import pytest
 from playwright.async_api import async_playwright
@@ -9,6 +10,75 @@ from web.bundle_recheck import SessionExpiredError, read_saved_bundle, recheck_s
 
 _TIER = '''<div><label>Tier *</label><button type="button" role="combobox">Common</button>
 <select><option value="0" selected>Common</option></select></div>'''
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('distinguish', ['tier', 'rate', 'both', 'zero_rate'])
+def test_recheck_same_properties_match_known_tier_rate_without_order_bias(
+        monkeypatch, reverse, distinguish):
+    source = [dict(kind='123', option='0', duration='9', qty='1',
+                   tier='Common', rate='40', source_row=7),
+              dict(kind='123', option='0', duration='9', qty='1',
+                   tier='Rare', rate='60', source_row=8)]
+    if distinguish == 'tier':
+        source[1]['rate'] = '40'
+    elif distinguish == 'rate':
+        source[1]['tier'] = 'Common'
+    elif distinguish == 'zero_rate':
+        source[0]['rate'], source[1]['rate'] = '0', '100'
+    reference = dict(game='CabalM TH', items=source, rewards=[])
+    submitted = dict(game='CabalM TH', type='RANDOM', rewards=[], items=[
+        dict(id='91', qty='1', tier=source[0]['tier'], rate=source[0]['rate']),
+        dict(id='92', qty='1', tier=source[1]['tier'], rate=source[1]['rate'])])
+    actual_items = [dict(source[0], id='91'), dict(source[1], id='92')]
+    # Equivalent numeric rates are not differences, including zero.
+    actual_items[0]['rate'] += '.0'
+    actual = dict(items=actual_items[::-1] if reverse else actual_items,
+                  rewards=[], complete=True, unsupported=[])
+    before = deepcopy((reference, submitted, actual))
+    async def saved(*_):
+        return actual
+    monkeypatch.setattr('web.bundle_recheck.read_saved_bundle', saved)
+    checked = asyncio.run(recheck_saved_bundle(
+        None, 'https://aztek.test/combo/cabalm/shop/bundles/42', reference, submitted))
+    assert checked['outcome'] == 'passed'
+    assert checked['incomplete'] is False
+    assert [(row['source_row'], row['actual']['id'], row['different'])
+            for row in checked['rows']] == [(7, '91', []), (8, '92', [])]
+    assert (reference, submitted, actual) == before
+
+
+@pytest.mark.parametrize('change,outcome', [
+    ('all_unreadable', 'failed'), ('second_unreadable', 'failed'),
+    ('proven_mismatch_and_unreadable', 'mismatch'), ('complete_missing', 'mismatch'),
+])
+def test_recheck_omitted_unreadable_occurrence_does_not_invent_mismatch(
+        monkeypatch, change, outcome):
+    reference = dict(game='CabalM TH', rewards=[], items=[
+        dict(kind='123', option='0', duration='9', qty='1', tier='Common'),
+        dict(kind='456', option='0', duration='9', qty='1', tier='Common')])
+    submitted = dict(game='CabalM TH', type='FIXED', rewards=[], items=[
+        dict(id='91', qty='1', tier='Common'), dict(id='92', qty='1', tier='Common')])
+    actual = dict(items=[dict(reference['items'][0], id='91')], rewards=[],
+                  complete=False, unsupported=[1])
+    if change == 'all_unreadable':
+        actual['items'] = []
+    elif change == 'proven_mismatch_and_unreadable':
+        actual['items'][0]['tier'] = 'Rare'
+    elif change == 'complete_missing':
+        actual.update(complete=True, unsupported=[])
+    async def saved(*_):
+        return actual
+    monkeypatch.setattr('web.bundle_recheck.read_saved_bundle', saved)
+    checked = asyncio.run(recheck_saved_bundle(
+        None, 'https://aztek.test/combo/cabalm/shop/bundles/42', reference, submitted))
+    assert checked['outcome'] == outcome
+    assert checked['incomplete'] is (change != 'complete_missing')
+    if outcome == 'failed':
+        assert checked['differences'] == []
+        assert any(row['different'] == ['unreadable_item'] for row in checked['rows'])
+    else:
+        assert checked['differences']
 
 def _saved_page(content, bundle_type='FIXED'):
     # The verified saved page keeps its record heading/ID outside the form;

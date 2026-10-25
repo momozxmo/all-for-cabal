@@ -371,6 +371,10 @@ async def recheck_saved_bundle(page, url: str, reference: dict | None,
                 if actual_index in seen or any(
                     source.get(key) not in (None, '') and
                     not same(key, source[key], row.get(key, '')) for key in fields
+                ) or any(
+                    source.get(key) not in (None, '') and
+                    row.get(key) not in (None, '') and
+                    not same(key, source[key], row[key]) for key in ('tier', 'rate')
                 ):
                     continue
                 seen.add(actual_index)
@@ -379,7 +383,8 @@ async def recheck_saved_bundle(page, url: str, reference: dict | None,
                     return True
             return False
 
-        if sum(bool(match(index, set())) for index in range(len(expected))) != len(expected):
+        matched_count = sum(bool(match(index, set())) for index in range(len(expected)))
+        if matched_count != len(expected) and actual['complete']:
             differences.append('document_items')
     matched_sources = {source_index: actual_index
                        for actual_index, source_index in matches.items()} if expected else {}
