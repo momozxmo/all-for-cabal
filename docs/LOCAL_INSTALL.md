@@ -1,7 +1,7 @@
 # ติดตั้ง All for Cabal Web แบบ Local
 
-รุ่นล่าสุดสำหรับทีม: [Setup v0.1.42 และรายการเปลี่ยนแปลง](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.42)
-พร้อม [หลักฐานการตรวจ build/เผยแพร่/ดาวน์โหลดhash](local-release-v0.1.42.md) ตัวอย่างและตารางหลักฐาน 0.1.0 ด้านล่างเป็นข้อมูลของรุ่นแรก
+รุ่นล่าสุดสำหรับทีม: [Setup v0.1.43 และรายการเปลี่ยนแปลง](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.43)
+พร้อม [หลักฐานการตรวจ build/เผยแพร่/ดาวน์โหลดhash](local-release-v0.1.43.md) ตัวอย่างและตารางหลักฐาน 0.1.0 ด้านล่างเป็นข้อมูลของรุ่นแรก
 
 เวอร์ชัน Local ใช้กับ Windows 10/11 แบบ 64 บิต แต่ละคนติดตั้งและเก็บข้อมูล
 ไว้ในเครื่องของตัวเอง ไม่ต้องติดตั้ง Python, Docker, Playwright หรือพิมพ์คำสั่ง

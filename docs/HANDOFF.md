@@ -6,7 +6,14 @@
 
 ## สถานะล่าสุด
 
-### สถานะปัจจุบัน28ตุลาคม — ใช้ส่วนนี้แทนข้อความค้างในประวัติด้านล่าง
+### ส่งมอบ0.1.43และปิด#12แล้ว — 28ตุลาคม2026
+
+- [Setup v0.1.43](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.43) stable/latest เผยแพร่18:19:35Bangkok; ดาวน์โหลดSetup281178982bytesและsidecar102bytesกลับมาแล้ว ขนาด/SHA256/API digestตรงbuild/notesตรง. SetupSHA609F98EFE3EBE0BEC5C8A762DD24F8B7731E079AC583CD8A288CC6A99135A3B3. [ผลส่งมอบ](local-release-v0.1.43.md)
+- Source394af5647645d0b33a550e5ef2f9009a694eb1d0/acceptance-docs323e394 normalpushแล้ว; publicdocs/tag32661245b027510a51f87e0e4765d89fea6590e6. FULL6ผ่าน3108passed1warning/22เกณฑ์/แพ็กเกจ+isolatedsmoke+embedded21/static21/Pillow13/privacy/cleanup/downloadhashครบ. Updaterจริงจำลองรุ่นเดิม042เห็น043/notesตรง ไม่ใช่actualuserinstall
+- **#12ปิดCLOSED/COMPLETEDแล้ว18:22:45Bangkok** และอ่านกลับยืนยันในbuild-cache/new-item-issue12-closure-verification-20261028.json. ไม่ปิดissueอื่น/ไม่สร้างPR/ไม่force. รายงานเก่าfailed/unknownยังคงตามจริง ไม่reruncompletedfull/build/smokeเพื่อเอกสาร
+- เก็บworktrees/evidenceทั้งหมด ไม่แตะWR/workbook/originaldata. ไม่สร้างAztekเพิ่ม/ไม่ติดตั้งทับหรือปิดแอปผู้ใช้. Actualuserupdate/reopen/draftpreservation/signing/cleanVM/alllivevariants/Premiumlivecreate/imagepixelacceptanceยังไม่ยืนยันตามขอบเขตเดิม
+
+### บันทึกก่อนประกาศส่งมอบ28ตุลาคม — ประวัติ ไม่ใช่สถานะปัจจุบัน
 
 - **0.1.43แพ็กและsmokeผ่านแล้ว รอpush/publish/downloadhash/close#12**: build77120exit0/Setup281178982bytes SHA609F98EFE3EBE0BEC5C8A762DD24F8B7731E079AC583CD8A288CC6A99135A3B3/sidecar102bytes/hashตรง. Embedded21modules/static21/Pillow13pure+version+nativeตรง/treeprivacy/source185ตรง/installed265versionsunchanged/basePillow11.1unchanged. Smoke1122exit0/freshlocaldata+ownedheadlessbrowser/7pages/NewItemimport+privateimagehashผ่าน/noAztek/noCreateConfirm/ownedcleanupและport8000free/process0ตรวจแล้ว. Sourcecommit394af5647645d0b33a550e5ef2f9009a694eb1d0มี37source/testfilesเท่านั้น ยังไม่push. PublicreleaseDocsเตรียมREADME/notes/verification043localuncommitted; docsrepoเดิมcleanbfe6cfbก่อนแก้. ดูrelease043ปัจจุบัน ไม่rebuild/retestเพราะเอกสาร
 - **สิทธิ์ส่งมอบ#12ได้รับแล้ว/กำลังbuild0.1.43 session77120**: ผู้ใช้ตอบ“ต่อเลย”ต่อคำถามชัดเจนให้แพ็กSetup/commit/push/publish/ปิด#12หลังผ่านเกณฑ์. [release draft](local-release-v0.1.43.md). PyInstaller/main/helperผ่านถึงInnoแล้ว; actualISCC33920เริ่ม28ตุลาคม18:06:57.642207Bangkok/exeInnoSetup6/commandMyAppVersion0.1.43ตรวจอ่านอย่างเดียวตรง. ยังไม่มีfinalbuildexit/artifactverification/smoke/commit/push/publish/closure. ห้ามrebuildจากfile/logbuffer. Transcriptbuild-cache/build-v043-20261028.logและexitJSONหลังจบ. ใช้approvedisolatedPillow13venv/PATH/TEMP/UTF8/PIP_NO_INDEX/PyInstaller cacheเฉพาะคำสั่งrestorefinally ไม่อัปเกรดbase. Candidatebrowsercacheทุกancestorไม่มีreparse/ไม่มีtestหรือbrowserใช้อยู่ก่อนreset; cacheเดิมabsent ไม่แตะusercache. ข้อห้ามreleaseด้านล่างเป็นก่อนสิทธิ์ใหม่นี้ ไม่ต้องขอซ้ำ; ยังห้ามสร้างAztekเพิ่ม/แก้/ลบ/ติดตั้งทับหรือปิดแอปผู้ใช้

@@ -1,6 +1,15 @@
 # Local release v0.1.43 — New Item Creation / Recheck
 
-Status: package and isolated smoke verified28October2026; publication/download/issue closure still pending at this checkpoint.
+Status: delivered28October2026 — stable/latest0.1.43 published, public Setup/sidecar downloaded and size/SHA256/API digests equalbuild, updater discovery verified, issue#12CLOSED/COMPLETED. Actualuserinstallation/reopen remainsunverified.
+
+## Publication and completion
+
+- [Release v0.1.43](https://github.com/momozxmo/tool-cabal-local/releases/tag/v0.1.43), release426574351, published2026-10-28T11:19:35Z/18:19:35Bangkok; draftfalse/prereleasefalse/stablelatesttrue.
+- Source394af5647645d0b33a550e5ef2f9009a694eb1d0 andacceptance/package-docs323e3945de0a6dbbf3c81f45a14a599cf2430a99 pushednormalfastforward toorigin/main. Publicdocs/tag32661245b027510a51f87e0e4765d89fea6590e6 pushedatomically tolocal-release/main+v0.1.43; noforce/PR.
+- Freshpublicdownloadwrapper0 at18:21:04Bangkok: Setup281178982bytes/hash609F98EFE3EBE0BEC5C8A762DD24F8B7731E079AC583CD8A288CC6A99135A3B3; sidecar102bytes/hash6D31ED8D4AE0B7120FFFD95ABA4A6445D9016FD72D8365B4760944B4221B9061. BothmatchactualbuildandAPIdigests; sidecarbinarymarker/originalspacedfilenameaccepted, actualGitHubassetnamesusedots. Evidence release-v043-public-verification-20261028.json.
+- RealLocalUpdate/UpdateIO publiclatestcheckwitholdversion0.1.42simulation reportsavailable0.1.43/notesidentical/assets2. No updaterdownload/install called; evidence release-v043-updater-discovery-verification-20261028.json. Existinginstallation/runtimeuntouched.
+- [Issue#12](https://github.com/momozxmo/all-for-cabal/issues/12) closedcompletedafterallgates at2026-10-28T11:22:45Z/18:22:45Bangkok, thenreadbackCLOSED/COMPLETED. Closurecommentlinkscode/acceptance/release andexplicitlimits. No otherissueaction.
+- Finaldelivery-statusdocscommittedseparatelyafterpublication; no source/test/dependencybytechangeoradditionalfull/build/smokerun. Worktrees/runtime/evidence preserved.
 
 ## Verified package
 
@@ -34,7 +43,7 @@ Preflight origin/main78fdc7494d56dbc30ac54a301adbeecc1edf2044; local-release/mai
 
 Build uses the approved isolatedmediaenvironment withPillow13.0.0; base environment staysunchanged. Dry-run/no-index confirmsallrequirementsalreadyinstalled aftercommand-scopedPYTHONUTF8=1; firstdry-runfailedcp874decodebeforeinstall, preservedasdiagnostic, no source/settingschange. BuilderPATH/TEMP/TMP/UTF8/browser/PyInstaller cachevariables must becommand-scoped/restoredfinally. VersionfromAFC_BUILD_VERSION, noteditingtestedversionfile. -SkipTests onlyfor exactpassedsource.
 
-## Pending gates
+## Historical planned gates — completed above
 
 Build exit0; releaseprivacy/version/helper/static/embeddedsource/Pillow proof; isolatedpackage smoke withownedPID/path/starttimecleanup andnoAztek; selective source/docs commits andnormalfastforward; publicnotes/tag/stablerelease; freshdownloadSetup+sidecar size/hashmatch; issue#12closure andreadback. No completionclaimbeforeallgates.
 

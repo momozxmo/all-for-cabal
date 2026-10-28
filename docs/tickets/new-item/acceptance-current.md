@@ -1,6 +1,8 @@
 # #12 — เกณฑ์ที่ผ่านในเครื่องและขอบเขตที่ไม่อ้างเกินหลักฐาน
 
-อัปเดต28ตุลาคม2026. ตรวจเกณฑ์22ข้อในขอบเขตlocalautomatedครบแล้ว รายงานworkingtreeไม่ใช่รุ่นเผยแพร่หรือการปิดGitHubissue. [สรุปอ่านง่าย](acceptance-final-20261028.md)
+อัปเดต28ตุลาคม2026. ตรวจเกณฑ์22ข้อในขอบเขตlocalautomatedครบแล้ว และส่งมอบ0.1.43/ปิด#12ตามขั้นส่งมอบแยก โดยไม่อ้างทุกlivevariant. [สรุปอ่านง่าย](acceptance-final-20261028.md)
+
+**ส่งมอบภายหลังผลพัฒนาแล้ว**: ผู้ใช้อนุญาตขั้นส่งมอบแยก; [Setup0.1.43](../../local-release-v0.1.43.md)เผยแพร่stable/latest/ดาวน์โหลดhashตรง และ#12ปิดCLOSED/COMPLETED18:22:45Bangkok. ข้อความยังไม่ส่งมอบในmilestoneเก่าด้านล่างเป็นสถานะก่อนสิทธิ์ใหม่นี้ ไม่ใช่งานค้างปัจจุบัน
 อ้างอิงเกณฑ์22ข้อใน [สเปกที่อนุมัติ](../../superpowers/specs/2026-10-25-new-item-issue12-approved-spec.md)
 ผลชุดทดสอบและข้อจำกัดล่าสุดอยู่ใน [coverage](coverage.md)
 
@@ -8,7 +10,7 @@
 
 FULL5จบ13:14:06Bangkokด้วย3104passed4failed1warning9761.23s/native+wrapper1/JUnit3108/4/0/0/freeze185ตรง/originalhashตรง/evidence_errors[]. ทั้ง4คือtestlocatorชื่อปุ่มเก่า; DOMจริงในtraceมีชื่อใหม่disabled. แก้เฉพาะเทสต์2ไฟล์ ไม่แก้โปรแกรม/ไม่ผ่อนdisabledหรือno-createguard แล้ว **UI22กรณีผ่าน176.66s/native+wrapper0/JUnit22/0/0/0/freeze185ตรวจอิสระตรง**; ทั้ง4caseเดิมผ่านครบ
 
-**FULL6จบ3108passed1warning10333.65s/native+raw+signed+wrapper0 เวลา17:47:41.844849Bangkok**. ตรวจอิสระJUnitactualaggregateunique3108/0failure0error0skip/freeze185ก่อน–หลังและตรวจhashอิสระ/originalhashตรง/evidence_errors[]. [ผลตรวจ](../../../build-cache/new-item-full6-20261028-verification.json) และ [22เกณฑ์พร้อม179distinctpassingcase references](../../../build-cache/new-item-acceptance-final-20261028-verification.json) เป็นหลักฐานจากJUnitชุดเดียว ไม่บวกยอดscopedเป็นtestsเพิ่ม. ชื่อเดิมnf5ทั้งหมด3108/nf4และscopedตามmappingครบตามretention. ผลnf5คงfailed คำเตือนเดิมไม่แก้ ไม่มีSetup/commit/push/ปิด#12
+**FULL6จบ3108passed1warning10333.65s/native+raw+signed+wrapper0 เวลา17:47:41.844849Bangkok**. ตรวจอิสระJUnitactualaggregateunique3108/0failure0error0skip/freeze185ก่อน–หลังและตรวจhashอิสระ/originalhashตรง/evidence_errors[]. [ผลตรวจ](../../../build-cache/new-item-full6-20261028-verification.json) และ [22เกณฑ์พร้อม179distinctpassingcase references](../../../build-cache/new-item-acceptance-final-20261028-verification.json) เป็นหลักฐานจากJUnitชุดเดียว ไม่บวกยอดscopedเป็นtestsเพิ่ม. ชื่อเดิมnf5ทั้งหมด3108/nf4และscopedตามmappingครบตามretention. ผลnf5คงfailed คำเตือนเดิมไม่แก้ การส่งมอบภายหลังตรวจเสร็จแล้วตามหัวเอกสาร ไม่ใช่การติดตั้งบนเครื่องผู้ใช้
 
 Baseline27ตุลาคม21:41น.ก่อนโค้ดเพิ่ม: FULL4ผ่าน3053กรณี มีคำเตือนเดิม1รายการ9533.46s/native+wrapper0/JUnitactualaggregateunique3053/0/0/0/freeze183ตรง/originaluserhashตรง/evidence_errors[]. Aggregate build-cache/new-item-full4-20261027-verification.json และnew-item-full4-retention-20261027.json; JUnitSHA FB268F8FEC66F2C3852844A3A1F889DBA3356C69AAF8C2DA902774273155B8DD. รายละเอียดประวัติM2เสร็จแล้ว ไม่ใช่งานค้าง; FULL4ไม่ใช่ผลผ่านsourceปัจจุบัน
 
@@ -45,6 +47,6 @@ Baselineก่อนcohort27ตุลาคม15:04น.: full2ผ่าน3019�
 | 21 | `test_hundred_long_named_rows_scroll_inside_table_on_mobile` ตรวจ100แถวชื่อไทยยาว แก้แถวท้ายถูกID ตาราง scroll เอง ไม่มี page overflow; screenshot ตรวจแล้ว | ยังไม่ครอบคลุมทุกอุปกรณ์/ขนาดรายการ |
 | 22 | FULL6ผ่าน3108passed1warning/native+wrapper0/JUnit3108/0/0/0/source185ตรง/originalhashตรง/evidence_errors[]/retentionครบ; เก็บFULL5failed/full1failed/oldinterruption/WinError10055ครบ | deep-path setup limitationเดิมยังไม่แก้ ไม่อ้างwarning-free |
 
-ผู้ใช้ส่งGENERALreceiptครบ4เกมและsaved readbackตรงแล้ว; ไม่ขอข้อมูลเดิม/DEVหรือสร้างเพิ่มซ้ำ. Resolveเชิงบวกมีเฉพาะreceiptที่โปรแกรมเก็บเองอย่างมีcausalbindingก่อนsavedcommit ไม่ใช่การกู้ทุกกรณี. Premiumเป็นsource-backed+observedform+localtests ไม่มีlivePremiumPOST. รายละเอียดประวัติM2/รวมร่างและfinalfull6ตรวจครบแล้วในscopeที่รายงาน ยังไม่อยู่ในSetup/ยังไม่ปิด#12. ผลเก่าทุกชุดคงตามsnapshot ไม่เปลี่ยนย้อนหลังเป็นpasssourceใหม่
+ผู้ใช้ส่งGENERALreceiptครบ4เกมและsaved readbackตรงแล้ว; ไม่ขอข้อมูลเดิม/DEVหรือสร้างเพิ่มซ้ำ. Resolveเชิงบวกมีเฉพาะreceiptที่โปรแกรมเก็บเองอย่างมีcausalbindingก่อนsavedcommit ไม่ใช่การกู้ทุกกรณี. Premiumเป็นsource-backed+observedform+localtests ไม่มีlivePremiumPOST. รายละเอียดประวัติM2/รวมร่างและfinalfull6ตรวจครบแล้วในscopeที่รายงาน ส่งมอบSetup0.1.43และปิด#12ตามหัวเอกสาร. ผลเก่าทุกชุดคงตามsnapshot ไม่เปลี่ยนย้อนหลังเป็นpasssourceใหม่
 รับโค้ดหรือ contract ที่ตรวจสอบได้โดยลบ cookie/token/ข้อมูลลับแล้วได้ ไม่ต้องสร้างข้อมูลจริงเพื่อเก็บหลักฐานใหม่
 ไม่ลดเกณฑ์ผ่าน ไม่เปลี่ยน synthetic fixture เป็นข้อเท็จจริง live และไม่ปิด issue จากผล scoped tests
