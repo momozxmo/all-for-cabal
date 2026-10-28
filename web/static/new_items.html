@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>All for Cabal — New Item</title>
+  <link rel="stylesheet" href="/static/console.css">
+  <link rel="stylesheet" href="/static/sheet_picker.css">
+  <style>
+    .shell{width:100%;min-width:0}.new-stack{display:grid;gap:18px;min-width:0}
+    .topbar,.import-fields{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+    h1{font-size:clamp(21px,3vw,28px);overflow-wrap:anywhere}.brand{display:block;min-width:0;width:100%}
+    .brand p{font-family:var(--sans);letter-spacing:normal;font-size:13px;max-width:65ch}
+    .import-fields label{display:grid;gap:5px;min-width:150px;flex:1}
+    .import-fields input{max-width:100%;width:100%}.table-wrap{max-width:100%;max-height:540px}
+    #draftTable{min-width:1500px}#draftTable input:not([type=checkbox]){width:150px}
+    .draft-media{min-width:235px;max-width:270px;white-space:normal}.draft-media img{width:64px;height:64px;object-fit:contain;display:block;margin:7px 0}.draft-media input[type=file]{max-width:230px}
+    #draftTable input[data-key=name]{width:240px}#draftTable select{min-width:135px}
+    #draftTable td{max-width:none}input,select,textarea{background:var(--onyx);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:8px}
+    input[type=checkbox]{width:19px;height:19px;accent-color:var(--arc)}
+    .draft-confirm{display:flex;gap:6px;align-items:center;font-size:12px;margin-top:6px}
+    .history-item{border:1px solid var(--edge);border-radius:9px;padding:14px;margin-bottom:12px;min-width:0}
+    .history-item h3{margin:0 0 8px;overflow-wrap:anywhere}.history-item p{margin:7px 0;overflow-wrap:anywhere}
+    .history-item details{margin-top:9px}.occurrence-picks{display:grid;gap:8px;margin:12px 0}
+    .existing-candidates{border:1px solid var(--edge);min-width:0;margin:12px 0;padding:12px}.existing-candidates label{display:flex;gap:10px;align-items:start;padding:8px 0}.existing-candidates span{overflow-wrap:anywhere;min-width:0}.existing-candidates input{flex-shrink:0}
+    .occurrence-picks label{display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
+    .detail-table td{white-space:pre-wrap;min-width:140px;overflow-wrap:anywhere}
+    .empty{color:var(--muted);padding:16px}.actions{margin-top:12px}
+    .create-summary{padding-left:22px;max-height:260px;overflow:auto}.create-summary li{margin:10px 0;overflow-wrap:anywhere}.create-summary span{display:block;color:var(--muted);font-size:13px}.create-pick{min-height:44px}.create-actions button{min-height:44px}
+    :focus-visible{outline:2px solid var(--arc-bright);outline-offset:3px}
+    .new-nav{display:flex;gap:12px;flex-wrap:wrap}.new-nav a{color:var(--arc-bright)}
+    @media(max-width:600px){.shell{padding:12px}.card-body{padding:12px}.topbar{align-items:start}.import-fields label{flex-basis:100%;min-width:0}.actions button{min-height:42px}.history-item{padding:10px}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  </style>
+</head>
+<body><main class="shell new-stack"><div id="newControls" class="new-stack">
+  <header class="topbar"><div class="brand"><h1>New Item — เตรียมรายการและตรวจผล</h1><p>บันทึกร่างในเครื่องก่อน · ผลการสร้างและผลตรวจเป็นคนละสถานะ</p></div>
+    <nav class="new-nav" aria-label="เครื่องมือ"><a href="/">Item Finder</a><a href="/bundles">Bundle</a><a href="/account">บัญชี / เชื่อม Aztek</a></nav></header>
+  <aside class="notice notice-warning"><strong>รุ่นพัฒนา — สร้าง Item สำหรับ PC/M ทั้ง 4 เกม</strong><span>PC รองรับ GENERAL / CABALPC_PREMIUM · M รองรับ GENERAL เท่านั้น · ต้องค้นหา Item เดิม เลือกสร้างใหม่ และยืนยันอีกครั้ง การนำเข้าและยืนยันร่างยังไม่สร้างจริง</span></aside>
+  <div id="newNotice" hidden></div>
+  <section class="card"><div class="card-head"><h2>1. เลือกเกมและนำเข้า</h2><a href="/api/new-items/template" class="button">ดาวน์โหลด Template</a></div>
+    <div class="card-body"><div class="import-fields">
+      <label><span id="newGameLabel">เกมของรายการ</span><select id="newGame" aria-labelledby="newGameLabel"><option>CabalPC TH</option><option>CabalPC SEA</option><option>CabalM TH</option><option>CabalM SEA</option></select></label>
+      <label>รูปแบบเอกสาร<select id="importMode"><option value="template">New Item Template</option><option value="event">แผน Event</option><option value="itemcode">แผน Item Code</option><option value="shop">แผน Shop</option></select></label>
+      <label>ไฟล์ Excel<input id="newFile" type="file" accept=".xlsx"></label></div>
+      <div class="actions"><button id="previewBtn" class="primary">ดู Sheet ก่อนนำเข้า</button></div>
+      <p class="hint">เลือกเฉพาะ Sheet ที่ต้องการ · ต้นฉบับไม่เปลี่ยน · แนบรูปในร่างได้ แต่ยังไม่สร้างจริง</p></div></section>
+  <section class="card"><div class="card-head"><h2>2. แก้และยืนยันร่าง</h2><span id="draftCount"></span></div>
+    <div class="card-body"><p class="hint">แก้ทีละแถวแล้วกดบันทึกร่างก่อนยืนยัน ค่า 0 ไม่ใช่ช่องว่าง · การเปลี่ยนเกมด้านบนไม่เปลี่ยนเกมของร่างเดิม</p>
+      <p class="hint">รูปไม่บังคับแนบ: PNG/JPEG/WebP ภาพนิ่ง ไม่เกิน 5 MB / 20 ล้านพิกเซล เก็บส่วนตัวในเครื่อง ยังไม่ส่งขึ้น Aztek</p>
+      <div class="table-wrap" tabindex="0" aria-label="ตารางร่าง เลื่อนซ้ายขวาได้"><table id="draftTable"><thead><tr><th>เลือก</th><th>Name</th><th>Kind</th><th>Option</th><th>Duration</th><th>Type</th><th>Tradeable</th><th>Description</th><th>รูปในร่าง</th><th>ต้นทาง / สถานะ</th><th>บันทึก</th></tr></thead><tbody id="draftRows"></tbody></table></div>
+      <p id="draftEmpty" class="empty">ยังไม่มีร่างในเกมนี้</p>
+      <div class="actions"><button id="confirmDrafts" class="primary" disabled>ยืนยันร่างที่เลือก</button></div></div></section>
+  <section class="card"><div class="card-head"><h2>3. ผลตรวจและประวัติ</h2><button id="refreshHistory">โหลดประวัติใหม่</button></div>
+    <div class="card-body"><p class="hint">ร่างที่ยืนยันแล้วค้นหา Item เดิมได้ เลือก ID เองแล้วอ่านข้อมูลใหม่ก่อนตรวจ ไม่สร้างใหม่ · เลือกแถวที่ผ่านครบเพื่อเปิดเป็นงาน Finder แยก ไม่เพิ่มคิว Bundle เอง</p>
+      <div id="historyRows"></div><p id="historyEmpty" class="empty">ยังไม่มีรายการที่ยืนยันร่างหรือผลตรวจในเกมนี้</p>
+      <div class="actions create-actions"><button id="createSelected" class="primary" disabled>สร้าง Item (ยังไม่พร้อม)</button><p id="createReason" class="hint"></p></div>
+      <button id="handoffBtn" class="success" disabled>ส่งแถวที่เลือกไป Finder</button></div></section>
+  </div>
+  <dialog id="sheetDialog" aria-labelledby="sheetTitle"><h2 id="sheetTitle">เลือก Sheet ที่จะเพิ่มร่าง</h2>
+    <label>ค้นหา Sheet<input id="sheetSearch" type="search"></label><span id="sheetCount"></span>
+    <div class="actions"><button id="sheetAll">เลือกที่แสดง</button><button id="sheetNone">ล้างที่แสดง</button></div>
+    <div id="sheetList" class="sheet-list"></div><p id="sheetEmpty" hidden>ไม่พบ Sheet</p>
+    <div class="actions"><button id="applySheets" class="primary">เพิ่มร่างที่เลือก</button><button id="cancelSheets">ยกเลิก</button></div></dialog>
+  <dialog id="confirmDialog" aria-labelledby="confirmTitle"><h2 id="confirmTitle">ยืนยันร่าง</h2><p id="confirmText"></p><p>การยืนยันนี้เก็บค่าที่จะใช้ตรวจไว้ในเครื่องเท่านั้น ยังไม่สร้าง Item จริง</p>
+    <div class="actions"><button id="acceptDrafts" class="primary">ยืนยันร่าง</button><button id="cancelDrafts">ยกเลิก</button></div></dialog>
+  <dialog id="existingDialog" aria-labelledby="existingTitle"><h2 id="existingTitle">ใช้ Item เดิม</h2><p id="existingText"></p><p>อ่านข้อมูลจาก ID นี้ใหม่เพื่อเทียบต้นทาง ไม่สร้าง Item ใหม่ และผลค้นหาไม่ใช่ผลตรวจผ่าน</p>
+    <div class="actions"><button id="acceptExisting" class="primary">อ่านและตรวจ ID นี้</button><button id="cancelExisting">ยกเลิก</button></div></dialog>
+  <dialog id="createDialog" aria-labelledby="createTitle"><h2 id="createTitle">ยืนยันสร้าง Item ใหม่</h2><p id="createText"></p><ul id="createSummary" class="create-summary"></ul>
+    <p>จะสร้างรายการใหม่ใน Aztek ไม่ใช่แค่เก็บร่าง หากมี Item เดิมให้ยกเลิกแล้วเลือก ID เดิมแทน</p><p>เมื่อส่งแล้วอย่ากดสร้างซ้ำ หากข้อมูลไม่ตรงหรือยืนยันผลไม่ได้ ระบบจะหยุดรายการถัดไปและเก็บประวัติไว้</p>
+    <p id="createProgress" role="status" hidden>กำลังส่งและอ่านผลกลับ กรุณารอ — อย่ากดสร้างซ้ำ</p>
+    <div class="actions create-actions"><button id="acceptCreate" class="primary">ยืนยันสร้าง</button><button id="cancelCreate">ยกเลิก</button></div></dialog>
+</main><script src="/static/console.js"></script><script src="/static/sheet_picker.js"></script><script src="/static/new_items.js"></script></body></html>

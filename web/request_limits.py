@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -11,6 +12,7 @@ PAIR_BODY_MAX = 307200
 WORKBOOK_BODY_MAX = 67108864
 PRODUCT_BODY_MAX = 67108864
 MUTATION_BODY_MAX = 2097152
+NEW_ITEM_IMAGE_BODY_MAX = 5_000_000 + 65536
 COALESCE_FRAME_BYTES = 64 * 1024
 
 WORKBOOK_PATHS = frozenset({
@@ -19,6 +21,7 @@ WORKBOOK_PATHS = frozenset({
     '/api/itemcodes/import',
     '/api/events/import',
     '/api/bundles/import',
+    '/api/new-items/import',
 })
 _MUTATION_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
@@ -33,6 +36,8 @@ def request_limit(method: str, path: str) -> int | None:
         return WORKBOOK_BODY_MAX
     if path == '/api/products/run':
         return PRODUCT_BODY_MAX
+    if method.upper() == 'POST' and re.fullmatch(r'/api/new-items/drafts/[0-9a-f]{32}/image', path):
+        return NEW_ITEM_IMAGE_BODY_MAX
     return MUTATION_BODY_MAX
 
 

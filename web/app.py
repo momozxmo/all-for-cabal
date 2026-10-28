@@ -393,8 +393,10 @@ def _running_job(db, workspace) -> dict | None:
 
 
 def _workspace_view(workspace, db=None):
+    from web.new_item_domain import finder_snapshot
     running = _running_job(db, workspace) if db is not None else None
     return {
+        'new_item_snapshot': finder_snapshot(workspace),
         'running_job': running,
         'workspace_id': workspace.id,
         'mode': workspace.mode,
@@ -603,6 +605,17 @@ def events_page(
     db: Session = Depends(get_db),
 ):
     return _tool_page(request, afc_session, db, 'events.html')
+
+
+@router.get('/new-items', response_class=HTMLResponse)
+def new_items_page(request: Request, afc_session: str | None = Cookie(default=None),
+                   db: Session = Depends(get_db)):
+    return _tool_page(request, afc_session, db, 'new_items.html')
+
+
+@router.get('/static/new_items.js')
+def new_items_js():
+    return FileResponse(os.path.join(STATIC_DIR, 'new_items.js'), media_type='application/javascript')
 
 
 @router.get('/products', response_class=HTMLResponse)
@@ -2999,6 +3012,11 @@ def stop_search(workspace_id: str, request: Request,
     return {'stopped': stopped}
 
 
+from web.new_item_routes import register_new_item_routes
+
+register_new_item_routes(router, require_user=require_user, get_db=get_db)
+
+
 def create_app(
     settings: Settings | None = None,
     database: Database | None = None,
@@ -3026,6 +3044,8 @@ def create_app(
     async def lifespan(application: FastAPI):
         with application.state.database.session() as db:
             application.state.auth_service.bootstrap_admin(db)
+            from web.new_item_store import NewItemRepository
+            NewItemRepository(db).recover_interrupted()
         # A search only lives as long as the process driving it, so anything
         # still marked running belongs to a process that is gone.
         stale = application.state.search_coordinator.sweep_interrupted_jobs()

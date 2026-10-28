@@ -489,7 +489,8 @@ def regroup_results(results, occurrences):
                str(row.get('item_option', '') or '').strip(),
                str(row.get('duration_index', '') or '').strip())
         bucket = found.setdefault(key, [])
-        if not any(old.get('aztek_id') == row.get('aztek_id') for old in bucket):
+        if not any(old.get('aztek_id') == row.get('aztek_id') and
+                   old.get('occurrence_id') == row.get('occurrence_id') for old in bucket):
             bucket.append(row)
     expanded = []
     for occurrence in occurrences:
@@ -497,6 +498,12 @@ def regroup_results(results, occurrences):
                str(occurrence.get('opt', '') or '').strip(),
                str(occurrence.get('dur', '') or '').strip())
         for found_row in found.get(key, []):
+            # New Item handoff binds one proven ID to one explicit occurrence.
+            # Legacy search results remain unbound and keep triple expansion.
+            if found_row.get('new_item_bound') is True and (
+                    found_row['occurrence_id'] != occurrence.get('occurrence_id') or
+                    str(found_row.get('aztek_id')) != str(occurrence.get('aztek_id'))):
+                continue
             row = dict(found_row)
             occurrence_sources = list(occurrence.get('sources') or [])
             row['sources'] = occurrence_sources
@@ -519,7 +526,7 @@ def regroup_results(results, occurrences):
             row['rate'] = occurrence.get('rate', '') or ''
             row['document_reference'] = deepcopy(occurrence.get('document_reference'))
             expanded.append(row)
-    return expanded or [dict(row) for row in results]
+    return expanded if any(row.get('new_item_bound') is True for row in results) else expanded or [dict(row) for row in results]
 
 
 def _bundle_name(group, group_meta, group_key=None):

@@ -267,6 +267,7 @@
       <span id="serverBadge" class="badge">พร้อมใช้งาน</span>
       <span id="aztekStatus" class="badge" style="background:#3a2f14;color:var(--yellow)">Aztek: กำลังตรวจสอบ…</span>
       <span id="currentUser" class="hint" data-hosted-auth></span>
+      <a class="button" href="/new-items">New Item — เตรียมร่าง</a>
       <a id="btnAccount" class="button" href="/account" data-account-link>บัญชี / เชื่อม Aztek</a>
       <button id="btnLogout" type="button" class="danger" data-hosted-auth>ออกจากระบบ</button>
     </div>
@@ -369,6 +370,7 @@
           <div class="actions">
             <button id="btnMissingAll" disabled>เลือกทั้งหมด</button>
             <button id="btnMissingNone" disabled>ล้างทั้งหมด</button>
+            <button id="btnNewMissing" disabled>เพิ่มเป็นร่าง New Item</button>
             <button id="btnRetryMissing" class="warn" disabled
                     title="ค้นใหม่เฉพาะรายการที่เลือก ผลที่เจอแล้วไม่หาย">🔁 เลือกรายการที่จะค้นซ้ำ</button>
           </div></div>
@@ -620,6 +622,8 @@ function updateMissingActions(){
   $('btnMissingNone').disabled=state.busy||!selected;
   $('btnRetryMissing').disabled=state.busy||!selected||!state.aztekConnected;
   $('btnRetryMissing').textContent=selected?`🔁 ค้นซ้ำ ${selected} รายการ`:'🔁 เลือกรายการที่จะค้นซ้ำ';
+  $('btnNewMissing').disabled=state.busy||state.newItemSending||!selected||!state.workspaceId||!!state.searchSourceGroupKey;
+  $('btnNewMissing').title=state.searchSourceGroupKey?'เปิดพื้นที่งานเต็มก่อนเพิ่มร่าง เพื่อไม่เลือกผิดขอบเขต':'เพิ่มเฉพาะรายการที่เลือกเป็นร่างในเครื่อง ยังไม่สร้างบน Aztek';
 }
 function setMissingSelection(checked){
   document.querySelectorAll('#notFoundList .missing-pick').forEach(input=>{input.checked=checked;});
@@ -631,6 +635,23 @@ function renderNotFound(rows){const list=$('notFoundList');list.replaceChildren(
   rows.forEach((row,index)=>{const li=document.createElement('li');li.className='missing-row';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.className='missing-pick';input.dataset.index=String(index);input.checked=true;input.onchange=updateMissingActions;const text=document.createElement('span');text.textContent=`${row[0]} — ${row[1]}`;label.append(input,text);li.appendChild(label);list.appendChild(li);});updateMissingActions();}
 $('btnMissingAll').onclick=()=>setMissingSelection(true);
 $('btnMissingNone').onclick=()=>setMissingSelection(false);
+$('btnNewMissing').onclick=async()=>{
+  if($('btnNewMissing').disabled)return;
+  const selected=selectedMissingIndexes(),workspaceId=state.workspaceId;
+  state.newItemSending=true;updateMissingActions();
+  try{
+    const snapshotResponse=await apiFetch('/api/workspaces/'+encodeURIComponent(workspaceId));
+    if(!snapshotResponse.ok)throw new Error('เปิดข้อมูลต้นทางไม่สำเร็จ');
+    const snapshot=await snapshotResponse.json();
+    if(state.workspaceId!==workspaceId||state.busy||state.searchSourceGroupKey||JSON.stringify(snapshot.not_found||[])!==JSON.stringify(state.notFound||[]))throw new Error('รายการต้นทางเปลี่ยนแล้ว กรุณาโหลดพื้นที่งานใหม่ก่อนเลือก');
+    if(!confirm(`เพิ่ม ${selected.length} รายการที่เลือกเป็นร่าง New Item ใน ${snapshot.game}?\n\nยังไม่สร้างข้อมูลบน Aztek`))return;
+    const response=await apiFetch('/api/new-items/from-finder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspace_id:workspaceId,selected_missing_indexes:selected,game:snapshot.game,snapshot_token:snapshot.new_item_snapshot})});
+    const result=await response.json();
+    if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'เพิ่มร่างไม่สำเร็จ');
+    window.location.assign('/new-items?game='+encodeURIComponent(snapshot.game));
+  }catch(error){showNotice('finderNotice','error','เพิ่มร่าง New Item ไม่สำเร็จ',error.message,'ตรวจรายการต้นทางแล้วลองใหม่');}
+  finally{state.newItemSending=false;updateMissingActions();}
+};
 
 // Opening the socket starts a search, or — when one is already running for this
 // workspace — attaches to it and replays its log from the beginning.

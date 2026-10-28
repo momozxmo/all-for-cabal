@@ -1,5 +1,6 @@
 playwright>=1.40
 openpyxl==3.1.*        # pin: monkeypatch พึ่ง private API (WorkSheetParser) — เวอร์ชันใหม่อาจพัง
+Pillow==13.0.0         # private New Item image validation; approved isolated dependency
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 python-multipart>=0.0.9,<1
